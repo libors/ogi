@@ -1,0 +1,8 @@
+.gradle/
+build/
+.robocode/
+.kotlin/
+.idea/
+*.iml
+.DS_Store
+CLAUDE.local.md
