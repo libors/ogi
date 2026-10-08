@@ -1,0 +1,4 @@
+# The Robocode sample team, at the TeamRumble's settings.
+format team
+
+sampleteam.MyFirstTeam

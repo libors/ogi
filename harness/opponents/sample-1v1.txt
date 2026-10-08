@@ -1,0 +1,20 @@
+# The Robocode sample bots of skeletonCheck's duels, at the 1v1 rumble's settings. The strong ones are those the
+# walking skeleton scored least against (skeletonCheck, 2026-10-08).
+format 1v1
+
+[strong]
+sample.RamFire
+sample.Walls
+sample.Corners
+
+[other]
+sample.Crazy
+sample.Fire
+sample.MyFirstJuniorRobot
+sample.MyFirstRobot
+sample.SittingDuck
+sample.SpinBot
+sample.Target
+sample.Tracker
+sample.TrackFire
+sample.VelociRobot

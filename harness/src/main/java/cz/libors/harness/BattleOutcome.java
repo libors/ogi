@@ -12,6 +12,7 @@ import java.util.Optional;
  * @param results      contestants sorted by rank
  * @param skippedTurns skipped turns per robot name, as reported by the engine
  * @param problems     engine errors and suspicious robot output (exceptions)
+ * @param startMismatches robot rounds that did not begin at the start the setup asked for; 0 without fixed starts
  */
 public record BattleOutcome(
         BattleSetup setup,
@@ -19,6 +20,7 @@ public record BattleOutcome(
         List<ContestantResult> results,
         Map<String, Integer> skippedTurns,
         List<String> problems,
+        int startMismatches,
         long elapsedMillis) {
 
     /** The contestant whose name starts with {@code prefix}. */

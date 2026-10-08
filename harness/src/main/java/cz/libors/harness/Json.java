@@ -5,13 +5,13 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.Map;
 
-/** Minimal JSON writer for records, collections, maps, strings and numbers. */
-final class Json {
+/** Minimal JSON writer for records, collections, maps, strings and numbers; NaN and infinities become null. */
+public final class Json {
 
     private Json() {
     }
 
-    static String write(Object value) {
+    public static String write(Object value) {
         StringBuilder sb = new StringBuilder();
         write(sb, value, 0);
         return sb.append('\n').toString();
@@ -22,6 +22,8 @@ final class Json {
             sb.append("null");
         } else if (value instanceof String s) {
             string(sb, s);
+        } else if (value instanceof Double d && !Double.isFinite(d)) {
+            sb.append("null");
         } else if (value instanceof Number || value instanceof Boolean) {
             sb.append(value);
         } else if (value instanceof Map<?, ?> map) {

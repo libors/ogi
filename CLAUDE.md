@@ -11,6 +11,8 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   stay green.
 - `./gradlew engineTest`: replays the recordings through the bot's engine model (`cz.libors.ogi.physics`) and
   requires bit-identical results. It must stay green.
+- `./gradlew compare -Pbaseline=HEAD`: paired, sequential comparison of the working tree with a baseline revision
+  against an opponent set (`docs/harness.md`).
 - Add `-PjavaVersion=21` (or 25) to compile and run battles on another JVM. The default is 17.
 
 ## Layout

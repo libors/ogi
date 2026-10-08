@@ -26,6 +26,8 @@ battles.
 | `./gradlew skeletonCheck` | Headless battles against the sample bots; see [harness.md](harness.md) |
 | `./gradlew recordProbes` | Records probe battles turn by turn into `harness/build/recordings/` and checks integrity, coverage and determinism; see [harness.md](harness.md#recordings) |
 | `./gradlew engineTest` | Runs `recordProbes`, then replays the recordings through the bot's engine model (`harness/src/engineTest`) |
+| `./gradlew compare -Pbaseline=HEAD` | Paired, sequential comparison of the working tree with a baseline revision; see [harness.md](harness.md#comparing-two-versions) |
+| `./gradlew :harness:baselineJars -Pbaseline=<rev>` | Only builds the robot and team jars of a git revision into `.robocode/baselines/` |
 | `./gradlew skeletonCheck -PjavaVersion=21` | The same on another JVM (17, 21 and 25 are tested) |
 | `./gradlew :harness:installRobocode` | Only downloads and unpacks Robocode |
 
@@ -39,8 +41,10 @@ that option.
 - **Version:** `robocodeVersion` in `gradle.properties`. Results are only accepted from the versions LiteRumble
   allows (see "Allowed Robocode versions" at <https://rumble.robowiki.net/RumbleStats>; 1.10.3, 1.11.0 and 1.11.1 on
   2026-10-08).
-- **Deployment:** `deployBots` copies the freshly built robot, team and probe jars into `.robocode/<version>/robots/`
-  and deletes the robot database cache so Robocode rescans.
+- **Deployment:** `deployBots` deletes every `cz.libors.*` jar from `.robocode/<version>/robots/`, copies in the
+  freshly built robot, team and probe jars and the baseline jars from `.robocode/baselines/`, and deletes the robot
+  database cache so Robocode rescans. Baseline jars are built from git revisions (`baselineJars`) and kept there
+  across reinstalls; delete the ones no longer needed by hand.
 - **CPU constant:** the engine measures it on first start and stores it in `config/robocode.properties`. It sets
   the per-turn time limit.
 

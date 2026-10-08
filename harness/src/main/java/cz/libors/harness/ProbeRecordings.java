@@ -19,6 +19,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * Records probe battles turn by turn as ground truth for the engine-model tests, and checks the recordings:
@@ -137,6 +139,8 @@ public final class ProbeRecordings {
             checks.add(replayExperiment(runner, out, ogi, true,
                     "Ogi draws only from its own seeded generator: replay is identical", summaries));
             checks.add(sharedGeneratorExperiment(runner, version, out, summaries));
+            checks.add(fixedStartsExperiment(runner, version, out, summaries));
+            checks.add(ownJarCheck(runner, version));
         }
 
         Files.createDirectories(out);
@@ -199,6 +203,89 @@ public final class ProbeRecordings {
                 + "round 2 elsewhere (G-33)", plain.intact() && drawing.intact() && firstSame && !secondSame,
                 "round 1 start " + (firstSame ? "same" : "different") + ", round 2 start "
                         + (secondSame ? "same" : "different"));
+    }
+
+    /**
+     * Fixed starts (engine-model G-41) in a crowded battle with a start for every robot. Robot 1 is asked to start on
+     * robot 0, and robot 2's heading prints with an exponent, which the engine's parser misreads. A start must be used
+     * exactly unless its box overlaps a robot already placed in this round, or a robot not yet placed, at the spot
+     * where that robot ended the previous round; then the engine must draw another spot.
+     */
+    private static Check fixedStartsExperiment(BattleRunner runner, String version, Path out,
+                                               List<Summary> summaries) throws IOException {
+        int count = 8;
+        List<BattleSetup.Start> starts = new ArrayList<>(Starts.random(EXPERIMENT_SEED, count, 400, 400));
+        starts.set(1, new BattleSetup.Start(starts.get(0).x(), starts.get(0).y(), 90));
+        BattleSetup.Start third = starts.get(2);
+        starts.set(2, new BattleSetup.Start(third.x(), third.y(), 1.0E-4));
+        BattleSetup setup = new BattleSetup("fixed-starts", 400, 400, 8,
+                Collections.nCopies(count, "cz.libors.probe.RandomProbe " + version), EXPERIMENT_SEED)
+                .withStarts(starts);
+        Summary s = record(runner, setup, out.resolve("determinism").resolve("fixed-starts.rec.gz"));
+        summaries.add(s);
+        Recording rec = Recording.read(Path.of(s.file()));
+
+        Map<Long, RobotTick> first = new HashMap<>();
+        Map<Long, RobotTick> last = new HashMap<>();
+        for (RobotTick t : rec.robotTicks()) {
+            long k = key(t.round(), 0, t.robot());
+            if (t.turn() == 0) {
+                first.put(k, t);
+            }
+            last.merge(k, t, (a, b) -> b.turn() > a.turn() ? b : a);
+        }
+        int used = 0;
+        int blockedByPlaced = 0;
+        int blockedByPrevious = 0;
+        int wrong = 0;
+        for (int round = 0; round < setup.rounds(); round++) {
+            for (int i = 0; i < count; i++) {
+                BattleSetup.Start want = starts.get(i);
+                boolean placedInTheWay = false;
+                boolean previousInTheWay = false;
+                for (int j = 0; j < count; j++) {
+                    RobotTick other = j < i ? first.get(key(round, 0, j))
+                            : j > i && round > 0 ? last.get(key(round - 1, 0, j)) : null;
+                    if (other != null && Starts.overlaps(want.x(), want.y(), other.x(), other.y())) {
+                        placedInTheWay |= j < i;
+                        previousInTheWay |= j > i;
+                    }
+                }
+                // "1.0E-4" loses its sign and exponent: the engine reads 1.04 degrees.
+                double heading = Math.toRadians(i == 2 ? 1.04 : want.headingDegrees());
+                RobotTick got = first.get(key(round, 0, i));
+                boolean exact = got.x() == want.x() && got.y() == want.y() && got.bodyHeading() == heading;
+                if (exact == (placedInTheWay || previousInTheWay)) {
+                    wrong++;
+                } else if (exact) {
+                    used++;
+                } else if (placedInTheWay) {
+                    blockedByPlaced++;
+                } else {
+                    blockedByPrevious++;
+                }
+            }
+        }
+        return new Check("Fixed starts are used in every round unless a robot is in the way, also one from the "
+                + "previous round (G-41)", s.intact() && wrong == 0 && used > 0 && blockedByPlaced > 0
+                && blockedByPrevious > 0, String.format(Locale.ROOT,
+                "used %d, blocked by a placed robot %d, by a previous-round position %d, unexpected %d", used,
+                blockedByPlaced, blockedByPrevious, wrong));
+    }
+
+    /**
+     * The team jar lists the robot under the same name and version as the robot's own jar (engine-model G-42);
+     * {@link BattleRunner} must pick the robot's own jar.
+     */
+    private static Check ownJarCheck(BattleRunner runner, String version) {
+        String name = "cz.libors.Ogi " + version;
+        Set<String> listed = runner.listedJars(name).stream().map(p -> p.getFileName().toString())
+                .collect(Collectors.toCollection(TreeSet::new));
+        String picked = runner.jarFile(name).map(p -> p.getFileName().toString()).orElse("none");
+        String own = "cz.libors.Ogi_" + version + ".jar";
+        return new Check(name + " is listed by the robot jar and the team jar; the runner uses the robot jar (G-42)",
+                listed.equals(Set.of(own, "cz.libors.OgiTeam_" + version + ".jar")) && picked.equals(own),
+                "listed " + listed + ", picked " + picked);
     }
 
     private static List<List<Double>> startPositions(Recording rec, int round) {

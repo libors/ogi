@@ -1,5 +1,7 @@
+import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.security.MessageDigest
+import javax.inject.Inject
 
 plugins {
     java
@@ -20,6 +22,11 @@ dependencies {
     // Compile against the published API; at runtime the official installation's libs are used.
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")
 
+    testImplementation("net.sf.robocode:robocode.api:$robocodeVersion")
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
     "engineTestImplementation"(project(":bot"))
     "engineTestImplementation"(platform("org.junit:junit-bom:6.1.3"))
     "engineTestImplementation"("org.junit.jupiter:junit-jupiter")
@@ -38,7 +45,13 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
 }
 
+tasks.test {
+    useJUnitPlatform()
+}
+
 val robocodeHome = rootProject.layout.projectDirectory.dir(".robocode/$robocodeVersion")
+// Robot and team jars built from git revisions; deployed next to the current ones and kept across reinstalls.
+val baselinesDir = rootProject.layout.projectDirectory.dir(".robocode/baselines")
 val setupJar = rootProject.layout.projectDirectory.file(".robocode/downloads/robocode-$robocodeVersion-setup.jar")
 
 val downloadRobocode = tasks.register("downloadRobocode") {
@@ -72,13 +85,101 @@ val installRobocode = tasks.register<Copy>("installRobocode") {
     into(robocodeHome)
 }
 
+/**
+ * Builds the robot and team jars of git revisions, with the revision's short hash as the bot version, into
+ * [baselinesDir]. A revision whose jars exist is skipped; a value that is not a revision is taken as the version of
+ * a jar that is already there.
+ */
+abstract class BaselineJars : DefaultTask() {
+    @get:Input
+    abstract val revisions: ListProperty<String>
+
+    @get:Internal
+    abstract val repository: DirectoryProperty
+
+    @get:Internal
+    abstract val workDir: DirectoryProperty
+
+    @get:Internal
+    abstract val baselines: DirectoryProperty
+
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    @TaskAction
+    fun build() {
+        for (revision in revisions.get()) {
+            val hash = Git.shortHash(exec, repository.get().asFile, revision) ?: continue
+            val target = baselines.get().asFile
+            val jars = listOf("cz.libors.Ogi_$hash.jar", "cz.libors.OgiTeam_$hash.jar").map { target.resolve(it) }
+            if (jars.all { it.exists() }) {
+                logger.lifecycle("Baseline $hash ($revision): jars exist")
+                continue
+            }
+            logger.lifecycle("Baseline $hash ($revision): building")
+            val work = workDir.get().asFile.resolve(hash)
+            work.deleteRecursively()
+            work.mkdirs()
+            val tar = work.resolve("source.tar")
+            exec.exec {
+                workingDir = repository.get().asFile
+                commandLine("git", "archive", "--format=tar", "-o", tar.absolutePath, hash)
+            }
+            val source = work.resolve("source")
+            source.mkdirs()
+            exec.exec { commandLine("tar", "-xf", tar.absolutePath, "-C", source.absolutePath) }
+            exec.exec {
+                workingDir = source
+                commandLine("sh", "./gradlew", "--quiet", ":bot:robotJar", ":bot:teamJar", "-PbotVersion=$hash")
+            }
+            target.mkdirs()
+            source.resolve("bot/build/robots").listFiles { f -> f.name.endsWith(".jar") }!!.forEach {
+                it.copyTo(target.resolve(it.name), overwrite = true)
+            }
+        }
+    }
+}
+
+object Git {
+    /** The short hash of a git revision, or null if [revision] is not one. */
+    fun shortHash(exec: ExecOperations, repository: File, revision: String): String? {
+        val out = ByteArrayOutputStream()
+        val result = exec.exec {
+            workingDir = repository
+            commandLine("git", "rev-parse", "--short=7", "--verify", "--quiet", "$revision^{commit}")
+            standardOutput = out
+            isIgnoreExitValue = true
+        }
+        return if (result.exitValue == 0) out.toString().trim() else null
+    }
+}
+
+/** Gives build scripts an [ExecOperations] outside a task. */
+abstract class ExecHolder @Inject constructor(val exec: ExecOperations)
+
+val execHolder = objects.newInstance<ExecHolder>()
+
+/** The bot version for a -Pbaseline or -Pcandidate value: a git revision's short hash, or the value itself. */
+fun versionOf(value: String): String = Git.shortHash(execHolder.exec, rootDir, value) ?: value
+
+val baselineJars = tasks.register<BaselineJars>("baselineJars") {
+    group = "robocode"
+    description = "Builds the jars of the git revisions given as -Pbaseline and -Pcandidate, for comparisons."
+    revisions.set(listOfNotNull(providers.gradleProperty("baseline").orNull,
+        providers.gradleProperty("candidate").orNull))
+    repository.set(rootProject.layout.projectDirectory)
+    workDir.set(layout.buildDirectory.dir("baselines"))
+    baselines.set(baselinesDir)
+}
+
 val deployBots = tasks.register<Copy>("deployBots") {
     group = "robocode"
-    description = "Copies the freshly built robot, team and probe jars into the Robocode installation."
-    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":probe:probeJar")
+    description = "Copies the freshly built robot, team and probe jars and the baseline jars into the installation."
+    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":probe:probeJar", baselineJars)
     val robotsDir = robocodeHome.dir("robots").asFile
     from(project(":bot").layout.buildDirectory.dir("robots"))
     from(project(":probe").layout.buildDirectory.dir("robots"))
+    from(baselinesDir)
     into(robotsDir)
     doFirst {
         robotsDir.listFiles { file -> file.name.startsWith("cz.libors.") }?.forEach { it.delete() }
@@ -130,6 +231,31 @@ val recordProbes = tasks.register<JavaExec>("recordProbes") {
         recordings.deleteRecursively()
     }
     args(robocodeHome.asFile.absolutePath, botVersion, recordings.absolutePath)
+}
+
+tasks.register<JavaExec>("compare") {
+    group = "verification"
+    description = "Paired, sequential comparison of a baseline and a candidate bot version; see docs/harness.md."
+    onRobocode("cz.libors.harness.compare.Compare")
+    val baseline = providers.gradleProperty("baseline")
+    val candidate = providers.gradleProperty("candidate")
+    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/sample-1v1.txt")
+    val out = providers.gradleProperty("out").orElse("harness/build/compare")
+    val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        val baselineValue = baseline.orNull ?: throw GradleException("Pass -Pbaseline=<git revision or version>")
+        listOf(
+            robocodeHome.asFile.absolutePath,
+            "robot=cz.libors.Ogi",
+            "team=cz.libors.OgiTeam",
+            "baseline=" + versionOf(baselineValue),
+            "candidate=" + (candidate.orNull?.let(::versionOf) ?: botVersion),
+            "opponents=" + root.resolve(opponents.get()).absolutePath,
+            "out=" + root.resolve(out.get()).absolutePath,
+        ) + passed
+    })
 }
 
 tasks.register<Test>("engineTest") {

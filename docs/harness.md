@@ -7,15 +7,19 @@ results. Every score claim about the bot must come from here.
 
 | Class | Role |
 |---|---|
-| `BattleSetup` | A battle: label, field size, rounds, contestants (`sample.Walls`, `cz.libors.Ogi 0.1`, teams by name), seed |
+| `BattleSetup` | A battle: label, field size, rounds, contestants (`sample.Walls`, `cz.libors.Ogi 0.1`, teams by name), seed, optional fixed starts |
 | `BattleRunner` | Owns one `RobocodeEngine`; resolves contestants from the local repository, seeds the battle and runs it synchronously, optionally with extra listeners |
-| `BattleOutcome` | Results sorted by score, the seed used, skipped turns per robot, problems (engine errors, exceptions in robot output), elapsed time |
+| `BattleOutcome` | Results sorted by score, the seed used, skipped turns per robot, problems (engine errors, exceptions in robot output), robot rounds that missed their fixed start, elapsed time |
+| `Starts` | Fixed starts drawn from a seed, and their engine string |
 | `ContestantResult` | Score components per contestant: total, survival, last survivor bonus, bullet damage and bonus, ram damage and bonus, firsts |
 | `SkeletonCheck` | Runs a fixed set of checks and writes `harness/build/skeleton-check.json` |
 | `ProbeRecordings` | Records probe battles and checks their integrity, coverage and determinism; see [Recordings](#recordings) |
 | `recording.TurnRecorder` | Battle listener that writes a recording: every robot and bullet in every turn, plus debug properties |
 | `recording.Recording` | Reads a recording back into memory; no Robocode classes, so tests can use it without an engine |
 | `Json` | Minimal JSON writer for records, lists and maps |
+| `compare.Compare` | Paired, sequential comparison of two bot versions; see [Comparing two versions](#comparing-two-versions) |
+| `compare.Sprt`, `compare.Stratum` | The stratified sequential test and the per-opponent paired statistics |
+| `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
 with `./gradlew engineTest`, after `recordProbes`. They read the recordings through `Recording` and need no engine.
@@ -47,7 +51,8 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
   position. `RandomnessRulesTest` in `bot/` fails on `Math.random()`, `Utils.getRandom()`, unseeded `new Random()`
   and similar sources in the bot's code; `recordProbes` checks that a seeded Ogi battle replays.
 - **Pairing:** two bot versions run on one seed share at most the first round's start positions; their battles
-  diverge as soon as their behaviour differs.
+  diverge as soon as their behaviour differs. Fixed starts (`BattleSetup.starts`) give both versions the same start
+  in every round, except when a robot stands in the way (engine-model G-41).
 - **Tested:** `recordProbes` replays seeded battles and compares digests (see below). Recordings were bit-identical
   on Java 17, 21 and 25 on the same Mac.
 
@@ -118,6 +123,8 @@ end     round  turns
 | `Math.random()` | two runs of `MathRandomProbe` with one seed differ |
 | Ogi | two runs of Ogi against `RandomProbe` with one seed are identical |
 | Shared generator | `RandomProbe` and `UtilsDrawProbe` with one seed start round 1 at the same positions and round 2 elsewhere |
+| Fixed starts | 8 probes on 400×400 with a start each, one on top of another and one with an exponent in its heading: every robot round starts exactly there unless a robot is in the way (engine-model G-41), and each case occurs |
+| Own jar | the repository lists `cz.libors.Ogi <v>` from the robot jar and the team jar; `BattleRunner` picks the robot jar (G-42) |
 
 Scenarios, each with seeds 1, 2 and 3: `duel` (2 probes, 800×600, 3 rounds), `crowd` (6 probes, 400×400, 3 rounds,
 many collisions), `melee` (10 probes, 1000×1000, 2 rounds), `inactive` (2 passive probes, 800×600, 1 round),
@@ -135,8 +142,88 @@ and writes everything to `harness/build/recordings/summary.json`.
 
 All checks also require zero skipped turns and no problems. The process exits non-zero on any failure.
 
+## Comparing two versions
+
+`./gradlew compare -Pbaseline=<rev>` measures whether a candidate version of the bot scores better than a baseline
+against a fixed opponent set. By default the candidate is the working tree (version `botVersion`), so the usual run
+compares uncommitted changes with `HEAD`:
+
+```sh
+./gradlew compare -Pbaseline=HEAD
+./gradlew compare -Pbaseline=HEAD -Pbounds=nonregression -Pstarts=fixed
+./gradlew compare -Pbaseline=7df5ba7 -Pcandidate=main -Popponents=harness/opponents/sample-team.txt
+```
+
+### Versions
+
+- **`-Pbaseline` and `-Pcandidate`** take a git revision or a bot version. `baselineJars` builds the robot and
+  team jars of a revision from `git archive` with its short hash as the version (e.g. `cz.libors.Ogi 7df5ba7`) into
+  `.robocode/baselines/`, unless they are there already. A value that is not a revision is the version of a jar in
+  that directory. `deployBots` deploys these jars next to the current ones.
+- **Several versions in one installation:** robots are keyed by name and version. A team loads its members from its
+  own jar, so team versions do not mix (engine-model G-42).
+- **Identity:** the comparison records the SHA-256 of both jars. The jars are reproducible, so the same code gives
+  the same hash.
+
+### Options
+
+| Property | Default | Meaning |
+|---|---|---|
+| `opponents` | `harness/opponents/sample-1v1.txt` | opponent set file, see below |
+| `bounds` | `gainer` | hypotheses in score-share points: `gainer` [0, 0.5], `screening` [0, 1.5], `nonregression` [−0.75, 0.25], or `δ0,δ1` |
+| `maxPairs` | 1000 | stop undecided after this many pairs |
+| `pairsPerOpponent` | 0 | fixed mode: this many pairs per opponent and no stopping rule, for measuring noise |
+| `starts` | `random` | `fixed`: both battles of a pair start every round at the same positions, drawn from the pair's seed |
+| `seed` | 1 | run seed; a pair's seed depends on it, the opponent and the pair's index |
+| `rounds` | from the format | rounds per battle |
+| `out` | `harness/build/compare` | root of the output directories |
+
+### Opponent sets
+
+A text file per set in `harness/opponents/`: a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10
+rounds), then one robot or team per line as Robocode lists it, including its version. Opponents under `[strong]` form
+the second scoreboard; `[other]` starts the rest. Only the sample bots are in the repository. Sets of rumble bots
+belong next to their jars on the machine that runs them.
+
+### Method
+
+- **Pairs:** both versions fight the same opponent with the same seed (and the same starts with `starts=fixed`); the
+  pair's difference is the candidate's score share minus the baseline's, in points (0–100). Which version goes first
+  alternates.
+- **Estimate:** every opponent weighs the same, as in the rumble's APS. The difference is the mean of the per-opponent
+  mean differences, with variance `(1/H²)·Σ s_h²/n_h`. While an opponent has fewer than 5 pairs, its variance is the
+  one pooled over all opponents.
+- **Allocation:** 2 pairs per opponent first; then the next pair goes to the opponent furthest below its Neyman
+  share (`n_h ∝ s_h`), so opponents where the versions differ little get few pairs.
+- **Stopping rule:** fishtest's normal approximation of the generalized SPRT, `LLR = (δ1 − δ0)(2Δ̂ − δ0 − δ1)/(2V)`,
+  with α = β = 0.05: H1 at LLR ≥ 2.94, H0 at LLR ≤ −2.94. No decision before the burn-in and before the pooled
+  variance has 20 degrees of freedom; with fewer, a variance underestimated by chance ends the test after a few
+  pairs. Unit tests simulate the test at both hypotheses: error rates and lengths match the theory.
+- **Scoreboards:** APS (mean score share) and PWIN (share of battles won) of both versions over all opponents and
+  over the strong ones, with the difference and its 95 % interval.
+- **Fixed starts** make every round of a battle start alike, which the rumble does not do. Against the sample bots
+  (2026-10-08) they raised the per-battle SD and the correlation of a pair's battles alike, and the noise of the
+  difference stayed the same, so random starts are the default.
+
+### Output
+
+`<out>/<set>/<baseline>-<jar hash>_vs_<candidate>-<jar hash>_<starts>_s<seed>/`:
+
+- `battles.tsv`: one line per battle, appended as it finishes: opponent, pair, side, seed, score share, the
+  subject's score components, both sides' firsts and skipped turns, problems, start mismatches, time. Running the
+  same comparison again resumes from it; a pair with only one battle logged is left out. The first lines hold the
+  configuration; a log with another configuration is refused.
+- `summary.json`: the configuration, environment (Robocode and Java version, CPU constant), the decision, both
+  scoreboards, per-opponent statistics (means, standard deviations, the correlation of a pair's two battles), noise
+  (σ per pair, expected pairs to a decision) and health (skipped turns per side, problems, start mismatches).
+- `problems.log`: exceptions and engine errors, if any.
+
+The run prints one line per pair and the tables at the end. It does not fail on a decision: read the result line.
+
 ## Known quirks
 
+- A team jar lists its robots in the repository under the same name and version as the robot jar
+  (engine-model G-42). `BattleRunner` picks the jar named after the robot.
 - `BattleResults.getRank()` in melee does not always follow the score order (engine-model G-31). Do not rely on it
   in new checks; rank by score.
 - The output-based skipped-turn detection depends on the engine's message text. Replace it with an explicit signal
@@ -146,5 +233,4 @@ All checks also require zero skipped turns and no problems. The process exits no
 
 ## Planned
 
-- Paired, sequential comparison of two bot versions against a fixed opponent population, with stopping rules.
 - A job queue so a remote machine can run battle batches.

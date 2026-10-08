@@ -10,15 +10,18 @@ import robocode.control.events.BattleAdaptor;
 import robocode.control.events.BattleCompletedEvent;
 import robocode.control.events.BattleErrorEvent;
 import robocode.control.events.IBattleListener;
+import robocode.control.events.RoundStartedEvent;
 import robocode.control.events.TurnEndedEvent;
 import robocode.control.snapshot.IRobotSnapshot;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 
 /** Runs battles headless on a real Robocode installation through the control API. */
@@ -45,21 +48,25 @@ public final class BattleRunner implements AutoCloseable {
      * positions, processing order) and robots calling {@code Utils.getRandom()}. It does not control
      * {@link Math#random()} (engine-model G-26, G-33).
      *
+     * <p>Fixed starts go to the engine as its initial-positions string, which, unlike the specification's
+     * {@code RobotSetup} array, can place every member of a team (engine-model G-41).
+     *
      * @param listeners extra listeners for this battle only, e.g. a recorder
      */
     public BattleOutcome run(BattleSetup setup, IBattleListener... listeners) {
         RobotSpecification[] robots = resolve(setup.robots());
         long seed = setup.seed() != null ? setup.seed() : seeds.nextLong();
         RandomFactory.resetDeterministic(seed);
-        collector.reset();
+        collector.reset(setup.starts());
         BattleSpecification spec = new BattleSpecification(setup.rounds(),
                 new BattlefieldSpecification(setup.width(), setup.height()), robots);
+        String initialPositions = setup.starts() == null ? null : Starts.format(setup.starts());
         for (IBattleListener listener : listeners) {
             engine.addBattleListener(listener);
         }
         long start = System.nanoTime();
         try {
-            engine.runBattle(spec, true);
+            engine.runBattle(spec, initialPositions, true);
         } finally {
             for (IBattleListener listener : listeners) {
                 engine.removeBattleListener(listener);
@@ -67,21 +74,67 @@ public final class BattleRunner implements AutoCloseable {
         }
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         return new BattleOutcome(setup, seed, List.copyOf(collector.results), Map.copyOf(collector.skippedTurns),
-                List.copyOf(collector.problems), elapsedMillis);
+                List.copyOf(collector.problems), collector.startMismatches, elapsedMillis);
     }
 
-    /** Looks robots up by exact "name version" (jars) or by name (unversioned, e.g. the sample bots). */
+    /** Number of robots in a battle of these contestants, with team members counted one by one. */
+    public int robotCount(List<String> names) {
+        String selected = String.join(",", Arrays.stream(resolve(names))
+                .map(RobotSpecification::getNameAndVersion).toList());
+        return engine.getLocalRepository(selected).length;
+    }
+
+    public String robocodeVersion() {
+        return engine.getVersion();
+    }
+
+    /** The jar a robot or team is loaded from, if it comes from a jar. */
+    public Optional<Path> jarFile(String name) {
+        return jarPath(resolve(List.of(name))[0]);
+    }
+
+    /** The jars of every repository entry listed under this name. */
+    public List<Path> listedJars(String name) {
+        return Arrays.stream(engine.getLocalRepository())
+                .filter(r -> name.equals(r.getNameAndVersion()) || name.equals(r.getName()))
+                .flatMap(r -> jarPath(r).stream())
+                .toList();
+    }
+
+    /**
+     * Looks robots up by exact "name version" (jars) or by name (unversioned, e.g. the sample bots). A team jar's
+     * members are listed under the same name as the robot's own jar (engine-model G-42), so a robot from the jar named
+     * after it, {@code <name>_<version>.jar}, wins.
+     */
     private RobotSpecification[] resolve(List<String> names) {
         RobotSpecification[] all = engine.getLocalRepository();
         List<RobotSpecification> selected = new ArrayList<>();
         for (String name : names) {
-            RobotSpecification match = Arrays.stream(all)
+            List<RobotSpecification> matches = Arrays.stream(all)
                     .filter(r -> name.equals(r.getNameAndVersion()) || name.equals(r.getName()))
+                    .toList();
+            if (matches.isEmpty()) {
+                throw new IllegalArgumentException("Robot not found in repository: " + name);
+            }
+            String ownJar = name.replace(' ', '_') + ".jar";
+            selected.add(matches.stream()
+                    .filter(r -> jarPath(r).map(p -> p.getFileName().toString().equals(ownJar)).orElse(false))
                     .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException("Robot not found in repository: " + name));
-            selected.add(match);
+                    .orElse(matches.get(0)));
         }
         return selected.toArray(RobotSpecification[]::new);
+    }
+
+    /**
+     * The jar of a robot or team. {@code getJarFile()} is never null: it is the repository root's URL wrapped in a
+     * {@code File}, {@code jar:file:/…/X.jar!} for a jar (engine-model G-42).
+     */
+    private static Optional<Path> jarPath(RobotSpecification robot) {
+        String root = robot.getJarFile().getPath();
+        if (!root.startsWith("jar:") || !root.endsWith("!")) {
+            return Optional.empty();
+        }
+        return Optional.of(Path.of(URI.create(root.substring("jar:".length(), root.length() - 1))));
     }
 
     @Override
@@ -94,11 +147,32 @@ public final class BattleRunner implements AutoCloseable {
         private final List<ContestantResult> results = new ArrayList<>();
         private final Map<String, Integer> skippedTurns = new LinkedHashMap<>();
         private final List<String> problems = new ArrayList<>();
+        private List<BattleSetup.Start> starts;
+        private int startMismatches;
 
-        void reset() {
+        void reset(List<BattleSetup.Start> expectedStarts) {
             results.clear();
             skippedTurns.clear();
             problems.clear();
+            starts = expectedStarts;
+            startMismatches = 0;
+        }
+
+        @Override
+        public void onRoundStarted(RoundStartedEvent event) {
+            if (starts == null) {
+                return;
+            }
+            for (IRobotSnapshot robot : event.getStartSnapshot().getRobots()) {
+                int index = robot.getRobotIndex();
+                if (index < starts.size()) {
+                    BattleSetup.Start s = starts.get(index);
+                    if (robot.getX() != s.x() || robot.getY() != s.y()
+                            || robot.getBodyHeading() != Math.toRadians(s.headingDegrees())) {
+                        startMismatches++;
+                    }
+                }
+            }
         }
 
         @Override

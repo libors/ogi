@@ -295,6 +295,34 @@ to-test.
   - **Bites when:** recordings or tools read debug properties of dead robots; a bot draws from `Utils.getRandom()`.
   - **Source:** `Battle.wakeupSerial`, `RobotPeer.executeImpl`. · **Status:** verified; `TurnRecorder` leaves the
     debug properties out, and `UtilsRandomProbe` stops drawing once dead (10 reruns identical since).
+- **G-41 Fixed starts hold in every round, unless a robot is in the way.**
+  - **What:** a battle's initial positions (the string `(x,y,heading),…` of `RobocodeEngine.runBattle`, or the
+    specification's `RobotSetup` array) apply to every round, not only the first. Headings are in degrees. Robot i
+    starts at its position unless that box overlaps a robot already placed in this round (a lower index) or a robot
+    not placed yet (a higher index), which still stands where it ended the previous round. Then the engine draws a
+    random spot from the shared generator (G-33), as if there were no start.
+    - The parser drops every character other than digits and dots from each number, so `-5` reads as 5 and `1.0E-4`
+      as 1.04.
+    - The `RobotSetup` array must have one entry per contestant, but the engine indexes it by robot, so in a team
+      battle it can only place the first robots. The string has no such limit.
+    - When the battle is created, the engine draws three numbers from the shared generator for every listed start,
+      used or not (they fill in `?` values).
+  - **Bites when:** paired battles assume equal starts; team battles use `RobotSetup[]`; generated values print with
+    a sign or an exponent.
+  - **Source:** `Battle.computeInitialPositions`, `RobotPeer.initializeRound`, `RobotPeer.validSpot`,
+    `BattleProperties.setInitialPositions`, `BattleSpecification`. · **Status:** tested: `recordProbes` ("Fixed
+    starts are used in every round unless a robot is in the way"); the `RobotSetup` limit verified in the source.
+    `BattleRunner` passes starts as the string and counts robot rounds that missed them.
+- **G-42 A team jar lists its robots in the repository too.**
+  - **What:** `cz.libors.OgiTeam_0.1.jar` contains `cz/libors/Ogi.properties`, so the local repository lists
+    `cz.libors.Ogi 0.1` twice, once per jar, and a lookup by name can return the one from the team jar. A team loads
+    its members from its own jar first, so several versions of the team can be deployed side by side.
+    `RobotSpecification.getJarFile()` is never null: it wraps the repository root's URL, e.g. `jar:file:/…/X.jar!`,
+    in a `File`.
+  - **Bites when:** identifying or hashing the jar a robot came from; deploying several versions.
+  - **Source:** `RepositoryManager.getRobotItems`, `RobotSpecItem.createRobotSpecification`; harness observation.
+    · **Status:** tested: `recordProbes` ("listed by the robot jar and the team jar"). `BattleRunner` prefers the jar
+    named `<name>_<version>.jar`. Teams using their own members observed on 2026-10-08 with four versions deployed.
 - **G-30 Approximate trigonometry breaks prediction.** Lookup-table sin/cos must not be used where we have to match the
   engine.
   - **Source:** project convention. · **Status:** to-test (the precise predictor's differential test).
