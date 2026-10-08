@@ -39,4 +39,28 @@ public final class EngineRobot {
     public boolean overDriving;
     /** Hidden engine state: the robot rammed another one this turn, so it does not turn its body next turn. */
     public boolean inCollision;
+
+    public EngineRobot copy() {
+        EngineRobot c = new EngineRobot();
+        c.x = x;
+        c.y = y;
+        c.velocity = velocity;
+        c.bodyHeading = bodyHeading;
+        c.gunHeading = gunHeading;
+        c.radarHeading = radarHeading;
+        c.gunHeat = gunHeat;
+        c.energy = energy;
+        c.distanceRemaining = distanceRemaining;
+        c.bodyTurnRemaining = bodyTurnRemaining;
+        c.gunTurnRemaining = gunTurnRemaining;
+        c.radarTurnRemaining = radarTurnRemaining;
+        c.maxVelocity = maxVelocity;
+        c.maxTurnRate = maxTurnRate;
+        c.adjustGunForBodyTurn = adjustGunForBodyTurn;
+        c.adjustRadarForGunTurn = adjustRadarForGunTurn;
+        c.adjustRadarForBodyTurn = adjustRadarForBodyTurn;
+        c.overDriving = overDriving;
+        c.inCollision = inCollision;
+        return c;
+    }
 }

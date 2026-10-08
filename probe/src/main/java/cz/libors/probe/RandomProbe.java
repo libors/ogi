@@ -71,6 +71,11 @@ public class RandomProbe extends AdvancedRobot {
         }
     }
 
+    /** Whether the probe fires at all; robots that never fire make the engine apply its inactivity penalty. */
+    protected boolean fires() {
+        return true;
+    }
+
     /** Uniform random number in [0, 1), the probe's only source of randomness. */
     protected double nextRandom() {
         return random.nextDouble();
@@ -109,7 +114,7 @@ public class RandomProbe extends AdvancedRobot {
         }
         Object power = "-";
         boolean fired = false;
-        if (chance(fireChance)) {
+        if (fires() && chance(fireChance)) {
             double p = firePower();
             power = p;
             fired = setFireBullet(p) != null;

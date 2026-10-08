@@ -84,6 +84,11 @@ public final class BulletMotion {
         return (ua >= 0 && ua <= 1) && (ub >= 0 && ub <= 1);
     }
 
+    /** {@code Rules.getBulletHitBonus}: energy the shooter regains when its bullet hits a robot. */
+    public static double hitBonus(double power) {
+        return 3 * power;
+    }
+
     /** {@code Rules.getBulletDamage}. */
     public static double damage(double power) {
         double damage = 4 * power;

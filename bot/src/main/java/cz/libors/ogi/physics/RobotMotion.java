@@ -21,12 +21,6 @@ public final class RobotMotion {
     /** Half of the 36 px bounding box; the engine keeps it as an int. */
     public static final int HALF_SIZE = 18;
 
-    // Constants and tolerance of robocode.util.Utils.
-    private static final double TWO_PI = 2 * Math.PI;
-    private static final double PI_OVER_TWO = Math.PI / 2;
-    private static final double THREE_PI_OVER_TWO = 3 * Math.PI / 2;
-    private static final double NEAR_DELTA = .00001;
-
     private RobotMotion() {
     }
 
@@ -81,7 +75,8 @@ public final class RobotMotion {
 
     /**
      * Outcome of ramming another robot ({@code RobotPeer.checkRobotCollision}, the robot at fault): it is pushed
-     * back by this turn's movement, stops, loses the ram damage and does not turn its body next turn.
+     * back by this turn's movement, stops, loses the ram damage and does not turn its body next turn. Call it once
+     * per robot rammed in the turn; after the first the robot is already stopped.
      */
     public static void ram(EngineRobot r) {
         double movedX = r.velocity * Math.sin(r.bodyHeading);
@@ -92,6 +87,48 @@ public final class RobotMotion {
         r.x -= movedX;
         r.y -= movedY;
         setEnergy(r, r.energy - ROBOT_HIT_DAMAGE);
+    }
+
+    /**
+     * Being rammed by another robot, during that robot's move: the victim only loses the ram damage. Its movement
+     * is not affected.
+     */
+    public static void rammed(EngineRobot r) {
+        setEnergy(r, r.energy - ROBOT_HIT_DAMAGE);
+    }
+
+    /**
+     * {@code BulletPeer.checkRobotCollision}, the victim's side.
+     *
+     * @return whether the robot survives; at energy 0 or below the engine kills it
+     */
+    public static boolean hitByBullet(EngineRobot r, double power) {
+        setEnergy(r, r.energy - BulletMotion.damage(power));
+        return r.energy > 0;
+    }
+
+    /** {@code BulletPeer.checkRobotCollision}, the shooter's side: it regains 3p, even when disabled. */
+    public static void bulletHit(EngineRobot r, double power) {
+        setEnergy(r, r.energy + BulletMotion.hitBonus(power));
+    }
+
+    /**
+     * {@code RobotPeer.zap}: the inactivity penalty at the end of the robot's move, in turns in which
+     * {@link Inactivity#zapping} holds. Below 0.1 the robot is disabled; a robot already at 0 is killed.
+     *
+     * @return whether the robot survives
+     */
+    public static boolean zap(EngineRobot r, double amount) {
+        if (r.energy == 0) {
+            return false;
+        }
+        r.energy -= Math.abs(amount);
+        if (r.energy < .1) {
+            r.energy = 0;
+            r.distanceRemaining = 0;
+            r.bodyTurnRemaining = 0;
+        }
+        return true;
     }
 
     /** {@code RobotPeer.updateHeading}: the turn rate depends on the velocity before this turn's acceleration. */
@@ -114,8 +151,10 @@ public final class RobotMotion {
             r.radarTurnRemaining -= turn;
         }
         r.bodyTurnRemaining = partial ? 0 : remaining - turn;
-        // A finished turn snaps to the nearest quarter if within NEAR_DELTA.
-        r.bodyHeading = r.bodyTurnRemaining == 0 ? normalNearAbsolute(r.bodyHeading) : normalAbsolute(r.bodyHeading);
+        // A finished turn snaps to a multiple of 90° within 1e-5 (engine-model G-36).
+        r.bodyHeading = r.bodyTurnRemaining == 0
+                ? EngineAngles.normalNearAbsolute(r.bodyHeading)
+                : EngineAngles.normalAbsolute(r.bodyHeading);
     }
 
     /** {@code RobotPeer.updateGunHeading}: the radar turns with the gun. */
@@ -131,7 +170,7 @@ public final class RobotMotion {
             }
             r.gunTurnRemaining = partial ? 0 : remaining - turn;
         }
-        r.gunHeading = normalAbsolute(r.gunHeading);
+        r.gunHeading = EngineAngles.normalAbsolute(r.gunHeading);
     }
 
     /** {@code RobotPeer.updateRadarHeading}. */
@@ -143,7 +182,7 @@ public final class RobotMotion {
             r.radarHeading += turn;
             r.radarTurnRemaining = partial ? 0 : remaining - turn;
         }
-        r.radarHeading = normalAbsolute(r.radarHeading);
+        r.radarHeading = EngineAngles.normalAbsolute(r.radarHeading);
     }
 
     /** {@code RobotPeer.updateMovement}. */
@@ -154,7 +193,7 @@ public final class RobotMotion {
         }
         r.velocity = newVelocity(r.velocity, distance, r.maxVelocity);
         // Braking for the end of the distance reached zero: the rest of the distance is dropped.
-        if (isNear(r.velocity, 0) && r.overDriving) {
+        if (EngineAngles.isNear(r.velocity, 0) && r.overDriving) {
             distance = 0;
             r.overDriving = false;
         }
@@ -280,33 +319,5 @@ public final class RobotMotion {
             r.distanceRemaining = 0;
             r.bodyTurnRemaining = 0;
         }
-    }
-
-    private static double normalAbsolute(double angle) {
-        return (angle %= TWO_PI) >= 0 ? angle : (angle + TWO_PI);
-    }
-
-    private static double normalNearAbsolute(double angle) {
-        angle = (angle %= TWO_PI) >= 0 ? angle : (angle + TWO_PI);
-        if (isNear(angle, Math.PI)) {
-            return Math.PI;
-        } else if (angle < Math.PI) {
-            if (isNear(angle, 0)) {
-                return 0;
-            } else if (isNear(angle, PI_OVER_TWO)) {
-                return PI_OVER_TWO;
-            }
-        } else {
-            if (isNear(angle, THREE_PI_OVER_TWO)) {
-                return THREE_PI_OVER_TWO;
-            } else if (isNear(angle, TWO_PI)) {
-                return 0;
-            }
-        }
-        return angle;
-    }
-
-    private static boolean isNear(double a, double b) {
-        return Math.abs(a - b) < NEAR_DELTA;
     }
 }

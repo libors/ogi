@@ -29,6 +29,9 @@ packaged as `cz.libors.OgiTeam` plays in teams.
 - **Geometry uses the mathematical convention**: radians, 0 = east, counter-clockwise positive. Convert to and from
   Robocode angles only through `cz.libors.ogi.geom.Angles`. The one exception is `cz.libors.ogi.physics`, which
   repeats the engine's arithmetic in the engine's convention to match it bit for bit; convert at its boundary.
+- **Randomness:** the bot draws only from its own `java.util.Random` with an explicit seed, never from
+  `Utils.getRandom()` (the engine's generator) or `Math.random()`; `RandomnessRulesTest` enforces it. Otherwise
+  seeded battles stop replaying (engine-model G-26, G-33, G-34).
 - **Engine behaviour comes from the Robocode source and is proven by tests against the real engine**, never from
   memory or wiki pages alone. Record every engine surprise as a gotcha in `docs/engine-model.md`, with a test.
 - **Score claims come from the harness** on a Robocode version that LiteRumble accepts, never from reasoning alone.

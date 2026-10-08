@@ -39,10 +39,14 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
 - **What the seed controls:** the single random generator shared by the harness, the engine (start positions, the
   order in which robots and bullets are processed) and robots that call `Utils.getRandom()` (engine-model G-33).
 - **What it does not control:** `Math.random()` and robots' own unseeded generators (G-26). A battle with such a
-  robot does not replay. Ogi's movement uses `new Random()` today, so Ogi battles do not replay yet.
+  robot does not replay. Most foreign bots are such robots.
 - **A robot's draws from `Utils.getRandom()` shift the engine's later draws**, e.g. the next round's start
-  positions. Two bot versions compared on the same seed only share start positions as long as they draw the same
-  numbers from it.
+  positions, and a draw in its last turn after death races with the engine (G-34), so the battle stops replaying.
+- **Our robots** therefore draw only from their own `java.util.Random`, seeded from the round and the start
+  position. `RandomnessRulesTest` in `bot/` fails on `Math.random()`, `Utils.getRandom()`, unseeded `new Random()`
+  and similar sources in the bot's code; `recordProbes` checks that a seeded Ogi battle replays.
+- **Pairing:** two bot versions run on one seed share at most the first round's start positions; their battles
+  diverge as soon as their behaviour differs.
 - **Tested:** `recordProbes` replays seeded battles and compares digests (see below). Recordings were bit-identical
   on Java 17, 21 and 25 on the same Mac.
 
@@ -60,8 +64,9 @@ no rule of the game; the digests are identical with and without it.
 | Robot | Source of randomness | Purpose |
 |---|---|---|
 | `RandomProbe` | own `Random`, seeded from the round and the start position | random commands for the recordings |
+| `PassiveProbe` | like `RandomProbe`, but never fires | battles that reach the inactivity penalty |
 | `MathRandomProbe` | `Math.random()` | shows that a seed does not control `Math.random()` |
-| `UtilsRandomProbe` | `Utils.getRandom()` | shows that a seed controls `Utils.getRandom()` |
+| `UtilsRandomProbe` | `Utils.getRandom()`, none once dead (engine-model G-34) | shows that a seed controls `Utils.getRandom()` |
 | `UtilsDrawProbe` | like `RandomProbe`, plus one discarded `Utils.getRandom()` draw per number used | shows that robots share the engine's generator |
 
 - **Commands:** every turn each command channel gets a new random command with a per-round probability: ahead,
@@ -109,10 +114,11 @@ end     round  turns
 | Replay | the first seed of each scenario, run again, gives the same digest (SHA-256 of the uncompressed text) |
 | `Utils.getRandom()` | two runs of `UtilsRandomProbe` with one seed are identical |
 | `Math.random()` | two runs of `MathRandomProbe` with one seed differ |
+| Ogi | two runs of Ogi against `RandomProbe` with one seed are identical |
 | Shared generator | `RandomProbe` and `UtilsDrawProbe` with one seed start round 1 at the same positions and round 2 elsewhere |
 
-Scenarios: `duel` (2 probes, 800×600, 3 rounds), `crowd` (6 probes, 400×400, 3 rounds, many collisions) and
-`melee` (10 probes, 1000×1000, 2 rounds), each with seeds 1, 2 and 3. The task also prints how often the edge cases
+Scenarios, each with seeds 1, 2 and 3: `duel` (2 probes, 800×600, 3 rounds), `crowd` (6 probes, 400×400, 3 rounds,
+many collisions), `melee` (10 probes, 1000×1000, 2 rounds) and `inactive` (2 passive probes, 800×600, 1 round). The task also prints how often the edge cases
 occurred (wall hits, robot collisions, velocity sign flips, stops, bullet outcomes, deaths, disabled turns, events)
 and writes everything to `harness/build/recordings/summary.json`.
 

@@ -8,6 +8,7 @@ import cz.libors.harness.recording.Recording.RobotTick;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,7 @@ final class ProbeTrace {
     private final Map<Long, RobotTick> ticks = new HashMap<>();
     private final Map<Long, Command> commands = new HashMap<>();
     private final Map<Long, Remaining> remaining = new HashMap<>();
+    private final Map<Long, List<String[]>> events = new HashMap<>();
 
     private ProbeTrace(String name, Recording recording) {
         this.name = name;
@@ -65,6 +67,8 @@ final class ProbeTrace {
                 commands.put(k, Command.parse(d.value()));
             } else if (d.key().equals("rem")) {
                 remaining.put(k, Remaining.parse(d.value()));
+            } else if (d.key().equals("ev")) {
+                events.computeIfAbsent(k, x -> new ArrayList<>()).add(d.value().split(","));
             }
         }
     }
@@ -77,7 +81,7 @@ final class ProbeTrace {
             files = list.filter(p -> p.getFileName().toString().endsWith(".rec.gz")).sorted().toList();
         }
         assertFalse(files.isEmpty(), "No recordings in " + dir + "; run recordProbes");
-        List<ProbeTrace> traces = new java.util.ArrayList<>();
+        List<ProbeTrace> traces = new ArrayList<>();
         for (Path file : files) {
             traces.add(new ProbeTrace(file.getFileName().toString(), Recording.read(file)));
         }
@@ -98,6 +102,33 @@ final class ProbeTrace {
     Remaining remaining(int round, int turn, int robot) {
         Remaining r = remaining.get(key(round, turn, robot));
         return r != null && r.time() == turn ? r : null;
+    }
+
+    /** The events of one type a probe logged while acting in this turn, each as type, time and fields. */
+    List<String[]> events(int round, int turn, int robot, String type) {
+        return events.getOrDefault(key(round, turn, robot), List.of()).stream()
+                .filter(f -> f[0].equals(type))
+                .toList();
+    }
+
+    /** Every event a probe logged in this turn, each as type, time and fields. */
+    List<String[]> events(int round, int turn, int robot) {
+        return events.getOrDefault(key(round, turn, robot), List.of());
+    }
+
+    /** Index of the robot with this name, or -1. */
+    int robotIndex(String name) {
+        return recording.robots().stream().filter(r -> r.name().equals(name)).mapToInt(Recording.RobotInfo::index)
+                .findFirst().orElse(-1);
+    }
+
+    /** The first {@code HIT_VICTIM} tick of every bullet that hit a robot, i.e. the bullet in the turn of the hit. */
+    List<BulletTick> robotHits() {
+        List<BulletTick> hits = new ArrayList<>();
+        for (TreeMap<Integer, BulletTick> track : bulletTracks().values()) {
+            track.values().stream().filter(b -> b.state().equals("HIT_VICTIM")).findFirst().ifPresent(hits::add);
+        }
+        return hits;
     }
 
     /** Every bullet's ticks, keyed by round, owner and bullet id, each ordered by turn. */

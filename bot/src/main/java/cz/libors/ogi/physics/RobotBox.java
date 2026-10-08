@@ -27,6 +27,22 @@ public final class RobotBox {
         height = size;
     }
 
+    public double x() {
+        return x;
+    }
+
+    public double y() {
+        return y;
+    }
+
+    public double width() {
+        return width;
+    }
+
+    public double height() {
+        return height;
+    }
+
     /** Whether the point is inside; the low edges belong to the box, the high edges do not. */
     public boolean contains(double px, double py) {
         double x0 = x;

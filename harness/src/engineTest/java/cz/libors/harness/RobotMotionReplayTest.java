@@ -94,7 +94,7 @@ class RobotMotionReplayTest {
     }
 
     /** A new round starts with fresh engine commands; the overdrive flag survives. */
-    private static void resetCommands(EngineRobot sim) {
+    static void resetCommands(EngineRobot sim) {
         sim.distanceRemaining = 0;
         sim.bodyTurnRemaining = 0;
         sim.gunTurnRemaining = 0;
@@ -118,7 +118,7 @@ class RobotMotionReplayTest {
         sim.inCollision = t.state().equals("HIT_ROBOT");
     }
 
-    private static void load(EngineRobot sim, Command c) {
+    static void load(EngineRobot sim, Command c) {
         sim.distanceRemaining = c.distance();
         sim.bodyTurnRemaining = c.bodyTurn();
         sim.gunTurnRemaining = c.gunTurn();

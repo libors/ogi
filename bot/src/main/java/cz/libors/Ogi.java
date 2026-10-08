@@ -15,6 +15,7 @@ import robocode.TeamRobot;
 
 import java.awt.Color;
 import java.io.IOException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
 
@@ -40,7 +41,7 @@ public class Ogi extends TeamRobot {
     public void run() {
         world = new World();
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
-        movement = new OrbitMovement(field, new Random());
+        movement = new OrbitMovement(field, new Random(roundSeed()));
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
@@ -49,6 +50,15 @@ public class Ogi extends TeamRobot {
             act();
             execute();
         }
+    }
+
+    /**
+     * Seed of the bot's own random generator, from the round and the start position. The engine draws the start
+     * position from its seeded generator, so a seeded harness battle replays; the bot never draws from
+     * {@code Utils.getRandom()} or {@code Math.random()} (engine-model G-26, G-33, G-34).
+     */
+    private long roundSeed() {
+        return Objects.hash(getRoundNum(), getX(), getY(), getHeadingRadians());
     }
 
     private void act() {

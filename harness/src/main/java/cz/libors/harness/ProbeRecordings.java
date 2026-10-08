@@ -51,7 +51,8 @@ public final class ProbeRecordings {
     private static final List<Scenario> SCENARIOS = List.of(
             new Scenario("duel", 800, 600, 3, "RandomProbe", 2),
             new Scenario("crowd", 400, 400, 3, "RandomProbe", 6),
-            new Scenario("melee", 1000, 1000, 2, "RandomProbe", 10));
+            new Scenario("melee", 1000, 1000, 2, "RandomProbe", 10),
+            new Scenario("inactive", 800, 600, 1, "PassiveProbe", 2));
 
     /** How often the edge cases occurred in a recording. */
     record Coverage(int robotTurns, int wallHits, int robotHits, int velocitySignFlips, int stops, int bulletsFired,
@@ -69,7 +70,7 @@ public final class ProbeRecordings {
     }
 
     /**
-     * @param staleCommands live robot turns, while two or more robots were alive, without a {@code cmd} property of
+     * @param staleCommands live probe turns, while two or more robots were alive, without a {@code cmd} property of
      *                      that turn
      */
     record Summary(String file, String label, long seed, String digest, int rounds, int turns, int staleCommands,
@@ -124,10 +125,15 @@ public final class ProbeRecordings {
                 summaries.add(replay);
             }
 
-            checks.add(replayExperiment(runner, version, out, probeDuel("utils-random", "UtilsRandomProbe"), true,
-                    "Utils.getRandom() in robots is seeded: replay is identical (G-33)", summaries));
-            checks.add(replayExperiment(runner, version, out, probeDuel("math-random", "MathRandomProbe"), false,
-                    "Math.random() is not seeded: replay differs (G-26)", summaries));
+            checks.add(replayExperiment(runner, out, probeDuel("utils-random", "UtilsRandomProbe").setup(version,
+                    EXPERIMENT_SEED), true, "Utils.getRandom() in robots is seeded: replay is identical (G-33)",
+                    summaries));
+            checks.add(replayExperiment(runner, out, probeDuel("math-random", "MathRandomProbe").setup(version,
+                    EXPERIMENT_SEED), false, "Math.random() is not seeded: replay differs (G-26)", summaries));
+            BattleSetup ogi = new BattleSetup("ogi", 800, 600, EXPERIMENT_ROUNDS,
+                    List.of("cz.libors.Ogi " + version, "cz.libors.probe.RandomProbe " + version), EXPERIMENT_SEED);
+            checks.add(replayExperiment(runner, out, ogi, true,
+                    "Ogi draws only from its own seeded generator: replay is identical", summaries));
             checks.add(sharedGeneratorExperiment(runner, version, out, summaries));
         }
 
@@ -157,13 +163,11 @@ public final class ProbeRecordings {
     }
 
     /** Runs the same seeded battle twice and checks whether the recordings are identical. */
-    private static Check replayExperiment(BattleRunner runner, String version, Path out, Scenario scenario,
-                                          boolean expectIdentical, String label, List<Summary> summaries)
-            throws IOException {
-        BattleSetup setup = scenario.setup(version, EXPERIMENT_SEED);
+    private static Check replayExperiment(BattleRunner runner, Path out, BattleSetup setup, boolean expectIdentical,
+                                          String label, List<Summary> summaries) throws IOException {
         Path dir = out.resolve("determinism");
-        Summary first = record(runner, setup, dir.resolve(scenario.name() + "-1.rec.gz"));
-        Summary second = record(runner, setup, dir.resolve(scenario.name() + "-2.rec.gz"));
+        Summary first = record(runner, setup, dir.resolve(setup.label() + "-1.rec.gz"));
+        Summary second = record(runner, setup, dir.resolve(setup.label() + "-2.rec.gz"));
         summaries.add(first);
         summaries.add(second);
         boolean identical = first.digest().equals(second.digest());
@@ -218,9 +222,13 @@ public final class ProbeRecordings {
 
     private static Summary summarize(Path file, BattleOutcome outcome, String digest, Recording rec) {
         Set<Long> freshCommands = new HashSet<>();
+        Set<Integer> probes = new HashSet<>();
         Map<String, Integer> events = new TreeMap<>();
         for (DebugEntry d : rec.debug()) {
             int comma = d.value().indexOf(',');
+            if (d.key().equals("cmd")) {
+                probes.add(d.robot());
+            }
             if (d.key().equals("cmd") && comma > 0 && Long.parseLong(d.value().substring(0, comma)) == d.turn()) {
                 freshCommands.add(key(d.round(), d.turn(), d.robot()));
             } else if (d.key().equals("ev") && comma > 0) {
@@ -251,7 +259,8 @@ public final class ProbeRecordings {
             }
             robotTurns++;
             boolean roundOpen = alive.get(key(t.round(), t.turn(), 0)) > 1;
-            if (roundOpen && !freshCommands.contains(key(t.round(), t.turn(), t.robot()))) {
+            if (roundOpen && probes.contains(t.robot())
+                    && !freshCommands.contains(key(t.round(), t.turn(), t.robot()))) {
                 stale++;
             }
             switch (t.state()) {
