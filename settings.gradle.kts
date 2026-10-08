@@ -11,4 +11,4 @@ dependencyResolutionManagement {
     }
 }
 
-include("bot", "harness")
+include("bot", "harness", "probe")

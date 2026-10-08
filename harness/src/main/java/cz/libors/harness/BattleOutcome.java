@@ -7,12 +7,15 @@ import java.util.Optional;
 /**
  * Result of one battle.
  *
+ * @param seed         seed the battle ran with; rerunning the setup with it replays the battle, as far as the
+ *                     robots themselves are deterministic
  * @param results      contestants sorted by rank
  * @param skippedTurns skipped turns per robot name, as reported by the engine
  * @param problems     engine errors and suspicious robot output (exceptions)
  */
 public record BattleOutcome(
         BattleSetup setup,
+        long seed,
         List<ContestantResult> results,
         Map<String, Integer> skippedTurns,
         List<String> problems,

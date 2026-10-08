@@ -19,14 +19,16 @@ Principles:
 - **Every change is measured.** A headless harness with statistically sound comparisons decides what stays.
 
 Status: walking skeleton. Radar lock or sweep, circular targeting, orbiting movement and scans shared between
-teammates, plus a headless harness that checks the bot against the Robocode sample bots.
+teammates, plus a headless harness that checks the bot against the Robocode sample bots. The engine model for robot
+motion and bullets matches turn-by-turn recordings of the real engine bit for bit.
 
 ## Layout
 
 | Path | Content |
 |---|---|
 | `bot/` | Robot code. It is compiled for Java 17 (`--release 17`), the oldest Java the rumble clients run. |
-| `harness/` | Headless battle runner on top of the Robocode control API, plus the skeleton check |
+| `harness/` | Headless battle runner on top of the Robocode control API, the skeleton check and the turn-by-turn recorder |
+| `probe/` | Probe robots that drive the engine with random commands for recordings; never entered in a rumble |
 | `docs/` | Build and run, harness, engine model and gotchas |
 | `.robocode/` | Official Robocode installation used by the harness (downloaded, git-ignored) |
 
@@ -39,6 +41,7 @@ if no JDK 17 is installed, Gradle downloads one. To run the battles on another J
 ```sh
 ./gradlew build          # compile, unit tests, robot and team jars in bot/build/robots/
 ./gradlew skeletonCheck  # headless battles against the sample bots
+./gradlew recordProbes   # turn-by-turn recordings of probe battles, the ground truth for the physics model
 ```
 
 `skeletonCheck` does the following:
