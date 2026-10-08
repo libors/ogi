@@ -32,14 +32,16 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.function.Predicate;
+import java.util.function.ToDoubleFunction;
 
 /**
  * Paired comparison of two bot versions, the baseline and the candidate, against a fixed opponent set.
  *
  * <p>Both versions fight each opponent on the same seeds and, optionally, from the same fixed starts. In sequential
  * mode a stratified GSPRT ({@link Sprt}) picks the next opponent and stops once the difference is decided; in fixed
- * mode every opponent gets the same number of pairs, for measuring noise. Every battle is appended to a log as it
- * finishes, so running the same comparison again resumes it.
+ * mode every opponent gets the same number of pairs, for measuring noise. The test runs on one measure of each
+ * battle: the subject's score share, its hit rate, or how rarely the opponent hits it. Every battle is appended to a
+ * log as it finishes, so running the same comparison again resumes it, with any measure.
  *
  * <p>Usage: {@code Compare <robocodeHome> key=value...}; see docs/harness.md for the keys.
  */
@@ -51,7 +53,8 @@ public final class Compare {
             "pairsPerOpponent", "0",
             "starts", "random",
             "seed", "1",
-            "rounds", "0");
+            "rounds", "0",
+            "metric", "score");
 
     private static final List<String> REQUIRED = List.of("robot", "team", "baseline", "candidate", "opponents", "out");
 
@@ -59,13 +62,40 @@ public final class Compare {
     private record Subject(Side side, String name, String robotPrefix, String jarSha) {
     }
 
-    public record OpponentRow(String opponent, boolean strong, int pairs, double baseline, double candidate,
-                               double difference, double sdBaseline, double sdCandidate, double sdDifference,
-                               double correlation, double pwinBaseline, double pwinCandidate) {
+    /** The number a battle contributes to the test, in points (0–100). */
+    enum Measure {
+        /** The subject's score share. */
+        SCORE,
+        /** The subject's hits per bullet fired, in percent; 0 without shots. */
+        HITS,
+        /** 100 minus the opponent's hit rate on the subject; 100 if the opponent never fires. */
+        DODGE;
+
+        double of(Battle b) {
+            return switch (this) {
+                case SCORE -> b.share();
+                case HITS -> b.fired() == 0 ? 0 : 100.0 * b.hits() / b.fired();
+                case DODGE -> 100 - (b.opponentFired() == 0 ? 0 : 100.0 * b.opponentHits() / b.opponentFired());
+            };
+        }
     }
 
+    /**
+     * One opponent: the test measure's statistics, then the score share, PWIN and hit rates of both versions. Hit
+     * rates pool all bullets of the pairs; {@code hitBy} is the opponent's hit rate on the version.
+     */
+    public record OpponentRow(String opponent, boolean strong, int pairs, double baseline, double candidate,
+                               double difference, double sdBaseline, double sdCandidate, double sdDifference,
+                               double correlation, double shareBaseline, double shareCandidate, double pwinBaseline,
+                               double pwinCandidate, double hitRateBaseline, double hitRateCandidate,
+                               double hitByBaseline, double hitByCandidate) {
+    }
+
+    /** The test measure over a set of opponents, and the rows' other columns, each opponent weighing the same. */
     public record Scoreboard(String name, int opponents, double baseline, double candidate, double difference,
-                              double halfWidth, double pwinBaseline, double pwinCandidate) {
+                              double halfWidth, double apsBaseline, double apsCandidate, double pwinBaseline,
+                              double pwinCandidate, double hitRateBaseline, double hitRateCandidate,
+                              double hitByBaseline, double hitByCandidate) {
     }
 
     /**
@@ -83,8 +113,8 @@ public final class Compare {
                           int problems, int startMismatches, long battleSeconds) {
     }
 
-    public record Summary(Map<String, String> config, Map<String, String> environment, String bounds,
-                           String decision, double llr, double llrLower, double llrUpper, int pairs,
+    public record Summary(Map<String, String> config, Map<String, String> environment, String metric,
+                           String bounds, String decision, double llr, double llrLower, double llrUpper, int pairs,
                            List<Scoreboard> scoreboards, List<OpponentRow> opponents, Noise noise, Health health) {
     }
 
@@ -95,6 +125,7 @@ public final class Compare {
     private final boolean fixedStarts;
     private final long runSeed;
     private final Bounds bounds;
+    private final Measure measure;
     private final BattleRunner runner;
     private final Map<String, Integer> robotCounts = new HashMap<>();
     private Subject baseline;
@@ -115,6 +146,12 @@ public final class Compare {
         };
         this.runSeed = Long.parseLong(options.get("seed"));
         this.bounds = Bounds.parse(options.get("bounds"));
+        this.measure = switch (options.get("metric")) {
+            case "score" -> Measure.SCORE;
+            case "hits" -> Measure.HITS;
+            case "dodge" -> Measure.DODGE;
+            default -> throw new IllegalArgumentException("metric: score, hits or dodge");
+        };
         this.runner = runner;
     }
 
@@ -142,7 +179,8 @@ public final class Compare {
         System.err.println(problem);
         System.err.println("Usage: Compare <robocodeHome> robot=<class> team=<class> baseline=<version> "
                 + "candidate=<version> opponents=<file> out=<dir> [bounds=gainer|screening|nonregression|δ0,δ1] "
-                + "[maxPairs=n] [pairsPerOpponent=n] [starts=random|fixed] [seed=n] [rounds=n]");
+                + "[maxPairs=n] [pairsPerOpponent=n] [starts=random|fixed] [seed=n] [rounds=n] "
+                + "[metric=score|hits|dodge]");
         System.exit(2);
     }
 
@@ -188,12 +226,12 @@ public final class Compare {
             }
             log.completePairs().forEach((opponent, pairs) -> {
                 Stratum s = strata.stream().filter(x -> x.opponent().equals(opponent)).findFirst().orElseThrow();
-                pairs.forEach(p -> s.add(p[0].share(), p[1].share()));
+                pairs.forEach(p -> s.add(measure.of(p[0]), measure.of(p[1])));
             });
             int resumed = total(strata);
-            System.out.printf(Locale.ROOT, "%s vs %s on %s (%s, %d rounds, %s starts, seed %d), bounds %s%n",
+            System.out.printf(Locale.ROOT, "%s vs %s on %s (%s, %d rounds, %s starts, seed %d), %s, bounds %s%n",
                     candidate.name(), baseline.name(), set.name(), format.label, rounds, config.get("starts"),
-                    runSeed, bounds);
+                    runSeed, options.get("metric"), bounds);
             System.out.printf(Locale.ROOT, "log %s%s%n", log.file(),
                     resumed > 0 ? ", resuming after " + resumed + " pairs" : "");
 
@@ -208,7 +246,7 @@ public final class Compare {
                 Stratum s = strata.get(h);
                 int pair = nextPair.merge(s.opponent(), 1, Integer::sum) - 1;
                 Battle[] battles = runPair(s.opponent(), pair);
-                s.add(battles[0].share(), battles[1].share());
+                s.add(measure.of(battles[0]), measure.of(battles[1]));
                 printProgress(strata, s, pair, battles);
             }
         }
@@ -265,10 +303,15 @@ public final class Compare {
         int total = mine.score() + theirs.score();
         double share = total == 0 ? 50 : 100.0 * mine.score() / total;
         int skipped = outcome.skippedTurns(subject.robotPrefix());
+        BattleOutcome.Shots shots = outcome.shots(subject.name());
+        BattleOutcome.Shots theirShots = outcome.shots().entrySet().stream()
+                .filter(e -> !e.getKey().startsWith(subject.name())).map(Map.Entry::getValue).findFirst()
+                .orElse(BattleOutcome.Shots.NONE);
         int allSkipped = outcome.skippedTurns().values().stream().mapToInt(Integer::intValue).sum();
         return new Battle(opponent, pair, subject.side(), outcome.seed(), share, mine.score(), theirs.score(),
                 mine.survival(), mine.lastSurvivorBonus(), mine.bulletDamage(), mine.bulletDamageBonus(),
-                mine.ramDamage(), mine.ramDamageBonus(), mine.firsts(), theirs.firsts(), skipped,
+                mine.ramDamage(), mine.ramDamageBonus(), mine.firsts(), theirs.firsts(), shots.fired(), shots.hits(),
+                theirShots.fired(), theirShots.hits(), skipped,
                 allSkipped - skipped, outcome.problems().size(), outcome.startMismatches(), outcome.elapsedMillis());
     }
 
@@ -305,21 +348,21 @@ public final class Compare {
         Estimate d = Sprt.estimate(strata, Metric.DIFFERENCE, x -> true);
         System.out.printf(Locale.ROOT,
                 "%5d  %-28s #%-3d base %6.2f  cand %6.2f  Δ %+6.2f  |  est. Δ %+6.2f ± %5.2f  LLR %+6.2f%n",
-                total(strata), s.opponent(), pair, battles[0].share(), battles[1].share(),
-                battles[1].share() - battles[0].share(), d.mean(), d.halfWidth(), Sprt.llr(d, bounds));
+                total(strata), s.opponent(), pair, measure.of(battles[0]),
+                measure.of(battles[1]), measure.of(battles[1]) - measure.of(battles[0]), d.mean(), d.halfWidth(),
+                Sprt.llr(d, bounds));
     }
 
     private Summary summarize(Path home, Map<String, String> config, List<Stratum> strata, long seconds)
             throws IOException {
-        List<OpponentRow> rows = strata.stream().map(s -> new OpponentRow(s.opponent(), s.strong(), s.size(),
-                s.mean(Metric.BASELINE), s.mean(Metric.CANDIDATE), s.mean(Metric.DIFFERENCE),
-                Math.sqrt(s.variance(Metric.BASELINE)), Math.sqrt(s.variance(Metric.CANDIDATE)),
-                Math.sqrt(s.variance(Metric.DIFFERENCE)), s.correlation(), 100 * s.wins(Metric.BASELINE),
-                100 * s.wins(Metric.CANDIDATE))).toList();
+        Map<String, List<Battle[]>> pairsByOpponent = log.completePairs();
+        List<OpponentRow> rows = strata.stream()
+                .map(s -> row(s, pairsByOpponent.getOrDefault(s.opponent(), List.of())))
+                .toList();
         List<Scoreboard> boards = new ArrayList<>();
-        boards.add(scoreboard("all", strata, x -> true));
+        boards.add(scoreboard("all", strata, rows, x -> true));
         if (strata.stream().anyMatch(Stratum::strong)) {
-            boards.add(scoreboard("strong", strata, Stratum::strong));
+            boards.add(scoreboard("strong", strata, rows, Stratum::strong));
         }
 
         Estimate d = Sprt.estimate(strata, Metric.DIFFERENCE, x -> true);
@@ -352,19 +395,63 @@ public final class Compare {
         environment.put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"));
         environment.put("cpuConstant", cpuConstant(home));
         environment.put("lastRunSeconds", Long.toString(seconds));
-        return new Summary(config, environment, bounds.toString(), describe(decision), Sprt.llr(d, bounds),
+        return new Summary(config, environment, options.get("metric"), bounds.toString(), describe(decision),
+                Sprt.llr(d, bounds),
                 bounds.lower(), bounds.upper(), pairs, boards, rows, noise, health);
     }
 
-    private static Scoreboard scoreboard(String name, List<Stratum> strata, Predicate<Stratum> include) {
+    private static OpponentRow row(Stratum s, List<Battle[]> pairs) {
+        double[] share = new double[2];
+        double[] wins = new double[2];
+        int[] fired = new int[2];
+        int[] hits = new int[2];
+        int[] firedAt = new int[2];
+        int[] hitBy = new int[2];
+        for (Battle[] pair : pairs) {
+            for (int side = 0; side < 2; side++) {
+                Battle b = pair[side];
+                share[side] += b.share() / pairs.size();
+                wins[side] += (b.share() > 50 ? 1 : b.share() == 50 ? 0.5 : 0) / pairs.size();
+                fired[side] += b.fired();
+                hits[side] += b.hits();
+                firedAt[side] += b.opponentFired();
+                hitBy[side] += b.opponentHits();
+            }
+        }
+        boolean none = pairs.isEmpty();
+        return new OpponentRow(s.opponent(), s.strong(), s.size(), s.mean(Metric.BASELINE),
+                s.mean(Metric.CANDIDATE), s.mean(Metric.DIFFERENCE), Math.sqrt(s.variance(Metric.BASELINE)),
+                Math.sqrt(s.variance(Metric.CANDIDATE)), Math.sqrt(s.variance(Metric.DIFFERENCE)), s.correlation(),
+                none ? Double.NaN : share[0], none ? Double.NaN : share[1], none ? Double.NaN : 100 * wins[0],
+                none ? Double.NaN : 100 * wins[1], rate(hits[0], fired[0]), rate(hits[1], fired[1]),
+                rate(hitBy[0], firedAt[0]), rate(hitBy[1], firedAt[1]));
+    }
+
+    private static double rate(int hits, int fired) {
+        return fired == 0 ? Double.NaN : 100.0 * hits / fired;
+    }
+
+    private static Scoreboard scoreboard(String name, List<Stratum> strata, List<OpponentRow> rows,
+                                         Predicate<Stratum> include) {
         Estimate base = Sprt.estimate(strata, Metric.BASELINE, include);
         Estimate cand = Sprt.estimate(strata, Metric.CANDIDATE, include);
         Estimate diff = Sprt.estimate(strata, Metric.DIFFERENCE, include);
-        List<Stratum> selected = strata.stream().filter(include).toList();
-        double pwinBase = selected.stream().mapToDouble(s -> s.wins(Metric.BASELINE)).average().orElse(Double.NaN);
-        double pwinCand = selected.stream().mapToDouble(s -> s.wins(Metric.CANDIDATE)).average().orElse(Double.NaN);
+        List<OpponentRow> selected = new ArrayList<>();
+        for (int i = 0; i < strata.size(); i++) {
+            if (include.test(strata.get(i))) {
+                selected.add(rows.get(i));
+            }
+        }
         return new Scoreboard(name, selected.size(), base.mean(), cand.mean(), diff.mean(), diff.halfWidth(),
-                100 * pwinBase, 100 * pwinCand);
+                mean(selected, OpponentRow::shareBaseline), mean(selected, OpponentRow::shareCandidate),
+                mean(selected, OpponentRow::pwinBaseline), mean(selected, OpponentRow::pwinCandidate),
+                mean(selected, OpponentRow::hitRateBaseline), mean(selected, OpponentRow::hitRateCandidate),
+                mean(selected, OpponentRow::hitByBaseline), mean(selected, OpponentRow::hitByCandidate));
+    }
+
+    /** Mean over the rows that have the value; NaN if none has. */
+    private static double mean(List<OpponentRow> rows, ToDoubleFunction<OpponentRow> value) {
+        return rows.stream().mapToDouble(value).filter(v -> !Double.isNaN(v)).average().orElse(Double.NaN);
     }
 
     private String describe(Decision decision) {
@@ -379,18 +466,24 @@ public final class Compare {
 
     private static void printReport(Summary s) {
         System.out.println();
-        System.out.printf(Locale.ROOT, "%-30s %5s %7s %7s %7s %7s %7s %6s%n", "opponent", "pairs", "base", "cand",
-                "Δ", "sd(Δ)", "sd(base)", "ρ");
+        System.out.printf(Locale.ROOT, "%-30s %5s %7s %7s %7s %7s %7s %6s | %13s | %13s%n",
+                "opponent (" + s.metric() + ")", "pairs", "base", "cand", "Δ", "sd(Δ)", "sd(base)", "ρ",
+                "hit % b/c", "hit by % b/c");
         for (OpponentRow r : s.opponents()) {
-            System.out.printf(Locale.ROOT, "%-30s %5d %7.2f %7.2f %+7.2f %7.2f %7.2f %6.2f%n",
+            System.out.printf(Locale.ROOT,
+                    "%-30s %5d %7.2f %7.2f %+7.2f %7.2f %7.2f %6.2f | %6.2f %6.2f | %6.2f %6.2f%n",
                     r.opponent() + (r.strong() ? " *" : ""), r.pairs(), r.baseline(), r.candidate(), r.difference(),
-                    r.sdDifference(), r.sdBaseline(), r.correlation());
+                    r.sdDifference(), r.sdBaseline(), r.correlation(), r.hitRateBaseline(), r.hitRateCandidate(),
+                    r.hitByBaseline(), r.hitByCandidate());
         }
         System.out.println();
         for (Scoreboard b : s.scoreboards()) {
-            System.out.printf(Locale.ROOT, "%-8s (%2d opponents)  APS base %6.2f  cand %6.2f  Δ %+6.2f ± %5.2f  "
-                            + "PWIN base %5.1f  cand %5.1f%n", b.name(), b.opponents(), b.baseline(), b.candidate(),
-                    b.difference(), b.halfWidth(), b.pwinBaseline(), b.pwinCandidate());
+            System.out.printf(Locale.ROOT, "%-8s (%2d opponents)  %s base %6.2f  cand %6.2f  Δ %+6.2f ± %5.2f%n",
+                    b.name(), b.opponents(), s.metric(), b.baseline(), b.candidate(), b.difference(), b.halfWidth());
+            System.out.printf(Locale.ROOT, "%26s APS %6.2f / %6.2f   PWIN %5.1f / %5.1f   hit %% %5.2f / %5.2f   "
+                            + "hit by %% %5.2f / %5.2f%n", "", b.apsBaseline(), b.apsCandidate(), b.pwinBaseline(),
+                    b.pwinCandidate(), b.hitRateBaseline(), b.hitRateCandidate(), b.hitByBaseline(),
+                    b.hitByCandidate());
         }
         Noise n = s.noise();
         System.out.printf(Locale.ROOT, "noise    σ per pair %.2f, within-opponent sd base %.2f, sd Δ %.2f, ρ %.2f; "

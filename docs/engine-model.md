@@ -17,6 +17,9 @@ that it can match bit for bit.
 - `BulletMotion` and `RobotBox`: bullets: spawn, moves, wall and robot hits, bullet crossings.
 - `RadarScan`: which robots a scan sees, and the values it reports.
 
+Outside that package, `cz.libors.ogi.wave.HitRange` repeats the engine's bullet test for a whole wave: the headings
+at which its bullet hits a robot, turn by turn (see [bot.md](bot.md)).
+
 `./gradlew engineTest` replays every probe recording through it (numbers from 2026-10-08):
 - `RobotMotionReplayTest`: from the state and commands of turn t, the robot's state of turn t + 1 (about 160,000
   robot turns);
@@ -24,7 +27,9 @@ that it can match bit for bit.
 - `EnergyReplayTest`: the whole single-robot turn including energy, bit for bit under some processing order (about
   160,000 turns, 5,000 of them with the inactivity penalty);
 - `EventReplayTest`: every event a probe received against the recording, and every event it should have received
-  (about 92,000, 82,000 of them scans).
+  (about 92,000, 82,000 of them scans);
+- `HitRangeReplayTest`: in every turn of every bullet's flight, its heading lies in the hit range of the robot it hit
+  and outside the range of every robot it flew past (about 1,100 hits and 1.2 million misses).
 
 Not modelled yet: which robot pairs collide and which bullet pairs meet (both depend on the engine's random
 processing order), team rules (leader bonus, droids, the leader's death), sentry robots.

@@ -1,0 +1,22 @@
+# The sample bots plus the random-moving probes, at the 1v1 rumble's settings: the trusted opponents for gun and
+# movement work on a machine that runs no foreign code. The probes' version follows botVersion.
+format 1v1
+
+[strong]
+sample.RamFire
+sample.Walls
+sample.Corners
+cz.libors.probe.RandomProbe 0.1
+cz.libors.probe.WatchingProbe 0.1
+
+[other]
+sample.Crazy
+sample.Fire
+sample.MyFirstJuniorRobot
+sample.MyFirstRobot
+sample.SittingDuck
+sample.SpinBot
+sample.Target
+sample.Tracker
+sample.TrackFire
+sample.VelociRobot

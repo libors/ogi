@@ -26,6 +26,7 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   - Before writing anything that depends on engine physics, timing or events (movement prediction, waves, bullets,
     radar, team messages), read `docs/engine-model.md`.
   - Before changing enemy fire detection, read `docs/fire-detection.md`.
+  - Before changing the gun, the movement, waves or the debug overlay, read `docs/bot.md`.
 
 ## Rules
 

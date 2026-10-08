@@ -12,17 +12,21 @@ import robocode.control.events.BattleErrorEvent;
 import robocode.control.events.IBattleListener;
 import robocode.control.events.RoundStartedEvent;
 import robocode.control.events.TurnEndedEvent;
+import robocode.control.snapshot.BulletState;
+import robocode.control.snapshot.IBulletSnapshot;
 import robocode.control.snapshot.IRobotSnapshot;
 
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 
 /** Runs battles headless on a real Robocode installation through the control API. */
 public final class BattleRunner implements AutoCloseable {
@@ -74,7 +78,7 @@ public final class BattleRunner implements AutoCloseable {
         }
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         return new BattleOutcome(setup, seed, List.copyOf(collector.results), Map.copyOf(collector.skippedTurns),
-                List.copyOf(collector.problems), collector.startMismatches, elapsedMillis);
+                List.copyOf(collector.problems), collector.startMismatches, collector.shots(), elapsedMillis);
     }
 
     /** Number of robots in a battle of these contestants, with team members counted one by one. */
@@ -149,6 +153,10 @@ public final class BattleRunner implements AutoCloseable {
         private final List<String> problems = new ArrayList<>();
         private List<BattleSetup.Start> starts;
         private int startMismatches;
+        /** Per contestant name: bullets fired and hits on other contestants. */
+        private final Map<String, int[]> shots = new LinkedHashMap<>();
+        private final Set<Long> bulletsSeen = new HashSet<>();
+        private final Set<Long> hitsSeen = new HashSet<>();
 
         void reset(List<BattleSetup.Start> expectedStarts) {
             results.clear();
@@ -156,6 +164,15 @@ public final class BattleRunner implements AutoCloseable {
             problems.clear();
             starts = expectedStarts;
             startMismatches = 0;
+            shots.clear();
+            bulletsSeen.clear();
+            hitsSeen.clear();
+        }
+
+        Map<String, BattleOutcome.Shots> shots() {
+            Map<String, BattleOutcome.Shots> copy = new LinkedHashMap<>();
+            shots.forEach((name, s) -> copy.put(name, new BattleOutcome.Shots(s[0], s[1])));
+            return copy;
         }
 
         @Override
@@ -179,6 +196,7 @@ public final class BattleRunner implements AutoCloseable {
         public void onTurnEnded(TurnEndedEvent event) {
             int round = event.getTurnSnapshot().getRound();
             int turn = event.getTurnSnapshot().getTurn();
+            countShots(round, event.getTurnSnapshot().getRobots(), event.getTurnSnapshot().getBullets());
             for (IRobotSnapshot robot : event.getTurnSnapshot().getRobots()) {
                 String output = robot.getOutputStreamSnapshot();
                 if (output == null || output.isEmpty()) {
@@ -190,6 +208,30 @@ public final class BattleRunner implements AutoCloseable {
                     } else if (line.contains("Exception") || line.contains("Error")) {
                         addProblem(robot.getName() + " [round " + round + ", turn " + turn + "]: " + line.trim());
                     }
+                }
+            }
+        }
+
+        /**
+         * Counts each bullet once when it first appears and once when it hits a robot of another contestant; a
+         * contestant's name is its team's, or the robot's own outside a team.
+         */
+        private void countShots(int round, IRobotSnapshot[] robots, IBulletSnapshot[] bullets) {
+            for (IBulletSnapshot b : bullets) {
+                int owner = b.getOwnerIndex();
+                if (owner < 0 || owner >= robots.length) {
+                    continue;
+                }
+                long key = ((long) round << 48) | ((long) owner << 32) | (b.getBulletId() & 0xffffffffL);
+                int[] mine = shots.computeIfAbsent(robots[owner].getTeamName(), k -> new int[2]);
+                if (bulletsSeen.add(key)) {
+                    mine[0]++;
+                }
+                int victim = b.getVictimIndex();
+                if (b.getState() == BulletState.HIT_VICTIM && victim >= 0 && victim < robots.length
+                        && robots[victim].getContestantIndex() != robots[owner].getContestantIndex()
+                        && hitsSeen.add(key)) {
+                    mine[1]++;
                 }
             }
         }

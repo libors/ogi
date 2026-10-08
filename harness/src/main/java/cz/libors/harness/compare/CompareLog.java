@@ -23,14 +23,14 @@ import java.util.TreeMap;
  * #ogi-compare  1
  * config  key=value ...
  * battle  opponent  pair  side  seed  share  score  opponentScore  survival  lastSurvivorBonus  bulletDamage
- *         bulletDamageBonus  ramDamage  ramDamageBonus  firsts  opponentFirsts  skippedTurns  opponentSkippedTurns
- *         problems  startMismatches  elapsedMillis
+ *         bulletDamageBonus  ramDamage  ramDamageBonus  firsts  opponentFirsts  fired  hits  opponentFired
+ *         opponentHits  skippedTurns  opponentSkippedTurns  problems  startMismatches  elapsedMillis
  * </pre>
  */
 final class CompareLog implements Closeable {
 
     private static final String MAGIC = "#ogi-compare";
-    private static final String VERSION = "1";
+    private static final String VERSION = "2";
 
     /** Which version fought the battle. */
     enum Side {
@@ -41,22 +41,34 @@ final class CompareLog implements Closeable {
      * One battle of a pair.
      *
      * @param share           the subject's score share in points (0–100)
+     * @param fired           bullets the subject fired; {@code hits} of them hit the opponent
      * @param skippedTurns    turns the subject's robots skipped
      * @param problems        exceptions in robot output and engine errors
      * @param startMismatches robot rounds that did not begin at the fixed start
      */
     record Battle(String opponent, int pair, Side side, long seed, double share, int score, int opponentScore,
                   int survival, int lastSurvivorBonus, int bulletDamage, int bulletDamageBonus, int ramDamage,
-                  int ramDamageBonus, int firsts, int opponentFirsts, int skippedTurns, int opponentSkippedTurns,
-                  int problems, int startMismatches, long elapsedMillis) {
+                  int ramDamageBonus, int firsts, int opponentFirsts, int fired, int hits, int opponentFired,
+                  int opponentHits, int skippedTurns, int opponentSkippedTurns, int problems, int startMismatches,
+                  long elapsedMillis) {
+
+        /** The subject's hits per bullet fired, in percent; NaN without shots. */
+        double hitRate() {
+            return fired == 0 ? Double.NaN : 100.0 * hits / fired;
+        }
+
+        /** The opponent's hits per bullet fired, in percent; NaN without shots. */
+        double opponentHitRate() {
+            return opponentFired == 0 ? Double.NaN : 100.0 * opponentHits / opponentFired;
+        }
 
         String line() {
             StringJoiner j = new StringJoiner("\t");
             j.add("battle").add(opponent).add(Integer.toString(pair)).add(side.name()).add(Long.toString(seed))
                     .add(Double.toString(share));
             for (long v : new long[] {score, opponentScore, survival, lastSurvivorBonus, bulletDamage,
-                    bulletDamageBonus, ramDamage, ramDamageBonus, firsts, opponentFirsts, skippedTurns,
-                    opponentSkippedTurns, problems, startMismatches, elapsedMillis}) {
+                    bulletDamageBonus, ramDamage, ramDamageBonus, firsts, opponentFirsts, fired, hits, opponentFired,
+                    opponentHits, skippedTurns, opponentSkippedTurns, problems, startMismatches, elapsedMillis}) {
                 j.add(Long.toString(v));
             }
             return j.toString();
@@ -64,16 +76,16 @@ final class CompareLog implements Closeable {
 
         static Battle parse(String line) {
             String[] f = line.split("\t");
-            if (f.length != 21 || !f[0].equals("battle")) {
+            if (f.length != 25 || !f[0].equals("battle")) {
                 throw new IllegalArgumentException("not a battle line: " + line);
             }
-            int[] v = new int[14];
+            int[] v = new int[18];
             for (int i = 0; i < v.length; i++) {
                 v[i] = Integer.parseInt(f[6 + i]);
             }
             return new Battle(f[1], Integer.parseInt(f[2]), Side.valueOf(f[3]), Long.parseLong(f[4]),
                     Double.parseDouble(f[5]), v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10],
-                    v[11], v[12], v[13], Long.parseLong(f[20]));
+                    v[11], v[12], v[13], v[14], v[15], v[16], v[17], Long.parseLong(f[24]));
         }
     }
 
@@ -95,7 +107,8 @@ final class CompareLog implements Closeable {
             String text = Files.readString(file, StandardCharsets.UTF_8);
             List<String> lines = text.lines().toList();
             if (lines.size() < 2 || !lines.get(0).equals(MAGIC + "\t" + VERSION)) {
-                throw new IOException(file + " is not a comparison log");
+                throw new IOException(file + " is not a comparison log of version " + VERSION
+                        + "; use another output directory or delete it");
             }
             if (!lines.get(1).equals(configLine)) {
                 throw new IOException(file + " was written with another configuration:\n  " + lines.get(1)

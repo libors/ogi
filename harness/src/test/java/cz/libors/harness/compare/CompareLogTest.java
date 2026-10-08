@@ -20,7 +20,8 @@ class CompareLogTest {
     private static final Map<String, String> CONFIG = Map.of("baseline", "cz.libors.Ogi abc1234");
 
     private static Battle battle(String opponent, int pair, Side side, double share) {
-        return new Battle(opponent, pair, side, -42L * pair, share, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+        return new Battle(opponent, pair, side, -42L * pair, share, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                16, 17, 18, 19);
     }
 
     @Test

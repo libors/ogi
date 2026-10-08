@@ -3,10 +3,20 @@ package cz.libors;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.CircularAim;
+import cz.libors.ogi.gun.GuessFactorGun;
 import cz.libors.ogi.move.OrbitMovement;
+import cz.libors.ogi.move.WaveSurfer;
+import cz.libors.ogi.physics.EngineRobot;
+import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.team.EnemySighting;
+import cz.libors.ogi.trace.Overlay;
+import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.world.EnemyState;
 import cz.libors.ogi.world.World;
+import robocode.BulletHitBulletEvent;
+import robocode.BulletHitEvent;
+import robocode.HitByBulletEvent;
+import robocode.HitRobotEvent;
 import robocode.MessageEvent;
 import robocode.RobotDeathEvent;
 import robocode.Rules;
@@ -14,6 +24,7 @@ import robocode.ScannedRobotEvent;
 import robocode.TeamRobot;
 
 import java.awt.Color;
+import java.awt.Graphics2D;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
@@ -22,7 +33,8 @@ import java.util.Random;
 /**
  * Ogi, a team-first Robocode bot. One robot class serves 1v1, melee and team battles.
  *
- * <p>This is the walking skeleton: radar lock or sweep, circular targeting, orbiting movement and shared scans.
+ * <p>Radar lock or sweep, guess-factor and circular targeting chosen by virtual hits, wave surfing (orbiting the
+ * target while no enemy wave is in the air) and shared scans.
  */
 public class Ogi extends TeamRobot {
 
@@ -32,16 +44,25 @@ public class Ogi extends TeamRobot {
     private static final double FRIENDLY_FIRE_CLEARANCE = 30;
     private static final double DEFAULT_POWER = 1.9;
     private static final double CLOSE_RANGE = 200;
+    /** The gun searches its data only this many turns before it can fire. */
+    private static final int AIM_LEAD_TURNS = 4;
 
     private World world;
     private Field field;
     private OrbitMovement movement;
+    private GuessFactorGun gun;
+    private WaveSurfer surfer;
+    private final Trace trace = new Trace();
+    /** Whether last turn's plan for this turn is a shot we can afford. */
+    private boolean plannedShot;
 
     @Override
     public void run() {
         world = new World();
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
         movement = new OrbitMovement(field, new Random(roundSeed()));
+        gun = new GuessFactorGun(field);
+        surfer = new WaveSurfer(field, getGunCoolingRate());
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
@@ -63,12 +84,19 @@ public class Ogi extends TeamRobot {
 
     private void act() {
         long now = getTime();
+        surfer.ourState(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getVelocity());
+        surfer.update(now);
         Optional<EnemyState> target = world.closestEnemy(getX(), getY(), now, MAX_TARGET_AGE);
         steerRadar(target.orElse(null), now);
-        target.ifPresent(t -> {
-            fireAndAim(t, now);
-            move(t, now);
-        });
+        if (target.isEmpty()) {
+            gun.update(now, getX(), getY(), null);
+            return;
+        }
+        EnemyState t = target.get();
+        double[] next = move(t, now);
+        boolean fired = fire(t, now);
+        gun.update(now, getX(), getY(), fired ? t.name() : null);
+        aim(t, now, next[0], next[1]);
     }
 
     private void steerRadar(EnemyState target, long now) {
@@ -82,17 +110,36 @@ public class Ogi extends TeamRobot {
         }
     }
 
-    private void fireAndAim(EnemyState target, long now) {
-        double distance = target.distanceTo(getX(), getY());
-        double power = bulletPower(target, distance);
-        // The gun fires before it turns, so this fires along the aim set in the previous tick.
-        if (power > 0 && getGunHeat() == 0 && Math.abs(getGunTurnRemainingRadians()) < AIM_TOLERANCE
-                && !teammateInLineOfFire(distance, now)) {
-            setFire(power);
+    /** Fires last turn's plan if the gun is cool and reached its aim; returns whether it fired. */
+    private boolean fire(EnemyState target, long now) {
+        Optional<GuessFactorGun.Plan> plan = gun.planFor(target.name(), now);
+        if (plan.isEmpty() || !plannedShot || getGunHeat() > 0 || getEnergy() <= plan.get().power()) {
+            return false;
         }
-        double bulletSpeed = Rules.getBulletSpeed(power > 0 ? power : DEFAULT_POWER);
-        double aim = CircularAim.aim(getX(), getY(), target, bulletSpeed, now + 1, field);
-        setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
+        double gunHeading = Angles.fromRobocode(getGunHeadingRadians());
+        if (Math.abs(Angles.normalizeRelative(plan.get().aim() - gunHeading)) >= AIM_TOLERANCE
+                || teammateInLineOfFire(target.distanceTo(getX(), getY()), now)) {
+            return false;
+        }
+        setFire(plan.get().power());
+        return true;
+    }
+
+    /**
+     * Plans the shot of the next turn from where we will be then; the gun fires along the heading it reaches by the
+     * end of the next turn (engine-model G-01).
+     */
+    private void aim(EnemyState target, long now, double nextX, double nextY) {
+        double distance = target.distanceTo(nextX, nextY);
+        double power = bulletPower(target, distance);
+        plannedShot = power > 0;
+        double planned = power > 0 ? power : DEFAULT_POWER;
+        double circular = CircularAim.aim(nextX, nextY, target, Rules.getBulletSpeed(planned), now + 1, field);
+        boolean soon = getGunHeat() <= AIM_LEAD_TURNS * getGunCoolingRate();
+        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular);
+        if (!Double.isNaN(aim)) {
+            setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
+        }
     }
 
     private double bulletPower(EnemyState target, double distance) {
@@ -115,7 +162,17 @@ public class Ogi extends TeamRobot {
         return false;
     }
 
-    private void move(EnemyState target, long now) {
+    /**
+     * Sets this turn's movement and returns where it takes us by the end of the next turn: surfing the nearest enemy
+     * wave, or orbiting the target while none is in the air.
+     */
+    private double[] move(EnemyState target, long now) {
+        Optional<double[]> surf = surfer.command(ourEngineState(), now);
+        if (surf.isPresent()) {
+            setAhead(surf.get()[0]);
+            setTurnRightRadians(surf.get()[1]);
+            return predictNext(surf.get()[0], surf.get()[1]);
+        }
         double heading = movement.desiredHeading(getX(), getY(), target.x(), target.y(), now,
                 world.recentTeammates(now, MAX_TEAMMATE_AGE));
         double turn = Angles.normalizeRelative(heading - Angles.fromRobocode(getHeadingRadians()));
@@ -127,6 +184,33 @@ public class Ogi extends TeamRobot {
         }
         setTurnRightRadians(-turn);
         setAhead(distance);
+        return predictNext(distance, -turn);
+    }
+
+    /**
+     * Our position at the end of the next turn under the commands just set, by the engine's own rules; exact unless we
+     * collide with a robot.
+     */
+    private double[] predictNext(double distance, double rightTurn) {
+        EngineRobot me = ourEngineState();
+        me.distanceRemaining = distance;
+        me.bodyTurnRemaining = rightTurn;
+        RobotMotion.move(me, (int) field.width(), (int) field.height(), getGunCoolingRate());
+        return new double[] {me.x, me.y};
+    }
+
+    /** Our state at the end of this turn in the engine's convention, without commands. */
+    private EngineRobot ourEngineState() {
+        EngineRobot me = new EngineRobot();
+        me.x = getX();
+        me.y = getY();
+        me.velocity = getVelocity();
+        me.bodyHeading = getHeadingRadians();
+        me.gunHeading = getGunHeadingRadians();
+        me.radarHeading = getRadarHeadingRadians();
+        me.gunHeat = getGunHeat();
+        me.energy = getEnergy();
+        return me;
     }
 
     @Override
@@ -141,6 +225,8 @@ public class Ogi extends TeamRobot {
         EnemySighting sighting = new EnemySighting(e.getName(), x, y, Angles.fromRobocode(e.getHeadingRadians()),
                 e.getVelocity(), e.getEnergy(), e.getTime(), getRoundNum());
         world.observeEnemy(sighting);
+        gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
+        surfer.scanned(e.getName(), e.getTime(), x, y, e.getVelocity(), e.getEnergy());
         if (getTeammates() != null) {
             try {
                 broadcastMessage(sighting);
@@ -151,14 +237,61 @@ public class Ogi extends TeamRobot {
     }
 
     @Override
+    public void onBulletHit(BulletHitEvent e) {
+        if (!isTeammate(e.getName())) {
+            surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
+        }
+    }
+
+    @Override
+    public void onHitByBullet(HitByBulletEvent e) {
+        if (!isTeammate(e.getName())) {
+            surfer.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
+                    Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+        }
+    }
+
+    @Override
+    public void onBulletHitBullet(BulletHitBulletEvent e) {
+        if (!isTeammate(e.getHitBullet().getName())) {
+            surfer.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),
+                    e.getHitBullet().getY(), Angles.fromRobocode(e.getHitBullet().getHeadingRadians()),
+                    e.getHitBullet().getPower());
+        }
+    }
+
+    @Override
+    public void onHitRobot(HitRobotEvent e) {
+        if (!isTeammate(e.getName())) {
+            surfer.rammed(e.getName());
+        }
+    }
+
+    /** Called only while painting is enabled for this robot in the GUI. */
+    @Override
+    public void onPaint(Graphics2D g) {
+        if (gun == null) {
+            return;
+        }
+        trace.start(getTime(), getBattleFieldHeight());
+        gun.describe(getTime(), trace);
+        surfer.describe(getTime(), trace);
+        Overlay.paint(g, trace);
+    }
+
+    @Override
     public void onMessageReceived(MessageEvent e) {
         if (e.getMessage() instanceof EnemySighting sighting && sighting.round() == getRoundNum()) {
             world.observeEnemy(sighting);
+            gun.scanned(sighting.name(), sighting.time(), sighting.x(), sighting.y(), sighting.heading(),
+                    sighting.velocity());
         }
     }
 
     @Override
     public void onRobotDeath(RobotDeathEvent e) {
         world.robotDied(e.getName());
+        gun.robotDied(e.getName());
+        surfer.robotDied(e.getName());
     }
 }

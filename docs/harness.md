@@ -9,7 +9,7 @@ results. Every score claim about the bot must come from here.
 |---|---|
 | `BattleSetup` | A battle: label, field size, rounds, contestants (`sample.Walls`, `cz.libors.Ogi 0.1`, teams by name), seed, optional fixed starts |
 | `BattleRunner` | Owns one `RobocodeEngine`; resolves contestants from the local repository, seeds the battle and runs it synchronously, optionally with extra listeners |
-| `BattleOutcome` | Results sorted by score, the seed used, skipped turns per robot, problems (engine errors, exceptions in robot output), robot rounds that missed their fixed start, elapsed time |
+| `BattleOutcome` | Results sorted by score, the seed used, skipped turns per robot, problems (engine errors, exceptions in robot output), robot rounds that missed their fixed start, bullets fired and hits per contestant, elapsed time |
 | `Starts` | Fixed starts drawn from a seed, and their engine string |
 | `ContestantResult` | Score components per contestant: total, survival, last survivor bonus, bullet damage and bonus, ram damage and bonus, firsts |
 | `SkeletonCheck` | Runs a fixed set of checks and writes `harness/build/skeleton-check.json` |
@@ -34,6 +34,8 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
 - **Skipped turns** are counted from each robot's per-turn console output, where the engine writes "skipped turn".
 - **Problems:** output lines containing `Exception` or `Error` are recorded with round and tick; so are
   `BattleErrorEvent`s.
+- **Shots:** every bullet in the turn snapshots counts once as fired by its owner's contestant, and once as a hit when
+  it hits a robot of another contestant (friendly fire does not count).
 - **Matching:** a contestant is matched by name prefix. Team results are named after the team plus an index, e.g.
   `cz.libors.OgiTeam 0.1 (1)`.
 
@@ -152,6 +154,7 @@ compares uncommitted changes with `HEAD`:
 ./gradlew compare -Pbaseline=HEAD
 ./gradlew compare -Pbaseline=HEAD -Pbounds=nonregression -Pstarts=fixed
 ./gradlew compare -Pbaseline=7df5ba7 -Pcandidate=main -Popponents=harness/opponents/sample-team.txt
+./gradlew compare -Pbaseline=HEAD -Popponents=harness/opponents/lab-1v1.txt -Pmetric=hits
 ```
 
 ### Versions
@@ -176,14 +179,17 @@ compares uncommitted changes with `HEAD`:
 | `starts` | `random` | `fixed`: both battles of a pair start every round at the same positions, drawn from the pair's seed |
 | `seed` | 1 | run seed; a pair's seed depends on it, the opponent and the pair's index |
 | `rounds` | from the format | rounds per battle |
+| `metric` | `score` | what the test runs on: `score` (score share), `hits` (the subject's hits per bullet, %), `dodge` (100 minus the opponent's hit rate on the subject, %; 100 against a robot that never fires) |
 | `out` | `harness/build/compare` | root of the output directories |
 
 ### Opponent sets
 
 A text file per set in `harness/opponents/`: a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10
 rounds), then one robot or team per line as Robocode lists it, including its version. Opponents under `[strong]` form
-the second scoreboard; `[other]` starts the rest. Only the sample bots are in the repository. Sets of rumble bots
-belong next to their jars on the machine that runs them.
+the second scoreboard; `[other]` starts the rest. Only trusted robots are in the repository: `sample-1v1.txt` and
+`sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes, whose version
+follows `botVersion`), for gun and movement work. Sets of rumble bots belong next to their jars on the machine that
+runs them.
 
 ### Method
 
@@ -199,8 +205,9 @@ belong next to their jars on the machine that runs them.
   with α = β = 0.05: H1 at LLR ≥ 2.94, H0 at LLR ≤ −2.94. No decision before the burn-in and before the pooled
   variance has 20 degrees of freedom; with fewer, a variance underestimated by chance ends the test after a few
   pairs. Unit tests simulate the test at both hypotheses: error rates and lengths match the theory.
-- **Scoreboards:** APS (mean score share) and PWIN (share of battles won) of both versions over all opponents and
-  over the strong ones, with the difference and its 95 % interval.
+- **Scoreboards:** the test measure of both versions over all opponents and over the strong ones, with the
+  difference and its 95 % interval; beside it APS (mean score share), PWIN (share of battles won), the version's hit
+  rate and the opponents' hit rate on it, each opponent weighing the same. Hit rates pool the bullets of all pairs.
 - **Fixed starts** make every round of a battle start alike, which the rumble does not do. Against the sample bots
   (2026-10-08) they raised the per-battle SD and the correlation of a pair's battles alike, and the noise of the
   difference stayed the same, so random starts are the default.
@@ -210,9 +217,10 @@ belong next to their jars on the machine that runs them.
 `<out>/<set>/<baseline>-<jar hash>_vs_<candidate>-<jar hash>_<starts>_s<seed>/`:
 
 - `battles.tsv`: one line per battle, appended as it finishes: opponent, pair, side, seed, score share, the
-  subject's score components, both sides' firsts and skipped turns, problems, start mismatches, time. Running the
-  same comparison again resumes from it; a pair with only one battle logged is left out. The first lines hold the
-  configuration; a log with another configuration is refused.
+  subject's score components, both sides' firsts, bullets fired and hits, skipped turns, problems, start mismatches,
+  time. Running the same comparison again resumes from it, with any `metric`; a pair with only one battle logged is
+  left out. The first lines hold the format version and the configuration; a log of another version or configuration
+  is refused.
 - `summary.json`: the configuration, environment (Robocode and Java version, CPU constant), the decision, both
   scoreboards, per-opponent statistics (means, standard deviations, the correlation of a pair's two battles), noise
   (σ per pair, expected pairs to a decision) and health (skipped turns per side, problems, start mismatches).

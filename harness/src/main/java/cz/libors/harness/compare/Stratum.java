@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.function.ToDoubleFunction;
 
 /**
- * Paired battles against one opponent. A pair is the baseline's and the candidate's score share, in points (0–100),
- * from two battles on the same seed.
+ * Paired battles against one opponent. A pair is the baseline's and the candidate's value of the test measure (score
+ * share, hit rate), in points (0–100), from two battles on the same seed.
  */
 final class Stratum {
 
@@ -58,19 +58,11 @@ final class Stratum {
         return covariance(metric, metric);
     }
 
-    /** Correlation of the baseline's and the candidate's score share, or NaN if either does not vary. */
+    /** Correlation of the baseline's and the candidate's values, or NaN if either does not vary. */
     double correlation() {
         double va = variance(Metric.BASELINE);
         double vb = variance(Metric.CANDIDATE);
         return va > 0 && vb > 0 ? covariance(Metric.BASELINE, Metric.CANDIDATE) / Math.sqrt(va * vb) : Double.NaN;
-    }
-
-    /** Share of battles won (score share above 50; a tie counts half), or NaN without pairs. */
-    double wins(Metric metric) {
-        return pairs.stream().mapToDouble(p -> {
-            double share = metric.value.applyAsDouble(p);
-            return share > 50 ? 1 : share == 50 ? 0.5 : 0;
-        }).average().orElse(Double.NaN);
     }
 
     private double covariance(Metric x, Metric y) {

@@ -241,7 +241,7 @@ tasks.register<JavaExec>("compare") {
     val candidate = providers.gradleProperty("candidate")
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/sample-1v1.txt")
     val out = providers.gradleProperty("out").orElse("harness/build/compare")
-    val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds")
+    val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val root = rootDir
     argumentProviders.add(CommandLineArgumentProvider {
