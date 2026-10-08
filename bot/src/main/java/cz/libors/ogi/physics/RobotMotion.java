@@ -1,5 +1,7 @@
 package cz.libors.ogi.physics;
 
+import java.util.OptionalDouble;
+
 /**
  * The engine's rules for one robot in one turn, repeated from {@code RobotPeer} of Robocode 1.11.1 operation by
  * operation so that the results match the engine bit for bit (see docs/engine-model.md, tick order steps 2 and 4).
@@ -55,9 +57,9 @@ public final class RobotMotion {
      * radar turn, the robot moves and is stopped by walls. Clears {@link EngineRobot#inCollision}, as the engine's
      * robot collision check does; call {@link #ram} afterwards if the robot rammed another one.
      *
-     * @return whether the robot hit a wall
+     * @return the bearing its {@code HitWallEvent} reports, if the robot hit a wall
      */
-    public static boolean move(EngineRobot r, int fieldWidth, int fieldHeight, double gunCoolingRate) {
+    public static OptionalDouble move(EngineRobot r, int fieldWidth, int fieldHeight, double gunCoolingRate) {
         r.gunHeat -= gunCoolingRate;
         if (r.gunHeat < 0) {
             r.gunHeat = 0;
@@ -68,9 +70,9 @@ public final class RobotMotion {
         turnGun(r);
         turnRadar(r);
         moveBody(r);
-        boolean hitWall = hitWall(r, fieldWidth, fieldHeight);
+        OptionalDouble wallBearing = hitWall(r, fieldWidth, fieldHeight);
         r.inCollision = false;
-        return hitWall;
+        return wallBearing;
     }
 
     /**
@@ -249,31 +251,39 @@ public final class RobotMotion {
         return distance;
     }
 
-    /** {@code RobotPeer.checkWallCollision}: the robot is pushed back along its heading and stops. */
-    private static boolean hitWall(EngineRobot r, int fieldWidth, int fieldHeight) {
+    /**
+     * {@code RobotPeer.checkWallCollision}: the robot is pushed back along its heading and stops. The event's bearing
+     * is that of a horizontal wall when the move crossed two, even if the robot ends up touching only the other.
+     */
+    private static OptionalDouble hitWall(EngineRobot r, int fieldWidth, int fieldHeight) {
         int minX = HALF_SIZE;
         int minY = HALF_SIZE;
         int maxX = fieldWidth - HALF_SIZE;
         int maxY = fieldHeight - HALF_SIZE;
         double adjustX = 0;
         double adjustY = 0;
+        double bearing = 0;
         boolean hit = false;
         if (r.x < minX) {
             hit = true;
             adjustX = minX - r.x;
+            bearing = EngineAngles.normalRelative(3 * Math.PI / 2 - r.bodyHeading);
         } else if (r.x > maxX) {
             hit = true;
             adjustX = maxX - r.x;
+            bearing = EngineAngles.normalRelative(Math.PI / 2 - r.bodyHeading);
         }
         if (r.y < minY) {
             hit = true;
             adjustY = minY - r.y;
+            bearing = EngineAngles.normalRelative(Math.PI - r.bodyHeading);
         } else if (r.y > maxY) {
             hit = true;
             adjustY = maxY - r.y;
+            bearing = EngineAngles.normalRelative(-r.bodyHeading);
         }
         if (!hit) {
-            return false;
+            return OptionalDouble.empty();
         }
         // Both coordinates are fixed only when the robot hits at an angle.
         if ((r.bodyHeading % (Math.PI / 2)) != 0) {
@@ -303,7 +313,7 @@ public final class RobotMotion {
         setEnergy(r, r.energy - wallHitDamage(r.velocity));
         r.distanceRemaining = 0;
         r.velocity = 0;
-        return true;
+        return OptionalDouble.of(bearing);
     }
 
     /** {@code Rules.getWallHitDamage}, for an AdvancedRobot. */

@@ -72,7 +72,7 @@ class RobotMotionTest {
         EngineRobot r = robotAt(400, 579);
         r.velocity = 8;
         r.distanceRemaining = 100;
-        assertTrue(RobotMotion.move(r, 800, 600, 0.1));
+        assertTrue(RobotMotion.move(r, 800, 600, 0.1).isPresent());
         assertEquals(582, r.y);
         assertEquals(0, r.velocity);
         assertEquals(0, r.distanceRemaining);
@@ -88,7 +88,7 @@ class RobotMotionTest {
         assertEquals(3, RobotMotion.fire(r, 5));
         assertEquals(97, r.energy);
         assertEquals(1.6, r.gunHeat, 1e-15);
-        assertFalse(RobotMotion.move(r, 800, 600, 0.1));
+        assertFalse(RobotMotion.move(r, 800, 600, 0.1).isPresent());
         assertEquals(1.5, r.gunHeat, 1e-15);
     }
 

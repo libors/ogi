@@ -142,7 +142,8 @@ to-test.
     `RobotMotionReplayTest`; robot–robot intersection to-test.
 - **G-11 Wall hits.**
   - **What:** an AdvancedRobot takes max(|v|/2 − 1, 0) damage and stops. It is pushed back along its heading, so
-    both coordinates change unless it hits head-on, and its remaining distance is dropped.
+    both coordinates change unless it hits head-on, and its remaining distance is dropped. When the move crossed two
+    walls, the event's bearing is that of the horizontal one, even if the robot ends up touching only the other.
   - **Bites when:** an **enemy energy drop from a wall hit is taken for a shot** (false wave).
   - **Source:** wiki; classic bug class; `RobotPeer.checkWallCollision`. · **Status:** tested:
     `RobotMotionReplayTest` (movement), `EnergyReplayTest` (damage), `EventReplayTest` (`HitWallEvent` bearing).

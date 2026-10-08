@@ -19,6 +19,7 @@ results. Every score claim about the bot must come from here.
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
 with `./gradlew engineTest`, after `recordProbes`. They read the recordings through `Recording` and need no engine.
+The same source set measures enemy fire detection (`FireDetectionTest`, see [fire-detection.md](fire-detection.md)).
 
 The probe robots live in their own module, `probe/` (package `cz.libors.probe`). They are packaged as
 `cz.libors.probe_<v>.jar` and deployed only into the local Robocode installation, never to a rumble.
@@ -65,6 +66,7 @@ no rule of the game; the digests are identical with and without it.
 |---|---|---|
 | `RandomProbe` | own `Random`, seeded from the round and the start position | random commands for the recordings |
 | `PassiveProbe` | like `RandomProbe`, but never fires | battles that reach the inactivity penalty |
+| `WatchingProbe` | like `RandomProbe`, with a bot's radar: locked in 1v1, spinning in melee | realistic scans for fire detection |
 | `MathRandomProbe` | `Math.random()` | shows that a seed does not control `Math.random()` |
 | `UtilsRandomProbe` | `Utils.getRandom()`, none once dead (engine-model G-34) | shows that a seed controls `Utils.getRandom()` |
 | `UtilsDrawProbe` | like `RandomProbe`, plus one discarded `Utils.getRandom()` draw per number used | shows that robots share the engine's generator |
@@ -118,7 +120,8 @@ end     round  turns
 | Shared generator | `RandomProbe` and `UtilsDrawProbe` with one seed start round 1 at the same positions and round 2 elsewhere |
 
 Scenarios, each with seeds 1, 2 and 3: `duel` (2 probes, 800×600, 3 rounds), `crowd` (6 probes, 400×400, 3 rounds,
-many collisions), `melee` (10 probes, 1000×1000, 2 rounds) and `inactive` (2 passive probes, 800×600, 1 round). The task also prints how often the edge cases
+many collisions), `melee` (10 probes, 1000×1000, 2 rounds), `inactive` (2 passive probes, 800×600, 1 round),
+`watch-duel` (2 watching probes, 800×600, 3 rounds) and `watch-melee` (8 watching probes, 1000×1000, 2 rounds). The task also prints how often the edge cases
 occurred (wall hits, robot collisions, velocity sign flips, stops, bullet outcomes, deaths, disabled turns, events)
 and writes everything to `harness/build/recordings/summary.json`.
 

@@ -52,7 +52,9 @@ public final class ProbeRecordings {
             new Scenario("duel", 800, 600, 3, "RandomProbe", 2),
             new Scenario("crowd", 400, 400, 3, "RandomProbe", 6),
             new Scenario("melee", 1000, 1000, 2, "RandomProbe", 10),
-            new Scenario("inactive", 800, 600, 1, "PassiveProbe", 2));
+            new Scenario("inactive", 800, 600, 1, "PassiveProbe", 2),
+            new Scenario("watch-duel", 800, 600, 3, "WatchingProbe", 2),
+            new Scenario("watch-melee", 1000, 1000, 2, "WatchingProbe", 8));
 
     /** How often the edge cases occurred in a recording. */
     record Coverage(int robotTurns, int wallHits, int robotHits, int velocitySignFlips, int stops, int bulletsFired,

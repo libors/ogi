@@ -9,7 +9,9 @@ import cz.libors.ogi.physics.RobotMotion;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
+import java.util.OptionalDouble;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -34,6 +36,7 @@ class RobotMotionReplayTest {
         int transitions = 0;
         int compared = 0;
         int remainingCompared = 0;
+        int wallEvents = 0;
         for (ProbeTrace trace : ProbeTrace.loadAll()) {
             for (Recording.RobotInfo robot : trace.recording.robots()) {
                 // One engine robot per battle: the engine keeps the overdrive flag across rounds.
@@ -56,7 +59,8 @@ class RobotMotionReplayTest {
                                 RobotMotion.fire(sim, cmd.firePower());
                             }
                         }
-                        RobotMotion.move(sim, trace.width, trace.height, trace.gunCoolingRate);
+                        OptionalDouble wallBearing = RobotMotion.move(sim, trace.width, trace.height,
+                                trace.gunCoolingRate);
                         if (to.state().equals("HIT_ROBOT")) {
                             RobotMotion.ram(sim);
                         }
@@ -75,6 +79,15 @@ class RobotMotionReplayTest {
                         mismatches.compare(where, "gunHeat", to.gunHeat(), sim.gunHeat);
                         Remaining rem = trace.remaining(round.round(), turn + 1, robot.index());
                         if (rem != null) {
+                            List<String[]> walls = trace.events(round.round(), turn + 1, robot.index(), "HitWall");
+                            if (walls.size() != (wallBearing.isPresent() ? 1 : 0)) {
+                                mismatches.add(where, "HitWall events", walls.size() + ", model "
+                                        + (wallBearing.isPresent() ? 1 : 0));
+                            } else if (wallBearing.isPresent()) {
+                                wallEvents++;
+                                mismatches.compare(where, "HitWall bearing", Double.parseDouble(walls.get(0)[2]),
+                                        wallBearing.getAsDouble());
+                            }
                             remainingCompared++;
                             mismatches.compare(where, "distanceRemaining", rem.distance(), sim.distanceRemaining);
                             mismatches.compare(where, "bodyTurnRemaining", rem.bodyTurn(), sim.bodyTurnRemaining);
@@ -85,8 +98,8 @@ class RobotMotionReplayTest {
                 }
             }
         }
-        System.out.printf("Robot transitions %d, compared %d (remaining values %d), mismatches %s%n", transitions,
-                compared, remainingCompared, mismatches.byField);
+        System.out.printf("Robot transitions %d, compared %d (remaining values %d, wall events %d), mismatches %s%n",
+                transitions, compared, remainingCompared, wallEvents, mismatches.byField);
         mismatches.examples.forEach(e -> System.out.println("  " + e));
         assertTrue(compared > 100_000, "Too few compared turns: " + compared);
         assertEquals(Map.of(), mismatches.byField, "Model and engine disagree, examples:\n"

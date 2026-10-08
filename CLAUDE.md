@@ -23,6 +23,7 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   - Before changing or adding harness code or checks, read `docs/harness.md`.
   - Before writing anything that depends on engine physics, timing or events (movement prediction, waves, bullets,
     radar, team messages), read `docs/engine-model.md`.
+  - Before changing enemy fire detection, read `docs/fire-detection.md`.
 
 ## Rules
 

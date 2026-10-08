@@ -8,7 +8,9 @@ val robocodeVersion = providers.gradleProperty("robocodeVersion").get()
 val toolchainJava = providers.gradleProperty("javaVersion").get().toInt()
 
 val probePackage = "cz.libors.probe"
-val probeNames = listOf("RandomProbe", "PassiveProbe", "MathRandomProbe", "UtilsRandomProbe", "UtilsDrawProbe")
+val probeNames = listOf(
+    "RandomProbe", "PassiveProbe", "WatchingProbe", "MathRandomProbe", "UtilsRandomProbe", "UtilsDrawProbe",
+)
 
 dependencies {
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")

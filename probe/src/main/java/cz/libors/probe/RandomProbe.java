@@ -76,6 +76,15 @@ public class RandomProbe extends AdvancedRobot {
         return true;
     }
 
+    /** Whether the radar gets random commands; subclasses that steer it return false. */
+    protected boolean randomRadar() {
+        return true;
+    }
+
+    /** Last commands of the turn, after the random ones; they are reported in {@code cmd} too. */
+    protected void finishCommands() {
+    }
+
     /** Uniform random number in [0, 1), the probe's only source of randomness. */
     protected double nextRandom() {
         return random.nextDouble();
@@ -91,7 +100,7 @@ public class RandomProbe extends AdvancedRobot {
         if (chance(gunChance)) {
             setTurnGunRightRadians(angle());
         }
-        if (chance(radarChance)) {
+        if (randomRadar() && chance(radarChance)) {
             setTurnRadarRightRadians(chance(0.5) ? infinite() : angle());
         }
         if (chance(limitChance)) {
@@ -119,6 +128,7 @@ public class RandomProbe extends AdvancedRobot {
             power = p;
             fired = setFireBullet(p) != null;
         }
+        finishCommands();
         report("cmd", getTime(), getDistanceRemaining(), getTurnRemainingRadians(), getGunTurnRemainingRadians(),
                 getRadarTurnRemainingRadians(), maxVelocity, maxTurnRate, isAdjustGunForRobotTurn(),
                 isAdjustRadarForGunTurn(), isAdjustRadarForRobotTurn(), power, fired);
