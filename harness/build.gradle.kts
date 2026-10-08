@@ -258,6 +258,31 @@ tasks.register<JavaExec>("compare") {
     })
 }
 
+tasks.register<JavaExec>("recordBattles") {
+    group = "verification"
+    description = "Records comparison battles turn by turn, on the seeds compare uses; see docs/harness.md."
+    onRobocode("cz.libors.harness.compare.RecordBattles")
+    // Debug mode, as in recordProbes: no robot can skip a turn, so a recording does not depend on machine load.
+    jvmArgs("-Ddebug=true")
+    val versions = providers.gradleProperty("versions")
+    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
+    val out = providers.gradleProperty("out").orElse("harness/build/battle-recordings")
+    val passed = listOf("only", "pairs", "seed", "rounds", "starts")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        val versionList = (versions.orNull ?: throw GradleException("Pass -Pversions=<revision or version>,..."))
+            .split(",").map(::versionOf)
+        listOf(
+            robocodeHome.asFile.absolutePath,
+            "robot=cz.libors.Ogi",
+            "versions=" + versionList.joinToString(","),
+            "opponents=" + root.resolve(opponents.get()).absolutePath,
+            "out=" + root.resolve(out.get()).absolutePath,
+        ) + passed
+    })
+}
+
 tasks.register<Test>("engineTest") {
     group = "verification"
     description = "Replays the probe recordings through the bot's engine model and requires exact agreement."

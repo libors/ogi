@@ -13,6 +13,8 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   requires bit-identical results. It must stay green.
 - `./gradlew compare -Pbaseline=HEAD`: paired, sequential comparison of the working tree with a baseline revision
   against an opponent set (`docs/harness.md`).
+- `./gradlew recordBattles -Pversions=HEAD,0.1`: turn-by-turn recordings of comparison battles, with the gun's
+  plans, for debugging (`docs/harness.md`).
 - Add `-PjavaVersion=21` (or 25) to compile and run battles on another JVM. The default is 17.
 
 ## Layout

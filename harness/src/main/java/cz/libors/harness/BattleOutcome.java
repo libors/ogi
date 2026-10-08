@@ -13,7 +13,8 @@ import java.util.Optional;
  * @param skippedTurns skipped turns per robot name, as reported by the engine
  * @param problems     engine errors and suspicious robot output (exceptions)
  * @param startMismatches robot rounds that did not begin at the start the setup asked for; 0 without fixed starts
- * @param shots        bullets fired and bullets that hit an enemy, per contestant name as the results name it
+ * @param shots        bullets fired and bullets that hit an enemy, per contestant name as the results name it; only
+ *                     bullets that ended before one contestant was left count
  */
 public record BattleOutcome(
         BattleSetup setup,
@@ -25,7 +26,10 @@ public record BattleOutcome(
         Map<String, Shots> shots,
         long elapsedMillis) {
 
-    /** Bullets a contestant fired, and how many of them hit a robot of another contestant. */
+    /**
+     * Bullets a contestant fired that ended while the round was open, and how many of them hit a robot of another
+     * contestant.
+     */
     public record Shots(int fired, int hits) {
 
         public static final Shots NONE = new Shots(0, 0);

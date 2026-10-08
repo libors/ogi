@@ -23,12 +23,33 @@ public final class Trace {
     /**
      * The gun's plan for the next turn.
      *
+     * @param time     the turn the plan was made in; it is the shot of the turn after
      * @param aims     each gun's aim, NaN if it had none
      * @param hitRates each gun's virtual hit rate, NaN before it was scored
      */
-    public record GunView(String target, double originX, double originY, double targetX, double targetY,
-                          double reference, double escape, int direction, double[] aims, int chosen,
+    public record GunView(String target, long time, double originX, double originY, double targetX, double targetY,
+                          double reference, double escape, double power, int direction, double[] aims, int chosen,
                           String[] gunNames, double[] hitRates, int data) {
+    }
+
+    /**
+     * A gun plan as one line for the harness, which reads it from the debug property {@code gun} in a recording:
+     * the plan's turn, whether last turn's plan was fired in this turn (1 or 0), the chosen gun's index, each gun's
+     * aim, the origin, the reference, the direction, the power, the data size, each gun's virtual hit rate and the
+     * target's name. Comma-separated; angles are mathematical, in radians; numbers as {@link Double#toString}.
+     */
+    public static String gunLine(GunView g, boolean fired) {
+        StringBuilder b = new StringBuilder(256);
+        b.append(g.time()).append(',').append(fired ? 1 : 0).append(',').append(g.chosen());
+        for (double aim : g.aims()) {
+            b.append(',').append(aim);
+        }
+        b.append(',').append(g.originX()).append(',').append(g.originY()).append(',').append(g.reference())
+                .append(',').append(g.direction()).append(',').append(g.power()).append(',').append(g.data());
+        for (double rate : g.hitRates()) {
+            b.append(',').append(rate);
+        }
+        return b.append(',').append(g.target()).toString();
     }
 
     private long time;

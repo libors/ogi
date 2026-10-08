@@ -55,11 +55,15 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   bullets passed us, learned from bullets that hit us and bullets one of ours hit. It starts with all weight at guess
   factor 0, a gun aiming straight at us.
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
-  `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit keeps 400 px, slides
-  along walls, and drives backwards rather than turning around. `HitRange` gives the guess factors that would hit us
-  on each path; the way with the least danger wins, and its first turn's commands are used. Ties keep the last way.
+  `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
+  400 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
+  until there is room, so near walls it drifts outwards and stays further than 400 px. `HitRange` gives the guess
+  factors that would hit us on each path; the way with the least danger wins, and its first turn's commands are used.
+  Ties keep the last way.
 - **Without an enemy wave** the bot orbits the target and changes direction at random intervals, from its own seeded
-  generator.
+  generator. It also steers towards 400 px, but turns towards the target at walls, so it stays closer than the surfer.
+- **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
+  up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
 
 ## Debug overlay (`cz.libors.ogi.trace`)
 
@@ -73,5 +77,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
   screen is the shot of the current turn.
+- **For the harness:** every turn with a target the bot sets the debug property `gun` (`Trace.gunLine`): the turn
+  of the plan, whether last turn's plan was fired in this turn, the chosen gun, each gun's aim, the planned origin,
+  the reference, the direction, the power, the data size, each gun's virtual hit rate and the target. A recording
+  keeps it ([harness.md](harness.md#recording-comparison-battles)).
 - **Without the GUI:** `OverlayRenderTest` paints a simulated fight into `bot/build/overlay/gun.png`. The image is
   mirrored by hand, so its text is upside down.

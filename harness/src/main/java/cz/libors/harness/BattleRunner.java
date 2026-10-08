@@ -15,6 +15,7 @@ import robocode.control.events.TurnEndedEvent;
 import robocode.control.snapshot.BulletState;
 import robocode.control.snapshot.IBulletSnapshot;
 import robocode.control.snapshot.IRobotSnapshot;
+import robocode.control.snapshot.RobotState;
 
 import java.net.URI;
 import java.nio.file.Path;
@@ -157,6 +158,8 @@ public final class BattleRunner implements AutoCloseable {
         private final Map<String, int[]> shots = new LinkedHashMap<>();
         private final Set<Long> bulletsSeen = new HashSet<>();
         private final Set<Long> hitsSeen = new HashSet<>();
+        /** The round in which one contestant was left, or -1. */
+        private int decidedRound = -1;
 
         void reset(List<BattleSetup.Start> expectedStarts) {
             results.clear();
@@ -167,6 +170,7 @@ public final class BattleRunner implements AutoCloseable {
             shots.clear();
             bulletsSeen.clear();
             hitsSeen.clear();
+            decidedRound = -1;
         }
 
         Map<String, BattleOutcome.Shots> shots() {
@@ -215,8 +219,15 @@ public final class BattleRunner implements AutoCloseable {
         /**
          * Counts each bullet once when it first appears and once when it hits a robot of another contestant; a
          * contestant's name is its team's, or the robot's own outside a team.
+         *
+         * <p>Only bullets that end while the round is open count. Once one contestant is left, the bullets still in
+         * the air are taken back and later ones are ignored: they can no longer hit an enemy, and their number grows
+         * with the flight time, so they would tie the hit rate to the distance.
          */
         private void countShots(int round, IRobotSnapshot[] robots, IBulletSnapshot[] bullets) {
+            if (round == decidedRound) {
+                return;
+            }
             for (IBulletSnapshot b : bullets) {
                 int owner = b.getOwnerIndex();
                 if (owner < 0 || owner >= robots.length) {
@@ -234,6 +245,26 @@ public final class BattleRunner implements AutoCloseable {
                     mine[1]++;
                 }
             }
+            if (contestantsAlive(robots) <= 1) {
+                decidedRound = round;
+                for (IBulletSnapshot b : bullets) {
+                    int owner = b.getOwnerIndex();
+                    if (owner >= 0 && owner < robots.length
+                            && (b.getState() == BulletState.FIRED || b.getState() == BulletState.MOVING)) {
+                        shots.get(robots[owner].getTeamName())[0]--;
+                    }
+                }
+            }
+        }
+
+        private static int contestantsAlive(IRobotSnapshot[] robots) {
+            Set<Integer> alive = new HashSet<>();
+            for (IRobotSnapshot r : robots) {
+                if (r.getState() != RobotState.DEAD) {
+                    alive.add(r.getContestantIndex());
+                }
+            }
+            return alive.size();
         }
 
         @Override

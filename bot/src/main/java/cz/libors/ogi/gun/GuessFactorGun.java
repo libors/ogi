@@ -249,16 +249,25 @@ public final class GuessFactorGun {
                         w.range.reference(), hits ? w.range.minOffset() : Double.NaN,
                         hits ? w.range.maxOffset() : Double.NaN));
             }
-            Plan p = t.plan;
             // Robocode paints before the robot acts, so the plan on screen is usually last turn's: this turn's shot.
-            if (p != null && p.time() >= now - 1 && !t.history.isEmpty()) {
-                double[] rates = {hitRate(e.getKey(), GUESS_FACTOR), hitRate(e.getKey(), CIRCULAR)};
-                double escape = Math.asin(RobotMotion.MAX_VELOCITY / BulletMotion.speed(p.power()));
-                trace.add(new Trace.GunView(e.getKey(), p.originX(), p.originY(), p.targetX(), p.targetY(),
-                        p.reference(), escape, p.direction(), p.aims().clone(), p.gun(), GUN_NAMES, rates,
-                        t.data.size()));
+            if (t.plan != null && t.plan.time() >= now - 1) {
+                trace.add(view(e.getKey(), t));
             }
         }
+    }
+
+    /** The plan made in turn {@code now} for this enemy, as the trace shows it. */
+    public Optional<Trace.GunView> planView(String name, long now) {
+        Target t = targets.get(name);
+        return t == null || t.plan == null || t.plan.time() != now ? Optional.empty() : Optional.of(view(name, t));
+    }
+
+    private Trace.GunView view(String name, Target t) {
+        Plan p = t.plan;
+        double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR)};
+        double escape = Math.asin(RobotMotion.MAX_VELOCITY / BulletMotion.speed(p.power()));
+        return new Trace.GunView(name, p.time(), p.originX(), p.originY(), p.targetX(), p.targetY(), p.reference(),
+                escape, p.power(), p.direction(), p.aims().clone(), p.gun(), GUN_NAMES, rates, t.data.size());
     }
 
     private Target target(String name) {

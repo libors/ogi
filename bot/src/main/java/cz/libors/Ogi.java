@@ -97,6 +97,7 @@ public class Ogi extends TeamRobot {
         boolean fired = fire(t, now);
         gun.update(now, getX(), getY(), fired ? t.name() : null);
         aim(t, now, next[0], next[1]);
+        gun.planView(t.name(), now).ifPresent(v -> setDebugProperty("gun", Trace.gunLine(v, fired)));
     }
 
     private void steerRadar(EnemyState target, long now) {

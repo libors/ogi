@@ -20,7 +20,7 @@ import java.util.TreeMap;
  * results of different jars never mix.
  *
  * <pre>
- * #ogi-compare  1
+ * #ogi-compare  3
  * config  key=value ...
  * battle  opponent  pair  side  seed  share  score  opponentScore  survival  lastSurvivorBonus  bulletDamage
  *         bulletDamageBonus  ramDamage  ramDamageBonus  firsts  opponentFirsts  fired  hits  opponentFired
@@ -30,7 +30,7 @@ import java.util.TreeMap;
 final class CompareLog implements Closeable {
 
     private static final String MAGIC = "#ogi-compare";
-    private static final String VERSION = "2";
+    private static final String VERSION = "3";
 
     /** Which version fought the battle. */
     enum Side {

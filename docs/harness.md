@@ -20,6 +20,7 @@ results. Every score claim about the bot must come from here.
 | `compare.Compare` | Paired, sequential comparison of two bot versions; see [Comparing two versions](#comparing-two-versions) |
 | `compare.Sprt`, `compare.Stratum` | The stratified sequential test and the per-opponent paired statistics |
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
+| `compare.RecordBattles` | Records the battles of a comparison turn by turn; see [Recording comparison battles](#recording-comparison-battles) |
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
 with `./gradlew engineTest`, after `recordProbes`. They read the recordings through `Recording` and need no engine.
@@ -36,6 +37,12 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
   `BattleErrorEvent`s.
 - **Shots:** every bullet in the turn snapshots counts once as fired by its owner's contestant, and once as a hit when
   it hits a robot of another contestant (friendly fire does not count).
+  - Only bullets that end while the round is open count. In the turn in which one contestant is left, the bullets
+    still in the air are taken back, and bullets fired later are ignored. They can no longer hit an enemy, and
+    without this rule a contestant that fights from further away would show a lower hit rate with the same aim,
+    because more of its bullets are in flight at the kill (5–16 % of Ogi's bullets against the lab set).
+  - Hit rates are therefore "hits per bullet that could still hit". A stationary target that is hit every time
+    shows 100 %.
 - **Matching:** a contestant is matched by name prefix. Team results are named after the team plus an index, e.g.
   `cz.libors.OgiTeam 0.1 (1)`.
 
@@ -179,7 +186,7 @@ compares uncommitted changes with `HEAD`:
 | `starts` | `random` | `fixed`: both battles of a pair start every round at the same positions, drawn from the pair's seed |
 | `seed` | 1 | run seed; a pair's seed depends on it, the opponent and the pair's index |
 | `rounds` | from the format | rounds per battle |
-| `metric` | `score` | what the test runs on: `score` (score share), `hits` (the subject's hits per bullet, %), `dodge` (100 minus the opponent's hit rate on the subject, %; 100 against a robot that never fires) |
+| `metric` | `score` | what the test runs on: `score` (score share), `hits` (the subject's hits per bullet, %; see [Shots](#how-results-are-gathered)), `dodge` (100 minus the opponent's hit rate on the subject, %; 100 against a robot that never fires) |
 | `out` | `harness/build/compare` | root of the output directories |
 
 ### Opponent sets
@@ -228,8 +235,37 @@ runs them.
 
 The run prints one line per pair and the tables at the end. It does not fail on a decision: read the result line.
 
+### Recording comparison battles
+
+`./gradlew recordBattles -Pversions=<v>,<v>` records each version against each opponent of a set on the pair seeds
+that `compare` uses with the same run seed, so a pair from a comparison log can be replayed and examined turn by
+turn. A version is a git revision (built by `baselineJars`), a jar in `.robocode/baselines/` or the working tree's
+`botVersion`. Like `recordProbes`, it runs the engine in debug mode.
+
+```sh
+./gradlew recordBattles -Pversions=HEAD,0.1 -Ponly=sample.SpinBot,sample.TrackFire -Ppairs=3
+```
+
+| Property | Default | Meaning |
+|---|---|---|
+| `versions` | required | comma-separated versions of `cz.libors.Ogi` |
+| `opponents` | `harness/opponents/lab-1v1.txt` | opponent set file; gives the format |
+| `only` | all | comma-separated opponents of the set to record |
+| `pairs` | 1 | pairs per opponent, from pair 0 |
+| `seed`, `rounds`, `starts` | as in `compare` | |
+| `out` | `harness/build/battle-recordings` | writes `<out>/<version>/<opponent>_p<pair>.rec.gz` |
+
+The recordings have the format above. Ogi sets the debug property `gun` every turn it has a target, with the plan
+for the next turn's shot (see [bot.md](bot.md#debug-overlay-czliborsogitrace)), so a bullet first recorded in turn
+f was fired from the plan of turn f − 2, whose line in turn f − 1 says it was fired.
+
 ## Known quirks
 
+- **The hit rate depends on the distance, not only on the gun.** At a longer distance the target has more time to
+  move, so the same aim hits less. A movement change therefore moves `-Pmetric=hits` without any change in the gun
+  (against the moving lab opponents, ~100 px more cost 3–10 points of hit rate). Compare guns with the same
+  movement on both sides, and when the movement differs, check the distance at fire time in recordings
+  ([Recording comparison battles](#recording-comparison-battles)).
 - A team jar lists its robots in the repository under the same name and version as the robot jar
   (engine-model G-42). `BattleRunner` picks the jar named after the robot.
 - `BattleResults.getRank()` in melee does not always follow the score order (engine-model G-31). Do not rely on it
