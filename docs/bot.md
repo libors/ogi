@@ -48,6 +48,11 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   the guess-factor gun searched for its plan (at power 1.9, 5 waves in 14): would each aim have been inside the hit
   range? Per enemy, the gun with the better weighted record fires; circular targeting until the guess-factor gun
   has 20 weighted tries (a real bullet counts 1, a virtual wave 0.5).
+- **One model for the bot and the bench:** what the gun knows about an enemy and how it decides (the data, the
+  virtual scores, the choice of gun, learning a passed wave) is `GunModel`. The tunable numbers (feature weights,
+  the neighbour count, the virtual weight, the tries before switching) are `GunParameters`; the bot plays with
+  `GunParameters.DEFAULT`. `GuessFactorGun` computes the features and the hit ranges and hands them to the model, so
+  the offline gun bench can replay a battle through the same code ([harness.md](harness.md#gun-bench)).
 
 ## Movement (`cz.libors.ogi.move`)
 
@@ -84,5 +89,13 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   of the plan, whether last turn's plan was fired in this turn, the chosen gun, each gun's aim, the planned origin,
   the reference, the direction, the power, the data size, each gun's virtual hit rate and the target. A recording
   keeps it ([harness.md](harness.md#recording-comparison-battles)).
+- **For the gun bench:** `cz.libors.OgiGunLog` is Ogi that also logs its gun's inputs and decisions (`GunLog`): one
+  `gunpass` property per gun wave that passed its target in this turn (the plan's turn, whether it carried a bullet,
+  the wave's reference and escape angle, the hitting headings), then `gunshot` with the turn's plan (the features,
+  the direction, the reference, the escape angle, whether the guess-factor gun searched, the circular aim, the guess
+  factor found and the chosen gun). That is everything `GunModel` needs to replay the battle.
+  - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
+    rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
+    Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).
 - **Without the GUI:** `OverlayRenderTest` paints a simulated fight into `bot/build/overlay/gun.png`. The image is
   mirrored by hand, so its text is upside down.

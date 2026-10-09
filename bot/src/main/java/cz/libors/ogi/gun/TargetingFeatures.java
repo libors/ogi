@@ -14,9 +14,8 @@ import cz.libors.ogi.physics.RobotMotion;
  */
 public final class TargetingFeatures {
 
-    /** Feature weights, in the order of {@link #compute}; distances between shots are weighted by their squares. */
-    static final double[] WEIGHTS = {3, 3, 1.5, 2.5, 2, 1.5, 3, 1, 1.5, 2};
-    public static final int COUNT = WEIGHTS.length;
+    /** The number of features; their weights are in {@link GunParameters}. */
+    public static final int COUNT = 10;
 
     private static final double WALL_LIMIT = 1.5;
     private static final int WALL_STEPS = 60;

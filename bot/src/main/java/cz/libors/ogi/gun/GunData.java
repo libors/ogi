@@ -10,19 +10,30 @@ import java.util.Arrays;
  */
 final class GunData {
 
-    static final int MAX_NEIGHBOURS = 50;
-
     private final int dims = TargetingFeatures.COUNT;
+    private final double[] weights;
+    private final double neighbourScale;
+    private final int maxNeighbours;
     private double[] features = new double[1024 * dims];
     private double[] low = new double[1024];
     private double[] high = new double[1024];
     private double[] weight = new double[1024];
     private int size;
 
-    private final int[] nearest = new int[MAX_NEIGHBOURS];
-    private final double[] nearestDistance = new double[MAX_NEIGHBOURS];
-    private final double[] eventAt = new double[2 * MAX_NEIGHBOURS];
-    private final double[] eventWeight = new double[2 * MAX_NEIGHBOURS];
+    private final int[] nearest;
+    private final double[] nearestDistance;
+    private final double[] eventAt;
+    private final double[] eventWeight;
+
+    GunData(GunParameters parameters) {
+        weights = parameters.weights();
+        neighbourScale = parameters.neighbourScale();
+        maxNeighbours = parameters.maxNeighbours();
+        nearest = new int[maxNeighbours];
+        nearestDistance = new double[maxNeighbours];
+        eventAt = new double[2 * maxNeighbours];
+        eventWeight = new double[2 * maxNeighbours];
+    }
 
     int size() {
         return size;
@@ -44,9 +55,9 @@ final class GunData {
         size++;
     }
 
-    /** The number of neighbours a query uses: about the square root of the data, at least 1. */
+    /** The number of neighbours a query uses: about the square root of the data, scaled, at least 1. */
     int neighbours() {
-        return (int) Math.max(1, Math.min(MAX_NEIGHBOURS, Math.round(Math.sqrt(size))));
+        return (int) Math.max(1, Math.min(maxNeighbours, Math.round(neighbourScale * Math.sqrt(size))));
     }
 
     /**
@@ -114,7 +125,7 @@ final class GunData {
         double sum = 0;
         int base = p * dims;
         for (int j = 0; j < dims; j++) {
-            double d = (query[j] - features[base + j]) * TargetingFeatures.WEIGHTS[j];
+            double d = (query[j] - features[base + j]) * weights[j];
             sum += d * d;
         }
         return sum;

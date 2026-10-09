@@ -6,6 +6,7 @@ import robocode.control.events.BattleAdaptor;
 import robocode.control.events.TurnEndedEvent;
 import robocode.control.snapshot.IDebugProperty;
 import robocode.control.snapshot.IRobotSnapshot;
+import robocode.control.snapshot.RobotState;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -62,6 +63,23 @@ public final class SandboxCheck {
         }
     }
 
+    /** Where the probe's threads are when its report does not come. */
+    private static void dumpProbeThreads() {
+        System.out.println("No report by the deadline; the probe's threads:");
+        for (Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
+            Thread thread = e.getKey();
+            ThreadGroup group = thread.getThreadGroup();
+            String name = thread.getName() + " / " + (group == null ? "-" : group.getName());
+            if (!name.contains("SandboxProbe")) {
+                continue;
+            }
+            System.out.println("  " + name + " " + thread.getState());
+            for (StackTraceElement frame : e.getValue()) {
+                System.out.println("      at " + frame);
+            }
+        }
+    }
+
     public static void main(String[] args) throws IOException {
         if (args.length != 4) {
             System.err.println("Usage: SandboxCheck <robocodeHome> <probe version> <Ogi jar> <probe jar>");
@@ -76,25 +94,46 @@ public final class SandboxCheck {
             lines.add(new Line("Robocode's Security Manager is installed", Sandbox.active(),
                     Sandbox.manager().orElse("none")));
             // The first blocked attempt kills the probe, but its code runs on, and its next execute() still delivers
-            // its debug properties, to the snapshot of the turn after. The battle does not wait for a dead robot, so
-            // until the report is there, each turn waits a little for it.
+            // its debug properties. Only the snapshot of the turn of its death can show them: when the engine wakes
+            // the dead robot again, its commands are replaced (engine-model G-34). The task runs in debug mode, so
+            // the engine waits for the probe's whole turn; until the report is there, each turn waits a little more.
             long deadline = System.nanoTime() + REPORT_TIMEOUT_NANOS;
-            runner.run(BattleSetup.duel(probe, "sample.SittingDuck", 1), new BattleAdaptor() {
+            BattleSetup setup = BattleSetup.duel(probe, "sample.SittingDuck", 1);
+            // Turn of the probe's death, of the report and of the battle's end.
+            int[] turns = {-1, -1, -1};
+            boolean[] dumped = {false};
+            runner.run(setup, new BattleAdaptor() {
                 @Override
                 public void onTurnEnded(TurnEndedEvent event) {
+                    int turn = event.getTurnSnapshot().getTurn();
+                    turns[2] = turn;
                     for (IRobotSnapshot robot : event.getTurnSnapshot().getRobots()) {
+                        if (!robot.getName().startsWith(PROBE)) {
+                            continue;
+                        }
+                        if (turns[0] < 0 && robot.getState() == RobotState.DEAD) {
+                            turns[0] = turn;
+                        }
                         IDebugProperty[] properties = robot.getDebugProperties();
-                        if (robot.getName().startsWith(PROBE) && properties != null) {
+                        if (properties != null) {
                             for (IDebugProperty p : properties) {
                                 results.put(p.getKey(), p.getValue());
                             }
                         }
                     }
+                    if (turns[1] < 0 && results.containsKey("sandbox.done")) {
+                        turns[1] = turn;
+                    }
                     if (!results.containsKey("sandbox.done") && System.nanoTime() < deadline) {
                         pause(TURN_WAIT_NANOS);
+                    } else if (!results.containsKey("sandbox.done") && !dumped[0]) {
+                        dumped[0] = true;
+                        dumpProbeThreads();
                     }
                 }
             });
+            System.out.printf("Probe died in turn %d, reported in turn %d; the battle ended in turn %d.%n", turns[0],
+                    turns[1], turns[2]);
         }
         for (String attempt : MUST_BE_BLOCKED) {
             String outcome = results.getOrDefault("sandbox." + attempt, "no report");

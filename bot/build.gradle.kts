@@ -11,6 +11,8 @@ val robotPackage = "cz.libors"
 val robotName = "Ogi"
 val teamName = "OgiTeam"
 val teamSize = 5
+// Ogi with the gun log for the offline gun bench; local and harness use only, never in a rumble jar.
+val gunLogName = "OgiGunLog"
 
 dependencies {
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")
@@ -68,6 +70,18 @@ val generateRobotFiles = tasks.register("generateRobotFiles") {
             robot.include.source=false
             """.trimIndent() + "\n"
         )
+        dir.resolve("$gunLogName.properties").writeText(
+            """
+            robot.classname=$robotPackage.$gunLogName
+            robot.version=$version
+            robot.author.name=$author
+            robot.description=Ogi with the gun log for the offline gun bench; not for a rumble
+            robot.webpage=
+            robocode.version=$rcVersion
+            robot.java.source.included=false
+            robot.include.source=false
+            """.trimIndent() + "\n"
+        )
         dir.resolve("$teamName.team").writeText(
             """
             team.members=$members
@@ -93,9 +107,12 @@ fun Jar.robocodeJar(fileName: String, robotsAttribute: String) {
     }
 }
 
+val gunLogClasses = "${robotPackage.replace('.', '/')}/$gunLogName*"
+
 val robotJar = tasks.register<Jar>("robotJar") {
     description = "Packages the robot jar entered in the 1v1 and melee rumbles."
     robocodeJar("$robotPackage.${robotName}_$botVersion.jar", "$robotPackage.$robotName")
+    exclude(gunLogClasses)
     from(generateRobotFiles) {
         include("**/$robotName.properties")
     }
@@ -107,9 +124,20 @@ val teamJar = tasks.register<Jar>("teamJar") {
         "$robotPackage.${teamName}_$botVersion.jar",
         List(teamSize) { "$robotPackage.$robotName" }.joinToString(","),
     )
-    from(generateRobotFiles)
+    exclude(gunLogClasses)
+    from(generateRobotFiles) {
+        exclude("**/$gunLogName.properties")
+    }
+}
+
+val gunLogJar = tasks.register<Jar>("gunLogJar") {
+    description = "Packages Ogi with the gun log for the offline gun bench; never for a rumble."
+    robocodeJar("$robotPackage.${gunLogName}_$botVersion.jar", "$robotPackage.$gunLogName")
+    from(generateRobotFiles) {
+        include("**/$gunLogName.properties")
+    }
 }
 
 tasks.assemble {
-    dependsOn(robotJar, teamJar)
+    dependsOn(robotJar, teamJar, gunLogJar)
 }

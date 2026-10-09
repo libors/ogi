@@ -21,6 +21,7 @@ results. Every score claim about the bot must come from here.
 | `compare.Sprt`, `compare.Stratum` | The stratified sequential test and the per-opponent paired statistics |
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
 | `compare.RecordBattles` | Records the battles of a comparison turn by turn; see [Recording comparison battles](#recording-comparison-battles) |
+| `gunbench.GunBench`, `gunbench.GunBattle`, `gunbench.GunReplay` | The offline gun bench (source set `gunBench`): replays the gun's logs with other gun parameters; see [Gun bench](#gun-bench) |
 | `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
 | `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
 | `foreign.JarCheck`, `foreign.ApiRules`, `foreign.ClassFile` | Checks a robot jar against an allowlist of the JDK and Robocode APIs before it runs |
@@ -28,6 +29,8 @@ results. Every score claim about the bot must come from here.
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
 with `./gradlew engineTest`, after `recordProbes`. They read the recordings through `Recording` and need no engine.
 The same source set measures enemy fire detection (`FireDetectionTest`, see [fire-detection.md](fire-detection.md)).
+The gun bench has a source set of its own, `gunBench`. Both use the bot's classes, which the main source set must
+not have: a battle JVM would then load our robots from its class path instead of their jars.
 
 The probe robots live in their own module, `probe/` (package `cz.libors.probe`). They are packaged as
 `cz.libors.probe_<v>.jar` and deployed only into the local Robocode installation, never to a rumble.
@@ -265,6 +268,58 @@ The recordings have the format above. Ogi sets the debug property `gun` every tu
 for the next turn's shot (see [bot.md](bot.md#debug-overlay-czliborsogitrace)), so a bullet first recorded in turn
 f was fired from the plan of turn f − 2, whose line in turn f − 1 says it was fired.
 
+Each version's directory also gets `battles.tsv`, one line per battle recorded: the recording's file name, the
+opponent, the pair, the seed, the robot's bullets fired and hits as [Shots](#how-results-are-gathered) counts them,
+its skipped turns and problems. A battle recorded again appends a new line; the last one for a file describes it.
+
+## Gun bench
+
+The gun bench replays the gun's decisions of recorded battles with other gun parameters (feature weights, the
+neighbour count, the virtual weight, the tries before switching guns), in seconds instead of battles. It runs the
+bot's own `GunModel` on what the bot logged, so with the bot's parameters it decides exactly as the bot did.
+
+```sh
+./gradlew recordGunLogs -Pversions=0.1 -Ppairs=2      # the working tree's version, lab set by default
+./gradlew gunBench                                      # replays harness/build/gun-logs/<botVersion>
+./gradlew gunBench -Pweights=3,3,1.5,2.5,2,1.5,3,1,1.5,2 -PneighbourScale=0.7
+```
+
+- **`recordGunLogs`** is `recordBattles` (same options, same seeds) for `cz.libors.OgiGunLog`, which plays like Ogi
+  and logs its gun ([bot.md](bot.md#debug-overlay-czliborsogitrace)). Its recordings keep only the debug
+  properties `gunshot` and `gunpass`, about 0.9 MB per 35-round battle, in `harness/build/gun-logs/<version>/`.
+  Only the working tree has an `OgiGunLog` jar.
+- **`gunBench`** reads every `*.rec.gz` of `-Plogs=<dir>,...` and replays each battle with a fresh model per target:
+  in each turn the waves that passed teach the model, then the turn's plan asks it. The movement, the fire timing
+  and the bullet power stay as recorded.
+- **Parameters:** `weights` (10, in the order of `TargetingFeatures`), `neighbourScale`, `maxNeighbours`,
+  `virtualWeight`, `minTries`; the rest come from `GunParameters.DEFAULT`.
+
+| Column | Meaning |
+|---|---|
+| `shots` | plans replayed |
+| `gf tries`, `gf hit %` | passed waves whose plan had a guess factor, and how many it would have hit |
+| `gf real %` | the same over waves that carried a bullet |
+| `fired %` | waves with a bullet, aimed by the gun the replay chose |
+| `harness %`, `bullets/harness` | the harness's hit rate of the same battles, and both bullet counts |
+| `differ` | plans whose guess factor or gun differ from the log |
+
+- **Parity:** with the bot's parameters every replayed decision must equal the logged one, bit for bit; the task
+  fails otherwise. `GunLogTest` checks the same on a simulated fight.
+- **`fired %` against `harness %`:** checked bullet by bullet on four lab battles (2026-10-09). Every bullet whose
+  wave passed the target got the verdict the engine gave it, except bullets destroyed by an enemy bullet, which the
+  bench counts as hits. The two counts differ only in which bullets they include:
+  - the bullet that kills the target counts for the harness, but its wave never passes (a dead target is not
+    scanned), so the bench and the bot never see it: one hit per round won;
+  - a bullet that has passed the target but is still flying when the round is decided counts for the bench, not for
+    the harness.
+
+  Against the lab set the bench's `fired %` is therefore 1–4 points lower.
+- **Limits:**
+  - Against a target that reacts to our aim the replay is optimistic: the recorded movement dodged the logged
+    gun, not the replayed one.
+  - A replayed aim the turret could not have reached in time would not have been fired that turn; the replay fires
+    it anyway.
+
 ## Foreign robots
 
 A foreign robot is any robot or team that is neither ours (`cz.libors.*`) nor one of Robocode's sample robots
@@ -290,7 +345,9 @@ jar with anything in those packages, and `deployBots` runs the jar check.
   - Every attempt is harmless if it succeeds: it asks the Security Manager about exit instead of exiting, and it
     deletes the file it wrote.
   - The first blocked attempt kills the probe, but its code runs on and its next `execute()` still delivers the
-    report. The battle does not wait for dead robots, so the check slows each turn until the report arrives.
+    report, which only the snapshot of that turn can show (engine-model G-34). So the check runs in debug mode, and
+    the probe waits 20 ms before its first attempt, until the engine waits for its turn. It prints the turns of the
+    probe's death and of the report, and a stack dump of the probe's threads if the report does not come.
   - On Java 24+ the check fails by design, showing what a robot can do there.
 - **Jar check:** `./gradlew jarCheck -Pjars=<jar or directory>,...` reads every class in each jar and prints a
   verdict with the findings. It exits non-zero if a jar is denied.

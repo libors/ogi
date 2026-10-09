@@ -15,7 +15,7 @@ class GunTest {
 
     @Test
     void bestGuessFactorIsWhereMostNeighboursWouldHaveHit() {
-        GunData data = new GunData();
+        GunData data = new GunData(GunParameters.DEFAULT);
         assertTrue(Double.isNaN(data.bestGuessFactor(new double[TargetingFeatures.COUNT])));
         Random random = new Random(1);
         double[] f = new double[TargetingFeatures.COUNT];
@@ -35,7 +35,7 @@ class GunTest {
 
     @Test
     void nearerNeighboursDecide() {
-        GunData data = new GunData();
+        GunData data = new GunData(GunParameters.DEFAULT);
         double[] near = new double[TargetingFeatures.COUNT];
         double[] far = new double[TargetingFeatures.COUNT];
         Arrays.fill(far, 1);

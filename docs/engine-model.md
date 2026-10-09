@@ -267,8 +267,8 @@ to-test.
     directory, write and delete in its data directory through `RobocodeFileOutputStream`, and start 5 threads
     besides its own. Everything else is denied.
   - **The first violation kills the robot and bans it in the repository** for the rest of the session. Its code
-    runs on, and its next `execute()` still delivers its commands, so its debug properties reach a later snapshot
-    (G-34); later calls deliver nothing.
+    runs on, and its next `execute()` still delivers its commands; their debug properties reach the snapshot of
+    that turn only if the engine still waits for the robot (G-34). Later calls deliver nothing.
   - **Only the main thread is metered:** the battle waits `cpuConstant` for the robot's turn, so side threads
     compute unmetered, also during the other robots' turns.
   - **Bites when:** foreign robots run on Java 24+, e.g. with `-PjavaVersion=25`; a test expects a robot to report
@@ -327,9 +327,20 @@ to-test.
   - If the dead robot draws from `Utils.getRandom()` in that last turn, it races with the engine for the shared
     generator (G-33), and the rest of the battle can differ between runs. Observed once (2026-10-08): two robots died
     in the same turn of round 1, and round 2 started at different positions in two runs with one seed.
-  - **Bites when:** recordings or tools read debug properties of dead robots; a bot draws from `Utils.getRandom()`.
-  - **Source:** `Battle.wakeupSerial`, `RobotPeer.executeImpl`. · **Status:** verified; `TurnRecorder` leaves the
-    debug properties out, and `UtilsRandomProbe` stops drawing once dead (10 reruns identical since).
+  - **A robot that dies during its own turn** (a security violation, punished in the robot's thread) is waited for
+    only if it was still alive when the engine checked, just after waking it (`wakeupSerial`: `waitWakeup`, then
+    `isAlive`, then `waitSleeping`). What it stores in its next `execute()` is visible only to the snapshot of that
+    turn: its thread then ends in `waitForBattleEndImpl`, and when the engine wakes it in the next turn, its commands
+    are replaced by ones without the debug properties. So its report reaches a snapshot only if the engine still
+    waits for it. Observed on the desktop worker (2 CPUs, turn limit 1.7 ms, 2026-10-09): `SandboxProbe`'s report
+    missed in about 1 run in 4; the thread dump showed the probe waiting in `waitForBattleEndImpl`.
+  - **Bites when:** recordings or tools read debug properties of dead robots; a bot draws from `Utils.getRandom()`;
+    a probe reports after a deliberate violation.
+  - **Source:** `Battle.wakeupSerial`, `RobotPeer.executeImpl`, `RobotPeer.waitForBattleEndImpl`,
+    `HostingRobotProxy.run`, `ExecCommands(ExecCommands, boolean)`. · **Status:** verified; `TurnRecorder` leaves the
+    debug properties out, and `UtilsRandomProbe` stops drawing once dead (10 reruns identical since). `sandboxCheck`
+    runs in debug mode and `SandboxProbe` waits 20 ms before its first attempt, so the engine waits for its report:
+    20 runs in 20 on the desktop worker, 4 in 4 on the Mac (2026-10-09).
 - **G-41 Fixed starts hold in every round, unless a robot is in the way.**
   - **What:** a battle's initial positions (the string `(x,y,heading),…` of `RobocodeEngine.runBattle`, or the
     specification's `RobotSetup` array) apply to every round, not only the first. Headings are in degrees. Robot i

@@ -41,6 +41,14 @@ public class SandboxProbe extends AdvancedRobot {
     public void run() {
         // One turn first: the robot API sleeps a second in a robot's first execute(), which would delay the report.
         execute();
+        // The first blocked attempt kills the probe, and the engine waits for a robot's turn only if the robot is
+        // still alive just after waking it. So the attempts start once the engine waits; in debug mode it then waits
+        // until the report is out (engine-model G-34).
+        try {
+            Thread.sleep(20);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         Map<String, String> results = new LinkedHashMap<>();
         String tmp = System.getProperty("java.io.tmpdir");
         results.put("reflection", attempt(() -> SandboxProbe.class.getDeclaredField("secret").setAccessible(true)));

@@ -33,6 +33,8 @@ battles.
 | `./gradlew decompileJar -Pjar=<jar>` | Decompiles a robot jar for review into `harness/build/decompiled/` |
 | `./gradlew skeletonCheck -PjavaVersion=21` | The same on another JVM (17, 21 and 25 are tested) |
 | `./gradlew :harness:installRobocode` | Only downloads and unpacks Robocode |
+| `./gradlew workerBundle` | Assembles the remote worker's bundle in `harness/build/worker-bundle/`; see [Remote worker](#remote-worker) |
+| `./gradlew remoteSkeletonCheck` (and `remoteSandboxCheck`, `remoteRecordProbes`, `remoteCompare`, `remoteRecordBattles`, `remoteRecordGunLogs`) | The same on the WSL container worker |
 
 For Java 12–23 the harness adds `-Djava.security.manager=allow`, as Robocode's own launch scripts do. Java 24+ refuses
 that option, and Robocode has no sandbox there (engine-model G-43): the harness refuses foreign robots on such a JVM.
@@ -70,3 +72,58 @@ cd .robocode/1.11.1 && ./robocode.sh
 | `cz.libors.probe_<v>.jar` (built by `probe/`) | the probe robots `cz.libors.probe.*` with their `.properties` | none, local recordings only |
 
 The version and author come from `botVersion` and `botAuthor` in `gradle.properties`.
+
+## Remote worker
+
+Foreign robot jars run on a separate machine, never on the development machine. Code reaches it as a **bundle**
+built from the working tree (`./gradlew workerBundle`): the harness jar, our robot, team, probe and baseline jars,
+the opponent sets, the `worker/` scripts and the Robocode setup jar. The worker never builds and holds no git
+repository.
+
+### Container worker in WSL2 (working, not the default)
+
+- `worker/Dockerfile`: Temurin 17 and Robocode 1.11.1 (setup jar checked by SHA-256), base images pinned by digest,
+  nothing of ours. `worker/run.sh` is the entry point: a fresh Robocode home on a tmpfs, the CPU constant kept in a
+  state directory, the minimal environment for the battle JVM.
+- `worker/remote.sh` runs one harness main class from the Mac: rsync of the bundle, `docker build` if the Dockerfile
+  or the setup jar changed, `docker run` with no network, a read-only root, no capabilities and a process limit,
+  then the results back into `harness/build/remote/<name>/`.
+- The `remote*` tasks wrap it: `-PremoteHost` (default `ogi-desktop`), `-PremoteCpuset` (pins the container to some
+  cores; a `--cpus` quota pauses the container in bursts and robots skip turns), `-PremoteBattleCore` (pins the
+  battle's application threads to one core).
+- **Why it is not the default:** in the WSL2 VM a thread hand-off between cores, which the engine does twice per
+  robot per turn, costs about 55 µs against about 4 µs natively (`worker/diagnostics/PingPong.java`; 12 µs with
+  Hyper-V's core scheduler). Several battles at once then skip many turns and hit "Unable to stop thread". Docker
+  Desktop's Linux containers run in the same kind of VM.
+
+### Native Windows worker (in progress)
+
+- A standard Windows account runs the harness with its own Java 17, whose network a firewall rule blocks; ssh with
+  a key. So far only the checks exist: `worker/windows/parallel-check.ps1` (one skeleton check, then several
+  comparisons at once, trusted code only) and `worker/windows/load-check.ps1` (several `RecordBattles` processes at
+  once, foreign jars only after their SHA-256 check, skipped turns and GC pauses per process).
+- On Windows, `java.io.File` turns a robot's `jar:file:/…!` URL into backslashes; `BattleRunner` converts them back.
+
+### Several battles at once
+
+A robot skips a turn when it does not finish within the CPU constant, measured once on an idle machine, in wall
+time. Under load every competing thread counts against it. Measured on 2026-10-09 (Ryzen 7 9800X3D, 8 cores, 16
+logical, Windows, native):
+
+- One battle JVM takes about 1.7 logical CPUs: about 1 for the battle and 0.6–0.8 for the JIT, because Robocode
+  loads the robots' classes with a new class loader in every battle and the JIT compiles them again.
+- With the default JVM options, heavy robots skip hundreds of turns per 30 battles at 8 battles at once. Concurrent
+  collectors (ZGC, Shenandoah) make it worse; Serial GC, fewer compiler threads and C1 only make it better.
+- **Recommended for parallel runs:** battle JVMs with `-XX:+UseSerialGC -XX:TieredStopAtLevel=1`, 12 battles at
+  once, and the CPU constant raised ×1.5 over the median of several idle measurements under the same options
+  (Robocode reads it only from `config/robocode.properties`). A heavy robot then skips as many turns as alone on an
+  idle machine. A raised constant costs no throughput, because the engine waits only until a robot finishes its
+  turn.
+
+### Determinism across machines
+
+The same seed gives the same battle on an arm64 Mac (Homebrew 17.0.19) and on x86_64 (Temurin 17.0.20.1) up to the
+last bit of some doubles: turns and events agreed in all deterministic probe recordings, but their digests differ.
+Results from different machines agree statistically, not bit for bit. Gun logs from one machine still replay with
+full parity on the other.
+

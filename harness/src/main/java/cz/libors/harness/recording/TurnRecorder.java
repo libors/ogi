@@ -25,6 +25,7 @@ import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Set;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -51,6 +52,9 @@ import java.util.zip.GZIPOutputStream;
  * t + 1. Explosions are left out. Debug properties of dead robots are left out: the engine does not wait for a dead
  * robot's last turn, so they would race with the snapshot.
  *
+ * <p>A recording can be limited to some debug properties: then it has no {@code r} and {@code b} records and only
+ * the {@code d} records with those keys, e.g. the gun's log for the gun bench.
+ *
  * <p>The engine swallows listener exceptions, so failures are kept and rethrown by {@link #close()}.
  */
 public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
@@ -59,20 +63,31 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
     public static final int VERSION = 1;
 
     private final BattleSetup setup;
+    private final Set<String> debugKeys;
     private final MessageDigest digest;
     private final Writer out;
     private final StringBuilder line = new StringBuilder(256);
     private Exception failure;
     private String hexDigest;
 
-    private TurnRecorder(BattleSetup setup, MessageDigest digest, Writer out) {
+    private TurnRecorder(BattleSetup setup, Set<String> debugKeys, MessageDigest digest, Writer out) {
         this.setup = setup;
+        this.debugKeys = debugKeys;
         this.digest = digest;
         this.out = out;
     }
 
     /** Opens a recording of {@code setup}, which must carry a seed so the recording can be replayed. */
     public static TurnRecorder open(Path file, BattleSetup setup) throws IOException {
+        return open(file, setup, null);
+    }
+
+    /**
+     * Opens a recording of {@code setup}, which must carry a seed so the recording can be replayed.
+     *
+     * @param debugKeys if not null, only the debug properties with these keys are recorded, and no robots and bullets
+     */
+    public static TurnRecorder open(Path file, BattleSetup setup, Set<String> debugKeys) throws IOException {
         if (setup.seed() == null) {
             throw new IllegalArgumentException("A recorded battle needs a seed: " + setup.label());
         }
@@ -86,7 +101,7 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
         Writer out = new BufferedWriter(new OutputStreamWriter(new DigestOutputStream(
                 new GZIPOutputStream(new BufferedOutputStream(Files.newOutputStream(file)), 1 << 16), digest),
                 StandardCharsets.UTF_8), 1 << 16);
-        return new TurnRecorder(setup, digest, out);
+        return new TurnRecorder(setup, debugKeys == null ? null : Set.copyOf(debugKeys), digest, out);
     }
 
     @Override
@@ -129,6 +144,25 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
     private void writeTurn(ITurnSnapshot snapshot) throws IOException {
         int round = snapshot.getRound();
         int turn = snapshot.getTurn();
+        if (debugKeys == null) {
+            writeRobotsAndBullets(snapshot, round, turn);
+        }
+        for (IRobotSnapshot r : snapshot.getRobots()) {
+            IDebugProperty[] properties = r.getDebugProperties();
+            if (properties == null || r.getState() == RobotState.DEAD) {
+                continue;
+            }
+            for (IDebugProperty p : properties) {
+                if (debugKeys != null && !debugKeys.contains(p.getKey())) {
+                    continue;
+                }
+                start("d").field(round).field(turn).field(r.getRobotIndex()).field(p.getKey()).field(p.getValue())
+                        .end();
+            }
+        }
+    }
+
+    private void writeRobotsAndBullets(ITurnSnapshot snapshot, int round, int turn) throws IOException {
         for (IRobotSnapshot r : snapshot.getRobots()) {
             start("r").field(round).field(turn).field(r.getRobotIndex()).field(r.getState().name())
                     .field(r.getX()).field(r.getY()).field(r.getBodyHeading()).field(r.getVelocity())
@@ -142,16 +176,6 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
             start("b").field(round).field(turn).field(b.getOwnerIndex()).field(b.getBulletId())
                     .field(b.getState().name()).field(b.getPower()).field(b.getX()).field(b.getY())
                     .field(b.getHeading()).field(b.getVictimIndex()).end();
-        }
-        for (IRobotSnapshot r : snapshot.getRobots()) {
-            IDebugProperty[] properties = r.getDebugProperties();
-            if (properties == null || r.getState() == RobotState.DEAD) {
-                continue;
-            }
-            for (IDebugProperty p : properties) {
-                start("d").field(round).field(turn).field(r.getRobotIndex()).field(p.getKey()).field(p.getValue())
-                        .end();
-            }
         }
     }
 

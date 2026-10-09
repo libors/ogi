@@ -135,14 +135,16 @@ public final class BattleRunner implements AutoCloseable {
 
     /**
      * The jar of a robot or team. {@code getJarFile()} is never null: it is the repository root's URL wrapped in a
-     * {@code File}, {@code jar:file:/…/X.jar!} for a jar (engine-model G-42).
+     * {@code File}, {@code jar:file:/…/X.jar!} for a jar (engine-model G-42). On Windows the {@code File} turns the
+     * URL's slashes into backslashes, which a URI does not accept.
      */
     private static Optional<Path> jarPath(RobotSpecification robot) {
         String root = robot.getJarFile().getPath();
         if (!root.startsWith("jar:") || !root.endsWith("!")) {
             return Optional.empty();
         }
-        return Optional.of(Path.of(URI.create(root.substring("jar:".length(), root.length() - 1))));
+        String url = root.substring("jar:".length(), root.length() - 1).replace('\\', '/');
+        return Optional.of(Path.of(URI.create(url)));
     }
 
     @Override

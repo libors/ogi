@@ -21,6 +21,13 @@ val engineTest: SourceSet = sourceSets.create("engineTest") {
     runtimeClasspath += sourceSets.main.get().output
 }
 
+// The offline gun bench: replays the gun's logs through the bot's own gun model. Like engineTest it needs the bot's
+// classes, which must never be on the classpath of a battle JVM (Robocode would take them from there).
+val gunBench: SourceSet = sourceSets.create("gunBench") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+
 dependencies {
     // Compile against the published API; at runtime the official installation's libs are used.
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")
@@ -34,6 +41,8 @@ dependencies {
     "engineTestImplementation"(platform("org.junit:junit-bom:6.1.3"))
     "engineTestImplementation"("org.junit.jupiter:junit-jupiter")
     "engineTestRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+
+    "gunBenchImplementation"(project(":bot"))
 
     decompiler("org.vineflower:vineflower:1.12.0")
 }
@@ -215,7 +224,8 @@ val checkForeignJars = tasks.register<JavaExec>("checkForeignJars") {
 val deployBots = tasks.register<Copy>("deployBots") {
     group = "robocode"
     description = "Copies our robot, team, probe and baseline jars and the approved foreign jars into the installation."
-    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":probe:probeJar", baselineJars, checkForeignJars)
+    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar", ":probe:probeJar", baselineJars,
+        checkForeignJars)
     val robotsDir = robocodeHome.dir("robots").asFile
     val approved = approvedForeignJars()
     val foreign = foreignDir.asFile
@@ -285,6 +295,8 @@ tasks.register<JavaExec>("sandboxCheck") {
     group = "verification"
     description = "Checks that robots run in Robocode's sandbox with a minimal environment, and the jar check."
     onRobocode("cz.libors.harness.SandboxCheck")
+    // Debug mode changes no security rule; the engine waits for the dying probe's report (engine-model G-34).
+    jvmArgs("-Ddebug=true")
     // A security violation bans the robot in the repository, and the robot database could keep the ban.
     val database = robocodeHome.file("robots/robot.database").asFile
     doFirst {
@@ -313,53 +325,100 @@ val recordProbes = tasks.register<JavaExec>("recordProbes") {
     args(robocodeHome.asFile.absolutePath, botVersion, recordings.absolutePath)
 }
 
-tasks.register<JavaExec>("compare") {
-    group = "verification"
-    description = "Paired, sequential comparison of a baseline and a candidate bot version; see docs/harness.md."
-    onRobocode("cz.libors.harness.compare.Compare")
+/**
+ * Compare's arguments for a run whose Robocode home is [home], which sees a repository path (the opponent set) at
+ * [file] of it and writes to [out].
+ */
+fun compareArguments(home: String, file: (String) -> String, out: () -> String): () -> List<String> {
     val baseline = providers.gradleProperty("baseline")
     val candidate = providers.gradleProperty("candidate")
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/sample-1v1.txt")
-    val out = providers.gradleProperty("out").orElse("harness/build/compare")
     val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
-    val root = rootDir
-    argumentProviders.add(CommandLineArgumentProvider {
+    return {
         val baselineValue = baseline.orNull ?: throw GradleException("Pass -Pbaseline=<git revision or version>")
         listOf(
-            robocodeHome.asFile.absolutePath,
+            home,
             "robot=cz.libors.Ogi",
             "team=cz.libors.OgiTeam",
             "baseline=" + versionOf(baselineValue),
             "candidate=" + (candidate.orNull?.let(::versionOf) ?: botVersion),
-            "opponents=" + root.resolve(opponents.get()).absolutePath,
-            "out=" + root.resolve(out.get()).absolutePath,
+            "opponents=" + file(opponents.get()),
+            "out=" + out(),
         ) + passed
-    })
+    }
+}
+
+/** RecordBattles' arguments for [robot], placed like [compareArguments]; with [keys], only those debug properties. */
+fun recordArguments(robot: String, keys: String?, home: String, file: (String) -> String, out: () -> String):
+    () -> List<String> {
+    val versions = providers.gradleProperty("versions")
+    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
+    val passed = listOf("only", "pairs", "seed", "rounds", "starts")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    return {
+        val versionList = (versions.orNull ?: throw GradleException("Pass -Pversions=<revision or version>,..."))
+            .split(",").map(::versionOf)
+        listOf(
+            home,
+            "robot=$robot",
+            "versions=" + versionList.joinToString(","),
+            "opponents=" + file(opponents.get()),
+            "out=" + out(),
+        ) + passed + listOfNotNull(keys?.let { "keys=$it" })
+    }
+}
+
+/** A repository path as a local run sees it. */
+fun localFile(path: String): String = rootDir.resolve(path).absolutePath
+
+tasks.register<JavaExec>("compare") {
+    group = "verification"
+    description = "Paired, sequential comparison of a baseline and a candidate bot version; see docs/harness.md."
+    onRobocode("cz.libors.harness.compare.Compare")
+    val out = providers.gradleProperty("out").orElse("harness/build/compare")
+    val arguments = compareArguments(robocodeHome.asFile.absolutePath, ::localFile) { localFile(out.get()) }
+    argumentProviders.add(CommandLineArgumentProvider { arguments() })
+}
+
+/** Runs RecordBattles for [robot] on comparison seeds; with [keys], only those debug properties are recorded. */
+fun JavaExec.recordsBattles(robot: String, defaultOut: String, keys: String?) {
+    onRobocode("cz.libors.harness.compare.RecordBattles")
+    // Debug mode, as in recordProbes: no robot can skip a turn, so a recording does not depend on machine load.
+    jvmArgs("-Ddebug=true")
+    val out = providers.gradleProperty("out").orElse(defaultOut)
+    val arguments = recordArguments(robot, keys, robocodeHome.asFile.absolutePath, ::localFile) {
+        localFile(out.get())
+    }
+    argumentProviders.add(CommandLineArgumentProvider { arguments() })
 }
 
 tasks.register<JavaExec>("recordBattles") {
     group = "verification"
     description = "Records comparison battles turn by turn, on the seeds compare uses; see docs/harness.md."
-    onRobocode("cz.libors.harness.compare.RecordBattles")
-    // Debug mode, as in recordProbes: no robot can skip a turn, so a recording does not depend on machine load.
-    jvmArgs("-Ddebug=true")
-    val versions = providers.gradleProperty("versions")
-    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val out = providers.gradleProperty("out").orElse("harness/build/battle-recordings")
-    val passed = listOf("only", "pairs", "seed", "rounds", "starts")
+    recordsBattles("cz.libors.Ogi", "harness/build/battle-recordings", null)
+}
+
+tasks.register<JavaExec>("recordGunLogs") {
+    group = "verification"
+    description = "Records the gun's log of comparison battles for the gun bench; see docs/harness.md."
+    // OgiGunLog plays like Ogi and logs its gun; only the working tree has its jar (bot/build/robots).
+    recordsBattles("cz.libors.OgiGunLog", "harness/build/gun-logs", "gunshot,gunpass")
+}
+
+tasks.register<JavaExec>("gunBench") {
+    group = "verification"
+    description = "Replays recorded gun logs with given gun parameters and reports hit rates; see docs/harness.md."
+    mainClass = "cz.libors.harness.gunbench.GunBench"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = gunBench.runtimeClasspath
+    jvmArgs("-Xmx4g")
+    val logs = providers.gradleProperty("logs").orElse("harness/build/gun-logs/$botVersion")
+    val passed = listOf("weights", "neighbourScale", "maxNeighbours", "virtualWeight", "minTries")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val root = rootDir
     argumentProviders.add(CommandLineArgumentProvider {
-        val versionList = (versions.orNull ?: throw GradleException("Pass -Pversions=<revision or version>,..."))
-            .split(",").map(::versionOf)
-        listOf(
-            robocodeHome.asFile.absolutePath,
-            "robot=cz.libors.Ogi",
-            "versions=" + versionList.joinToString(","),
-            "opponents=" + root.resolve(opponents.get()).absolutePath,
-            "out=" + root.resolve(out.get()).absolutePath,
-        ) + passed
+        listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) + passed
     })
 }
 
@@ -411,4 +470,105 @@ tasks.register<Test>("engineTest") {
         showStandardStreams = true
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
+}
+
+// The remote worker (docs/build-and-run.md, "Remote worker"): a bundle built from the working tree is synced to the
+// worker and run there in a container without network (worker/). Results come back to harness/build/remote/.
+
+val harnessJar = tasks.register<Jar>("harnessJar") {
+    description = "Packages the harness's main classes for the remote worker."
+    archiveFileName = "harness.jar"
+    destinationDirectory = layout.buildDirectory.dir("libs")
+    from(sourceSets.main.map { it.output })
+}
+
+val workerBundle = tasks.register<Sync>("workerBundle") {
+    group = "robocode"
+    description = "Assembles the remote worker's bundle from the working tree into harness/build/worker-bundle/."
+    dependsOn(":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar", ":probe:probeJar", baselineJars, downloadRobocode)
+    into(layout.buildDirectory.dir("worker-bundle"))
+    from(harnessJar) { into("lib") }
+    from(project(":bot").layout.buildDirectory.dir("robots")) { into("robots") }
+    from(project(":probe").layout.buildDirectory.dir("robots")) { into("robots") }
+    from(baselinesDir) { into("robots") }
+    from(layout.projectDirectory.dir("opponents")) { into("harness/opponents") }
+    from(rootProject.layout.projectDirectory.dir("worker")) { into("worker") }
+    from(setupJar) { into("worker") }
+}
+
+// Paths inside the worker's container (worker/remote.sh mounts them).
+val remoteHome = "/ogi/robocode-run"
+val remoteBundle = "/ogi/bundle"
+
+/** A repository path as the container sees it; `rumble:<file>` is a file in the worker's ~/ogi/rumble. */
+fun remoteFile(path: String): String =
+    if (path.startsWith("rumble:")) "/ogi/rumble/" + path.removePrefix("rumble:") else "$remoteBundle/$path"
+
+/**
+ * Runs a harness main class on the remote worker (`-PremoteHost`, default `ogi-desktop`) with worker/remote.sh,
+ * under the name [name]: the container writes to /ogi/out/<name>, which comes back to harness/build/remote/<name>.
+ * [jvm] are extra JVM options; [clean] empties the run's directory first. `-PremoteCpuset` pins the container to
+ * some cores, e.g. `0-1` (default: all); `-PremoteBattleCore` pins the battle's threads to one core (worker/run.sh).
+ */
+fun Exec.onRemote(name: String, main: String, jvm: String, clean: Boolean, arguments: () -> List<String>) {
+    group = "remote"
+    dependsOn(workerBundle)
+    val host = providers.gradleProperty("remoteHost").orElse("ogi-desktop")
+    val bundle = layout.buildDirectory.dir("worker-bundle").get().asFile
+    val results = layout.buildDirectory.dir("remote").get().asFile
+    val script = rootDir.resolve("worker/remote.sh")
+    executable = "bash"
+    environment("OGI_ROBOCODE_VERSION", robocodeVersion)
+    environment("OGI_ROBOCODE_SHA256", robocodeSetupSha256)
+    environment("OGI_JVM_OPTIONS", jvm)
+    environment("OGI_CLEAN", if (clean) "1" else "")
+    environment("OGI_CPUSET", providers.gradleProperty("remoteCpuset").getOrElse(""))
+    environment("OGI_BATTLE_CORE", providers.gradleProperty("remoteBattleCore").getOrElse(""))
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf(script.absolutePath, host.get(), bundle.absolutePath, results.absolutePath, name, main) + arguments()
+    })
+}
+
+tasks.register<Exec>("remoteSkeletonCheck") {
+    description = "Runs skeletonCheck on the remote worker."
+    onRemote("skeleton-check", "cz.libors.harness.SkeletonCheck", "", true) {
+        listOf(remoteHome, "cz.libors.Ogi $botVersion", "cz.libors.OgiTeam $botVersion",
+            "/ogi/out/skeleton-check/skeleton-check.json")
+    }
+}
+
+tasks.register<Exec>("remoteSandboxCheck") {
+    description = "Runs sandboxCheck on the remote worker, in its container."
+    onRemote("sandbox-check", "cz.libors.harness.SandboxCheck", "-Ddebug=true", true) {
+        listOf(remoteHome, botVersion, "$remoteBundle/robots/cz.libors.Ogi_$botVersion.jar",
+            "$remoteBundle/robots/cz.libors.probe_$botVersion.jar")
+    }
+}
+
+tasks.register<Exec>("remoteRecordProbes") {
+    description = "Runs recordProbes on the remote worker; compare its digests with the local ones (remoteDigests)."
+    // Debug mode, as locally.
+    onRemote("recordings", "cz.libors.harness.ProbeRecordings", "-Ddebug=true", true) {
+        listOf(remoteHome, botVersion, "/ogi/out/recordings")
+    }
+}
+
+tasks.register<Exec>("remoteCompare") {
+    description = "Runs compare on the remote worker; the log there resumes like a local one."
+    val arguments = compareArguments(remoteHome, ::remoteFile) { "/ogi/out/compare" }
+    onRemote("compare", "cz.libors.harness.compare.Compare", "", false, arguments)
+}
+
+tasks.register<Exec>("remoteRecordBattles") {
+    description = "Runs recordBattles on the remote worker."
+    val arguments = recordArguments("cz.libors.Ogi", null, remoteHome, ::remoteFile) { "/ogi/out/battle-recordings" }
+    onRemote("battle-recordings", "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false, arguments)
+}
+
+tasks.register<Exec>("remoteRecordGunLogs") {
+    description = "Runs recordGunLogs on the remote worker."
+    val arguments = recordArguments("cz.libors.OgiGunLog", "gunshot,gunpass", remoteHome, ::remoteFile) {
+        "/ogi/out/gun-logs"
+    }
+    onRemote("gun-logs", "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false, arguments)
 }

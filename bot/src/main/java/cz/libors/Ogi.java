@@ -4,6 +4,8 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.CircularAim;
 import cz.libors.ogi.gun.GuessFactorGun;
+import cz.libors.ogi.gun.GunLog;
+import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.move.OrbitMovement;
 import cz.libors.ogi.move.WaveSurfer;
 import cz.libors.ogi.physics.EngineRobot;
@@ -90,14 +92,39 @@ public class Ogi extends TeamRobot {
         steerRadar(target.orElse(null), now);
         if (target.isEmpty()) {
             gun.update(now, getX(), getY(), null);
+            logPassedWaves();
             return;
         }
         EnemyState t = target.get();
         double[] next = move(t, now);
         boolean fired = fire(t, now);
         gun.update(now, getX(), getY(), fired ? t.name() : null);
+        logPassedWaves();
         aim(t, now, next[0], next[1]);
         gun.planView(t.name(), now).ifPresent(v -> setDebugProperty("gun", Trace.gunLine(v, fired)));
+        if (logsGun()) {
+            gun.plan(t.name(), now).ifPresent(p -> setDebugProperty(GunLog.SHOT, GunLog.line(p.shot(),
+                    p.decision())));
+        }
+    }
+
+    /**
+     * Whether the gun's inputs and decisions go to debug properties for the offline gun bench ({@link GunLog}). Only
+     * {@link OgiGunLog} logs: formatting them costs about a tenth of a turn's time while the JVM is cold, and nothing
+     * reads them in a rumble.
+     */
+    protected boolean logsGun() {
+        return false;
+    }
+
+    /** The gun waves that passed in this turn, logged before the turn's plan. */
+    private void logPassedWaves() {
+        if (!logsGun()) {
+            return;
+        }
+        for (GunModel.Pass pass : gun.passed()) {
+            setDebugProperty(GunLog.PASS, GunLog.line(pass));
+        }
     }
 
     private void steerRadar(EnemyState target, long now) {

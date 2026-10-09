@@ -19,11 +19,14 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   against an opponent set (`docs/harness.md`).
 - `./gradlew recordBattles -Pversions=HEAD,0.1`: turn-by-turn recordings of comparison battles, with the gun's
   plans, for debugging (`docs/harness.md`).
+- `./gradlew recordGunLogs -Pversions=0.1` and `./gradlew gunBench [-Pweights=...]`: the offline gun bench; replays
+  the gun's logs of recorded battles with other gun parameters (`docs/harness.md`).
 - Add `-PjavaVersion=21` (or 25) to compile and run battles on another JVM. The default is 17.
 
 ## Layout
 
-- `bot/`: robot code. Java 17 API only (`--release 17`), no external dependencies.
+- `bot/`: robot code. Java 17 API only (`--release 17`), no external dependencies. `cz.libors.OgiGunLog` (Ogi
+  with the gun bench's log) has a jar of its own that never goes to a rumble.
 - `harness/`: battle runner, checks and the turn recorder on the Robocode control API.
 - `probe/`: probe robots for engine recordings; deployed locally only, never to a rumble.
 - `docs/`: read the relevant document before changing that area.
