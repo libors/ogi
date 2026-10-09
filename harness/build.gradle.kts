@@ -422,6 +422,25 @@ tasks.register<JavaExec>("gunBench") {
     })
 }
 
+tasks.register<JavaExec>("dangerBench") {
+    group = "verification"
+    description = "Replays the enemy bullets of full recordings through the surfer's danger model; see docs/harness.md."
+    mainClass = "cz.libors.harness.dangerbench.DangerBench"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = gunBench.runtimeClasspath
+    jvmArgs("-Xmx6g")
+    val recordings = providers.gradleProperty("recordings").orElse("harness/build/battle-recordings/$botVersion")
+    val passed = listOf("robot", "selection", "preset", "weights", "neighbourScale", "maxNeighbours", "bandwidth",
+        "knnShare", "knnRamp", "priorWeight", "simplePrior", "simpleBandwidth", "temper", "decay", "share", "flatPrior",
+        "flatWindow", "tune")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf("recordings=" + recordings.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) +
+            passed.map { if (it.startsWith("selection=")) "selection=" + root.resolve(it.substringAfter('=')).absolutePath else it }
+    })
+}
+
 tasks.register<JavaExec>("gunTrend") {
     group = "verification"
     description = "Compares the gun's hit rate early and late in battles, per opponent, from gun logs (D-022)."
@@ -776,6 +795,27 @@ tasks.register<JavaExec>("submitGunLogs") {
         listOf("state=" + queueDir.absolutePath, "type=record", "robot=cz.libors.OgiGunLog", "version=$version",
             "keys=gunshot,gunpass,gunshield", "opponents=" + localFile(opponents.get()),
             "jar=" + snapshotsDir.file("cz.libors.OgiGunLog_$version.jar").asFile.absolutePath,
+            "port=" + port.get()) + passed
+    })
+}
+
+tasks.register<JavaExec>("submitRecordings") {
+    group = "queue"
+    description = "Queues turn-by-turn recordings of the working tree's Ogi against -Popponents; see docs/harness.md."
+    dependsOn(snapshotJars, installRobocode)
+    mainClass = "cz.libors.harness.queue.Submit"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
+    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
+    val passed = listOf("pairs", "seed", "rounds", "starts", "keys", "note", "timeout")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val versionFile = snapshotVersionFile
+    val port = providers.gradleProperty("port").orElse("8765")
+    argumentProviders.add(CommandLineArgumentProvider {
+        val version = versionFile.get().asFile.readText().trim()
+        listOf("state=" + queueDir.absolutePath, "type=record", "robot=cz.libors.Ogi", "version=$version",
+            "opponents=" + localFile(opponents.get()),
+            "jar=" + snapshotsDir.file("cz.libors.Ogi_$version.jar").asFile.absolutePath,
             "port=" + port.get()) + passed
     })
 }

@@ -62,7 +62,7 @@ class GunTest {
 
     @Test
     void directionFollowsTheLateralVelocity() {
-        EnemyHistory h = new EnemyHistory();
+        RobotHistory h = new RobotHistory();
         // East of the origin, heading north: counter-clockwise around the origin.
         h.add(1, 600, 300, Math.PI / 2, 8);
         double[] out = new double[TargetingFeatures.COUNT];
@@ -76,7 +76,7 @@ class GunTest {
 
     @Test
     void historyTracksReversalsDecelerationAndTurning() {
-        EnemyHistory h = new EnemyHistory();
+        RobotHistory h = new RobotHistory();
         h.add(10, 100, 100, 0, 8);
         h.add(11, 108, 100, 0.1, 8);
         h.add(12, 114, 100, 0.2, 6);
@@ -88,5 +88,27 @@ class GunTest {
         h.add(14, 111, 100, 0.2, -1);
         assertEquals(1, h.turnsSinceReversal());
         assertEquals(11, h.displacement(10), 1e-12);
+    }
+
+    /** The surfer asks how we moved when the enemy aimed, a few turns ago: the history as it was then. */
+    @Test
+    void historyUntilATurnIsTheHistoryAsItWasThen() {
+        RobotHistory h = new RobotHistory();
+        RobotHistory then = null;
+        for (long t = 0; t < 60; t++) {
+            double v = t % 17 < 9 ? 8 : -6;
+            h.add(t, 100 + t, 200, 0.01 * t, v);
+            if (t == 45) {
+                then = h.until(t + 100);
+            }
+        }
+        RobotHistory copy = h.until(45);
+        assertEquals(45, copy.time());
+        assertEquals(then.turnsSinceReversal(), copy.turnsSinceReversal());
+        assertEquals(then.turnsSinceDeceleration(), copy.turnsSinceDeceleration());
+        assertEquals(then.acceleration(), copy.acceleration(), 1e-12);
+        assertEquals(then.turnRate(), copy.turnRate(), 1e-12);
+        assertEquals(then.displacement(10), copy.displacement(10), 1e-12);
+        assertTrue(h.until(10).isEmpty(), "older than the stored states");
     }
 }

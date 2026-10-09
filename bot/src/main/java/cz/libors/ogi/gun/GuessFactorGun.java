@@ -70,7 +70,7 @@ public final class GuessFactorGun {
     }
 
     private static final class Target {
-        final EnemyHistory history = new EnemyHistory();
+        final RobotHistory history = new RobotHistory();
         final List<GunWave> waves = new ArrayList<>();
         final GunModel model;
         int direction = 1;

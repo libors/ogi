@@ -22,6 +22,7 @@ results. Every score claim about the bot must come from here.
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
 | `compare.RecordBattles` | Records the battles of a comparison turn by turn; see [Recording comparison battles](#recording-comparison-battles) |
 | `gunbench.GunBench`, `gunbench.GunBattle`, `gunbench.GunReplay` | The offline gun bench (source set `gunBench`): replays the gun's logs with other gun parameters; see [Gun bench](#gun-bench) |
+| `dangerbench.DangerBench`, `dangerbench.DangerBattle`, `dangerbench.DangerReplay` | The offline danger bench (source set `gunBench` too): replays the enemy bullets of full recordings through the surfer's danger model; see [Danger bench](#danger-bench) |
 | `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
 | `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
 | `foreign.JarCheck`, `foreign.ApiRules`, `foreign.ClassFile` | Checks a robot jar against an allowlist of the JDK and Robocode APIs before it runs |
@@ -352,6 +353,46 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   - A replayed aim the turret could not have reached in time would not have been fired that turn; the replay fires
     it anyway.
 
+## Danger bench
+
+The danger bench scores the surfer's danger model ([bot.md](bot.md#movement-czliborsogimove)) on where the enemy
+really aimed. A full recording holds every enemy bullet's heading, also of the bullets that missed, which the bot
+never sees. The bench replays each battle through the bot's own `DangerModel`, `TargetingFeatures` and
+`RobotHistory`, with given `DangerParameters`.
+
+```sh
+./gradlew submitRecordings -Popponents=<set> -Ppairs=2       # full recordings, on the queue
+./gradlew dangerBench -Precordings=.robocode/queue/jobs/<id>/recordings/<version> -Ppreset=histogram
+./gradlew dangerBench -Precordings=<dir> -PknnShare=0.8 -PknnRamp=20 -Ptune=4
+```
+
+- **Input:** full recordings (`recordBattles`, `submitRecordings`) of `cz.libors.Ogi` (`-Probot`) in 1v1. Gun logs
+  have no robots or bullets.
+- **Replay** (`DangerBattle`, `DangerReplay`): every enemy bullet becomes a wave as the surfer sees one with radar
+  lock ([fire-detection.md](fire-detection.md)): detected in its first recorded turn f, fired in f − 1 from the
+  enemy's position then, aimed from our state of f − 2. In each turn the model first learns the bullets that ended
+  on us or on one of our bullets after their wave appeared, then gives each new wave its profile. One model per
+  battle, as the bot keeps one per enemy for the battle.
+- **Score per bullet:** the profile's share over the bullet's guess factor ± half our width seen from the origin
+  (`DangerModel.mass`, the sum the surfer takes over a hit range). The report gives per opponent the mean
+  logarithm of that share (`mean ln`, higher is better; a uniform profile scores about −2.75), its mean (`mass %`)
+  and its mean over the bullets that hit us (`hits %`); then the mean over opponents, per stratum with
+  `-Pselection=<tsv>` (columns `stratum` and `name`).
+- **Parameters:** `-Ppreset=default|histogram` (`DangerParameters.DEFAULT` or the single histogram the surfer had
+  until 2026-10-09), then `weights` (10, in the order of `TargetingFeatures`), `neighbourScale`, `maxNeighbours`,
+  `bandwidth`, `knnShare`, `knnRamp`, `priorWeight`, and the ensemble's `simplePrior`, `simpleBandwidth`, `temper`,
+  `decay`, `share`, `flatPrior`, `flatWindow`.
+- **Simple guns and the flattener:** a shot also carries where the `SimpleAims` would have aimed, from the enemy's
+  recorded position of turn f − 2. A wave that passes us (`HitRange` over our recorded positions, as the surfer
+  advances it) teaches the flattener where we were, unless the surfer had dropped it on learning its bullet.
+- **`-Ptune=<passes>`:** a coordinate search from the given parameters that maximises the mean over opponents of
+  `mean ln` on the recordings of pair 0, and reports the start, the result and the histogram on pair 0 and on the
+  other pairs (other seeds).
+- **Limits:**
+  - The recorded movement came from the recorded bot's surfer. Another model moves us elsewhere, and a learning gun
+    then learns other things; the bench shows how well a model predicts, not the score. `compare` decides.
+  - Fire detection is taken as exact; the bot misses about 0.1 % of the shots with radar lock.
+
 ## Foreign robots
 
 A foreign robot is any robot or team that is neither ours (`cz.libors.*`) nor one of Robocode's sample robots
@@ -513,8 +554,10 @@ configuration line, so its `battles.tsv` reads like a local one:
 
 `./gradlew submitGunLogs -Popponents=<set> -Ppairs=2` queues the gun's logs of the working tree (a snapshot's
 `OgiGunLog`, keys `gunshot,gunpass,gunshield`) against a set, on the seeds of `compare` and `recordBattles`; `gunBench
--Plogs=.robocode/queue/jobs/<id>/recordings/<version>` then replays them here. The job type `record` takes any robot
-and keys (`queue.Submit`).
+-Plogs=.robocode/queue/jobs/<id>/recordings/<version>` then replays them here. `./gradlew submitRecordings
+-Popponents=<set> -Ppairs=2` queues full recordings of the working tree's `Ogi` (robots, bullets and every debug
+property, about 2.3 MB per 1v1 battle; `-Pkeys` keeps only those debug properties and drops robots and bullets). The
+job type `record` takes any robot and keys (`queue.Submit`).
 
 - Each battle runs on any free slot; the slot records it into a temporary file and sends it back in Base64 inside
   its result, so the worker keeps nothing. The job writes `recordings/<version>/<opponent>_p<pair>.rec.gz` and a line

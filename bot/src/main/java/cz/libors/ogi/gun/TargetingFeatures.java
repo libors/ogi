@@ -30,7 +30,7 @@ public final class TargetingFeatures {
      * @param lastDirection the direction to use while the target has no lateral velocity
      * @return the direction, +1 or −1
      */
-    public static int compute(double ox, double oy, EnemyHistory target, double bulletSpeed, Field field,
+    public static int compute(double ox, double oy, RobotHistory target, double bulletSpeed, Field field,
                               int lastDirection, double[] out) {
         double distance = Math.hypot(target.x() - ox, target.y() - oy);
         double bearing = Angles.bearing(ox, oy, target.x(), target.y());

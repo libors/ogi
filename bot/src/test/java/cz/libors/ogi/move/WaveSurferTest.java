@@ -2,6 +2,7 @@ package cz.libors.ogi.move;
 
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
+import cz.libors.ogi.gun.TargetingFeatures;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.wave.Wave;
 import org.junit.jupiter.api.Test;
@@ -17,17 +18,49 @@ class WaveSurferTest {
 
     @Test
     void dangerIsTheShareOfAimBetweenTwoGuessFactors() {
-        DangerStats stats = new DangerStats();
-        assertEquals(1, stats.danger(-1, 1), 1e-12);
-        double head = stats.danger(-0.05, 0.05);
-        double side = stats.danger(0.6, 0.7);
+        DangerModel model = new DangerModel(DangerParameters.HISTOGRAM);
+        double[] situation = new double[TargetingFeatures.COUNT];
+        double[] prior = model.profile(situation);
+        assertEquals(1, DangerModel.mass(prior, -1, 1), 1e-12);
+        double head = DangerModel.mass(prior, -0.05, 0.05);
+        double side = DangerModel.mass(prior, 0.6, 0.7);
         assertTrue(head > 5 * side, "the prior is a gun aiming straight at us: " + head + " vs " + side);
         for (int i = 0; i < 20; i++) {
-            stats.hit(0.65);
+            model.learn(situation, 0.65);
         }
-        assertTrue(stats.danger(0.6, 0.7) > stats.danger(-0.05, 0.05));
-        assertEquals(DangerStats.BINS / 2, DangerStats.bin(0));
-        assertEquals(DangerStats.BINS - 1, DangerStats.bin(5));
+        double[] learned = model.profile(situation);
+        assertTrue(DangerModel.mass(learned, 0.6, 0.7) > DangerModel.mass(learned, -0.05, 0.05));
+        assertEquals(DangerModel.BINS / 2, DangerModel.bin(0));
+        assertEquals(DangerModel.BINS - 1, DangerModel.bin(5));
+    }
+
+    /**
+     * A linear gun aims where our lateral velocity takes us: far ahead while we drive, straight at us while we stand.
+     * One histogram of all its bullets fears both; the nearest bullets tell the two situations apart.
+     */
+    @Test
+    void theNearestBulletsSeparateSituations() {
+        double[] weights = DangerParameters.HISTOGRAM.weights();
+        DangerParameters knn = new DangerParameters(weights, 1, 50, 1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1000);
+        double[] driving = new double[TargetingFeatures.COUNT];
+        double[] standing = new double[TargetingFeatures.COUNT];
+        driving[1] = 1;
+        DangerModel histogram = new DangerModel(DangerParameters.HISTOGRAM);
+        DangerModel nearest = new DangerModel(knn);
+        for (int i = 0; i < 30; i++) {
+            for (DangerModel m : new DangerModel[] {histogram, nearest}) {
+                m.learn(driving, 0.9);
+                m.learn(standing, 0);
+            }
+        }
+        double[] h = histogram.profile(driving);
+        double[] n = nearest.profile(driving);
+        assertTrue(DangerModel.mass(h, -0.05, 0.05) > 0.2, "the histogram fears standing still too");
+        assertTrue(DangerModel.mass(n, 0.85, 0.95) > 5 * DangerModel.mass(n, -0.05, 0.05),
+                "driving: the nearest bullets went ahead");
+        double[] still = nearest.profile(standing);
+        assertTrue(DangerModel.mass(still, -0.05, 0.05) > 5 * DangerModel.mass(still, 0.85, 0.95),
+                "standing: the nearest bullets came straight at us");
     }
 
     /**

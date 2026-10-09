@@ -252,6 +252,18 @@ to-test.
     verified in the bytecode; observed 2026-10-09: an Ogi variant that spun 1.2 ms per turn took up to 2.09 ms with a
     constant of 1.73 ms and skipped no turn. No dedicated test yet.
 
+## Scoring
+
+- **G-46 Kill bonuses count all the damage dealt this round.**
+  - **What:** a robot that kills another gets 20 % (by a bullet) or 30 % (by a ram) of all the damage it dealt that
+    robot in the round, bullets and rams together: both go to one damage map per robot, which the round start
+    clears. A ram scores 1.2 for the robot at fault (2 per point of its 0.6 damage). In a team the bonus sums the
+    damage that all of the killer's teammates dealt the victim.
+  - **Bites when:** valuing a ram kill: it is worth 10 % of the damage dealt more than a bullet kill, not 30 %.
+  - **Source:** `RobotStatistics.scoreBulletDamage`, `scoreRammingDamage`, `scoreBulletKill`, `scoreRammingKill`,
+    `resetScores` (bytecode of Robocode 1.11.1, 2026-10-09); the RoboWiki's Robocode Scoring page agrees.
+    · **Status:** verified; to-test.
+
 ## Teams and isolation
 
 - **G-22 No shared memory between teammates:** each robot has its own classloader and its own statics.

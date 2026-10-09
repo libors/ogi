@@ -5,6 +5,8 @@ import cz.libors.ogi.enemy.FireDetector;
 import cz.libors.ogi.enemy.Neighbours;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
+import cz.libors.ogi.gun.RobotHistory;
+import cz.libors.ogi.gun.TargetingFeatures;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.trace.Trace;
@@ -23,14 +25,15 @@ import java.util.Optional;
  *
  * <p>Enemy waves come from {@link FireDetector}. A wave's frame is the bearing from its origin to where we were at the
  * end of the turn before the shot, which is what the enemy aimed with, and our lateral direction then. Bullets that hit
- * us, or that one of our bullets hit, teach the enemy's {@link DangerStats}.
+ * us, or that one of our bullets hit, teach the enemy's {@link DangerModel}, together with how we moved when it aimed
+ * ({@link TargetingFeatures} of our own history). A new wave gets the model's profile for that situation.
  *
  * <p>For the nearest wave the surfer predicts three ways to move until the wave has passed: orbiting its origin either
  * way, or stopping. The prediction runs the engine's own rules ({@link RobotMotion}), and {@link HitRange} gives the
- * guess factors that would hit us on each path. The way with the least danger wins, and its first turn's commands
- * are returned.
+ * guess factors that would hit us on each path. The way with the least danger in the wave's profile wins, and its
+ * first turn's commands are returned.
  *
- * <p>Danger statistics last for the battle (static, per robot, engine-model G-22); waves and detectors are per round.
+ * <p>Danger models last for the battle (static, per robot, engine-model G-22); waves and detectors are per round.
  */
 public final class WaveSurfer {
 
@@ -49,20 +52,26 @@ public final class WaveSurfer {
     /** How closely a bullet's power must match its wave's. */
     private static final double POWER_TOLERANCE = 0.01;
 
-    private static final Map<String, DangerStats> STATS = new HashMap<>();
+    private static final Map<String, DangerModel> MODELS = new HashMap<>();
 
-    /** An enemy wave and the frame its guess factors are measured in. */
+    /** An enemy wave, the frame its guess factors are measured in, and where the enemy is likely to have aimed. */
     private static final class EnemyWave {
         final Wave wave;
         final HitRange range;
         final int direction;
         final double escape;
+        /** Our movement as the enemy saw it when it aimed ({@link TargetingFeatures}). */
+        final double[] features;
+        /** Where the enemy is likely to have aimed, as its {@link DangerModel} saw it when the wave appeared. */
+        final DangerModel.Prediction prediction;
 
-        EnemyWave(Wave wave, HitRange range, int direction) {
+        EnemyWave(Wave wave, HitRange range, int direction, double[] features, DangerModel.Prediction prediction) {
             this.wave = wave;
             this.range = range;
             this.direction = direction;
             this.escape = wave.maxEscapeAngle();
+            this.features = features;
+            this.prediction = prediction;
         }
 
         double guessFactor(double heading) {
@@ -77,6 +86,9 @@ public final class WaveSurfer {
     private final List<EnemyWave> waves = new ArrayList<>();
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
+    private final RobotHistory ours = new RobotHistory();
+    /** Each enemy's scanned positions of recent turns, {x, y}, by turn: where it aimed from. */
+    private final Map<String, Map<Long, double[]>> enemyPositions = new HashMap<>();
     private int lastDirection = 1;
     private int lastOption = ORBIT_LEFT;
 
@@ -89,11 +101,15 @@ public final class WaveSurfer {
     public void ourState(long time, double x, double y, double heading, double velocity) {
         ourStates.put(time, new double[] {x, y, heading, velocity});
         ourStates.remove(time - 64);
+        ours.add(time, x, y, heading, velocity);
     }
 
     /** Our scan of an enemy; a shot it reveals becomes a wave. */
     public void scanned(String name, long time, double x, double y, double velocity, double energy) {
         neighbours.seen(name, time, x, y);
+        Map<Long, double[]> positions = enemyPositions.computeIfAbsent(name, n -> new HashMap<>());
+        positions.put(time, new double[] {x, y});
+        positions.remove(time - 64);
         FireDetector detector = detector(name);
         if (neighbours.nearOther(name, time)) {
             detector.nearOtherRobot();
@@ -130,7 +146,10 @@ public final class WaveSurfer {
         detectors.remove(name);
     }
 
-    /** Advances the waves to our position at the end of turn {@code now} and drops those that have passed us. */
+    /**
+     * Advances the waves to our position at the end of turn {@code now} and drops those that have passed us; where we
+     * were in each of them goes to its shooter's flattener.
+     */
     public void update(long now) {
         double[] us = ourStates.get(now);
         if (us == null) {
@@ -140,6 +159,10 @@ public final class WaveSurfer {
             EnemyWave w = it.next();
             w.range.observe(now, us[0], us[1]);
             if (w.range.passed()) {
+                if (w.range.hits()) {
+                    double middle = (w.range.minOffset() + w.range.maxOffset()) / 2;
+                    model(w.wave.shooter()).visit(w.features, w.direction * middle / w.escape);
+                }
                 it.remove();
             }
         }
@@ -201,10 +224,9 @@ public final class WaveSurfer {
         if (!range.hits()) {
             return 0;
         }
-        DangerStats stats = stats(w.wave.shooter());
         double a = w.direction * range.minOffset() / w.escape;
         double b = w.direction * range.maxOffset() / w.escape;
-        return stats.danger(a, b);
+        return DangerModel.mass(w.prediction.profile(), a, b);
     }
 
     /**
@@ -236,18 +258,25 @@ public final class WaveSurfer {
 
     private void addWave(DetectedShot shot) {
         // The enemy aimed with what it saw at the end of the turn before the shot.
-        double[] us = ourStates.get(shot.fireTime() - 1);
-        if (us == null) {
-            us = ourStates.get(shot.fireTime());
-        }
-        if (us == null) {
+        long aimed = ourStates.containsKey(shot.fireTime() - 1) ? shot.fireTime() - 1 : shot.fireTime();
+        double[] us = ourStates.get(aimed);
+        RobotHistory seen = ours.until(aimed);
+        if (us == null || seen.isEmpty() || seen.time() != aimed) {
             return;
         }
         Wave wave = new Wave(shot.shooter(), shot.x(), shot.y(), shot.fireTime(), shot.power());
         double reference = Angles.bearing(wave.x(), wave.y(), us[0], us[1]);
-        double lateral = us[3] * Math.sin(us[2] - reference);
-        int direction = lateral > 0 ? 1 : lateral < 0 ? -1 : lastDirection;
+        double[] features = new double[TargetingFeatures.COUNT];
+        int direction = TargetingFeatures.compute(wave.x(), wave.y(), seen, wave.speed(), field, lastDirection,
+                features);
         lastDirection = direction;
+        double[] from = enemyPositions.getOrDefault(shot.shooter(), Map.of()).getOrDefault(aimed,
+                new double[] {wave.x(), wave.y()});
+        double[] aims = SimpleAims.aims(from[0], from[1], seen, wave.speed(), field);
+        double[] simple = new double[SimpleAims.COUNT];
+        for (int g = 0; g < SimpleAims.COUNT; g++) {
+            simple[g] = direction * Angles.normalizeRelative(aims[g] - reference) / wave.maxEscapeAngle();
+        }
         HitRange range = new HitRange(wave, reference, (int) field.width(), (int) field.height());
         // Catch up on the turns since the shot.
         for (long t = shot.fireTime(); t < shot.detectedAt(); t++) {
@@ -256,7 +285,7 @@ public final class WaveSurfer {
                 range.observe(t, s[0], s[1]);
             }
         }
-        waves.add(new EnemyWave(wave, range, direction));
+        waves.add(new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple)));
     }
 
     /** Matches a bullet of {@code shooter} to its wave by power and travelled distance, and learns its guess factor. */
@@ -268,7 +297,7 @@ public final class WaveSurfer {
             }
             double travelled = Math.hypot(x - w.wave.x(), y - w.wave.y());
             if (Math.abs(travelled - w.wave.radius(time)) <= w.wave.speed()) {
-                stats(shooter).hit(w.guessFactor(heading));
+                model(shooter).learn(w.features, w.prediction, w.guessFactor(heading));
                 it.remove();
                 return;
             }
@@ -290,7 +319,7 @@ public final class WaveSurfer {
                 n -> new FireDetector(n, coolingRate, (int) field.width(), (int) field.height()));
     }
 
-    private static DangerStats stats(String name) {
-        return STATS.computeIfAbsent(name, n -> new DangerStats());
+    private static DangerModel model(String name) {
+        return MODELS.computeIfAbsent(name, n -> new DangerModel(DangerParameters.DEFAULT));
     }
 }

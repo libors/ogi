@@ -13,7 +13,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
 3. **Radar:** locked on the target in 1v1, spinning otherwise.
 4. **Movement:** the surfer's commands while an enemy wave is in the air, otherwise orbiting the target
-   (`OrbitMovement`). From these commands `RobotMotion` predicts our position at the end of the next turn, exactly
+   (`OrbitMovement`). A disabled target in a duel (energy 0: it can neither fire nor move) is rammed instead, once
+   none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
+   a bullet kill 20 % ([engine-model.md](engine-model.md) G-46). From these commands `RobotMotion` predicts our position at the end of the next turn, exactly
    unless we ram someone.
 5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading.
 6. **Gun waves** advance; last turn's plan becomes this turn's wave.
@@ -58,15 +60,30 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 
 - **Enemy waves** come from `FireDetector` (per enemy and round). A wave's frame is the bearing from its origin to
   where we were at the end of the turn before the shot, and our lateral direction then.
-- **Danger** (`DangerStats`, per enemy, for the battle): a smoothed histogram of the guess factors at which the enemy's
-  bullets passed us, learned from bullets that hit us and bullets one of ours hit. It starts with all weight at guess
-  factor 0, a gun aiming straight at us.
+- **Danger** (`DangerModel`, per enemy, for the battle): where the enemy's bullets go, learned from the bullets that
+  hit us and those one of ours hit. Each is stored with the guess factor it passed us at and with how we moved when
+  the enemy aimed: the gun's `TargetingFeatures` of our own `RobotHistory` as it was at the end of the turn before the
+  shot. A new wave gets a profile over 47 guess-factor bins:
+  - a smoothed histogram of the bullets fired in the most similar situations (KNN, about 1.4·√n of them), whose share
+    grows with the data (`knnRamp`), so that guns whose aim follows our velocity become predictable;
+  - the rest a histogram of all bullets plus a prior of a gun aiming straight at us (guess factor 0).
+  - **An ensemble:** that data profile is one estimator. The others are four simple guns (`SimpleAims`: head-on,
+    linear with and without the walls, circular, each aimed from the enemy's scanned position and our state of the
+    turn it aimed), each a narrow kernel at its aim, and a flattener: a KNN over where we ourselves were when this
+    enemy's waves passed us (`DangerModel.visit`, the middle of the wave's hit range on us), which is where a gun that
+    learns our movement aims. Every observed bullet scores each estimator by the share it gave the bullet's bin; the
+    weights go with the prior times `exp(temper · record)`, the record forgetting a part per bullet (`decay`). A simple
+    gun the enemy does not use loses its weight within a few bullets, so it costs no room against learning guns.
+  - The numbers (`DangerParameters.DEFAULT`) are tuned on the danger bench
+    ([harness.md](harness.md#danger-bench)); `DangerParameters.HISTOGRAM` is the single histogram the surfer used until
+    2026-10-09.
 - **A dead enemy's waves stay** until they pass us: its bullets keep flying (engine-model G-44).
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
   `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
   400 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
   until there is room, so near walls it drifts outwards and stays further than 400 px. `HitRange` gives the guess
-  factors that would hit us on each path; the way with the least danger wins, and its first turn's commands are used.
+  factors that would hit us on each path; the way with the least of the wave's profile in that range wins, and its
+  first turn's commands are used.
   Ties keep the last way.
 - **Without an enemy wave** the bot orbits the target and changes direction at random intervals, from its own seeded
   generator. It also steers towards 400 px, but turns towards the target at walls, so it stays closer than the surfer.

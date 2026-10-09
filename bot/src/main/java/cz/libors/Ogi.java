@@ -51,6 +51,8 @@ public class Ogi extends TeamRobot {
     private static final double CLOSE_RANGE = 200;
     /** The gun searches its data only this many turns before it can fire. */
     private static final int AIM_LEAD_TURNS = 4;
+    /** How far past a disabled enemy we drive when ramming it, so that we do not stop short. */
+    private static final double RAM_OVERSHOOT = 50;
 
     private World world;
     private Field field;
@@ -188,7 +190,19 @@ public class Ogi extends TeamRobot {
         }
     }
 
+    /**
+     * Whether we finish this enemy by ramming instead of shooting: a disabled enemy (energy 0) in a duel. It can
+     * neither fire nor move, and a ram kill adds 30 % of all the damage we dealt it this round, a bullet kill 20 %
+     * (engine-model G-46).
+     */
+    private boolean finishesByRamming(EnemyState target) {
+        return getOthers() == 1 && target.energy() == 0;
+    }
+
     private double bulletPower(EnemyState target, double distance) {
+        if (finishesByRamming(target)) {
+            return 0;
+        }
         double power = distance < CLOSE_RANGE ? Rules.MAX_BULLET_POWER : DEFAULT_POWER;
         power = Math.min(power, target.energy() / 4 + Rules.MIN_BULLET_POWER);
         power = Math.min(power, getEnergy() - Rules.MIN_BULLET_POWER);
@@ -210,7 +224,7 @@ public class Ogi extends TeamRobot {
 
     /**
      * Sets this turn's movement and returns where it takes us by the end of the next turn: surfing the nearest enemy
-     * wave, or orbiting the target while none is in the air.
+     * wave, ramming a disabled enemy once none is in the air, or orbiting the target.
      */
     private double[] move(EnemyState target, long now) {
         Optional<double[]> surf = surfer.command(ourEngineState(), now);
@@ -219,10 +233,12 @@ public class Ogi extends TeamRobot {
             setTurnRightRadians(surf.get()[1]);
             return predictNext(surf.get()[0], surf.get()[1]);
         }
-        double heading = movement.desiredHeading(getX(), getY(), target.x(), target.y(), now,
+        boolean ram = finishesByRamming(target);
+        double heading = ram ? Angles.bearing(getX(), getY(), target.x(), target.y())
+                : movement.desiredHeading(getX(), getY(), target.x(), target.y(), now,
                 world.recentTeammates(now, MAX_TEAMMATE_AGE));
         double turn = Angles.normalizeRelative(heading - Angles.fromRobocode(getHeadingRadians()));
-        double distance = 100;
+        double distance = ram ? target.distanceTo(getX(), getY()) + RAM_OVERSHOOT : 100;
         if (Math.abs(turn) > Math.PI / 2) {
             // Drive backwards instead of turning around.
             turn = Angles.normalizeRelative(turn + Math.PI);
