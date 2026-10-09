@@ -138,10 +138,18 @@ final class Sprt {
      * share, {@code n_h ∝ s_h} of the difference. Opponents where every pair agreed exactly get no more pairs.
      */
     static int next(List<Stratum> strata) {
+        return next(strata, new int[strata.size()]);
+    }
+
+    /**
+     * The same, while {@code pending[h]} pairs of opponent h are still being played: they count as played, so that
+     * pairs handed out at once spread like pairs handed out one by one.
+     */
+    static int next(List<Stratum> strata, int[] pending) {
         int best = -1;
         double bestRatio = Double.POSITIVE_INFINITY;
         for (int i = 0; i < strata.size(); i++) {
-            if (strata.get(i).size() < BURN_IN_PAIRS) {
+            if (strata.get(i).size() + pending[i] < BURN_IN_PAIRS) {
                 return i;
             }
         }
@@ -149,7 +157,7 @@ final class Sprt {
         for (int i = 0; i < strata.size(); i++) {
             Stratum s = strata.get(i);
             double sd = Math.sqrt(variance(s, Metric.DIFFERENCE, pooled));
-            double ratio = sd > 0 ? s.size() / sd : Double.POSITIVE_INFINITY;
+            double ratio = sd > 0 ? (s.size() + pending[i]) / sd : Double.POSITIVE_INFINITY;
             if (ratio < bestRatio) {
                 best = i;
                 bestRatio = ratio;
@@ -160,7 +168,7 @@ final class Sprt {
         }
         // No opponent shows any variance yet: spread evenly.
         for (int i = 0; i < strata.size(); i++) {
-            if (best < 0 || strata.get(i).size() < strata.get(best).size()) {
+            if (best < 0 || strata.get(i).size() + pending[i] < strata.get(best).size() + pending[best]) {
                 best = i;
             }
         }

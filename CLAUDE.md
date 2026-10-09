@@ -21,6 +21,9 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   plans, for debugging (`docs/harness.md`).
 - `./gradlew recordGunLogs -Pversions=0.1` and `./gradlew gunBench [-Pweights=...]`: the offline gun bench; replays
   the gun's logs of recorded battles with other gun parameters (`docs/harness.md`).
+- `./gradlew queueServer` and `./gradlew submit -Pbaseline=HEAD`: the queue; a server on this machine runs queued
+  comparisons on the Windows worker (`ogi-win`, 12 slots) and shows them at `http://localhost:8765/`
+  (`docs/harness.md`, "Queue"). The `remote*` tasks run one check there.
 - Add `-PjavaVersion=21` (or 25) to compile and run battles on another JVM. The default is 17.
 
 ## Layout

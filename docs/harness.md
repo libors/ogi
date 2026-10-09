@@ -16,7 +16,7 @@ results. Every score claim about the bot must come from here.
 | `ProbeRecordings` | Records probe battles and checks their integrity, coverage and determinism; see [Recordings](#recordings) |
 | `recording.TurnRecorder` | Battle listener that writes a recording: every robot and bullet in every turn, plus debug properties |
 | `recording.Recording` | Reads a recording back into memory; no Robocode classes, so tests can use it without an engine |
-| `Json` | Minimal JSON writer for records, lists and maps |
+| `Json` | Minimal JSON writer and reader for records, lists and maps; one-line ASCII form for the queue's protocol |
 | `compare.Compare` | Paired, sequential comparison of two bot versions; see [Comparing two versions](#comparing-two-versions) |
 | `compare.Sprt`, `compare.Stratum` | The stratified sequential test and the per-opponent paired statistics |
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
@@ -25,6 +25,11 @@ results. Every score claim about the bot must come from here.
 | `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
 | `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
 | `foreign.JarCheck`, `foreign.ApiRules`, `foreign.ClassFile` | Checks a robot jar against an allowlist of the JDK and Robocode APIs before it runs |
+| `queue.Server`, `queue.Dashboard` | The queue's server on this machine: jobs, workers, the web page; see [Queue](#queue) |
+| `queue.Executor`, `queue.Slot` | The worker side: slots, each a JVM with a Robocode home of its own, driven over standard input and output |
+| `queue.Submit`, `queue.QueueClient`, `queue.Remote` | Queue a job; the queue from a terminal; run one main class on a Windows worker |
+| `queue.QueueJob`, `compare.CompareJob` | A job in the queue; a comparison run as one, with pairs on many slots at once |
+| `queue.Protocol`, `queue.BattleSpec`, `queue.Ssh`, `queue.WorkerConfig` | Line protocol, a battle and its outcome on the wire, ssh and scp to Windows, where things are on a worker |
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
 with `./gradlew engineTest`, after `recordProbes`. They read the recordings through `Recording` and need no engine.
@@ -379,6 +384,125 @@ jar with anything in those packages, and `deployBots` runs the jar check.
     removes every other foreign jar from the installation.
   - An opponent set for them can live next to them and be passed as `-Popponents=.robocode/foreign/<set>.txt`.
 
+## Queue
+
+The queue runs comparisons on remote workers while development goes on: a job is queued from the working tree in one
+command, a worker plays its battles on many slots at once, and a web page shows what ran, how long it took and what
+is waiting.
+
+```sh
+./gradlew queueServer                                  # in a terminal of its own; http://localhost:8765/
+./gradlew submit -Pbaseline=HEAD -Pnote="wider bins"   # the working tree against HEAD, lab set
+./gradlew submit -Pbaseline=HEAD -Popponents=.robocode/foreign/vetted-1v1.txt -Pbounds=screening
+./gradlew queueStatus
+./gradlew queueCancel -Pjob=261009-185919-657
+```
+
+### Roles
+
+- **Server** (`queue.Server`, on this machine): keeps the jobs in `.robocode/queue/`, starts each worker's executor
+  when there is work for it, hands out battles while the worker has free slots, merges the results into each job's
+  log, runs the test and serves the dashboard on the loopback interface only. It stops a worker's executor after five
+  idle minutes. Everything a job knows is on disk, so a restarted server resumes its jobs.
+- **Executor** (`queue.Executor`, on the worker): started by the server, over ssh for a Windows worker, as a local
+  process for `local`. It keeps no state between runs and knows nothing about jobs. It prepares one Robocode home per
+  slot, starts the slots, runs each battle the server sends on a free slot and sends the outcome back. It ends, with
+  its slots, at the end of its input, on `shutdown`, or after 90 s without word from the server (which pings every
+  20 s): Windows does not end a process when its ssh session drops.
+- **Slot** (`queue.Slot`): one JVM with one engine, one battle at a time. Robocode keeps static state in the JVM, so
+  battles at once need JVMs of their own.
+- The server pushes work to the workers, because it can reach them over ssh while they cannot reach it (the worker's
+  Java has no network, and this machine moves). Another worker is a line in `-Pworkers`.
+
+### Workers
+
+`-Pworkers=<name>:<slots>,...` (default `ogi-win:12`):
+
+| Name | Where | Foreign robots |
+|---|---|---|
+| `local` | this machine, as a local process, in `.robocode/queue/workers/local/` | no (D-020: statistics against foreign robots run on the desktop) |
+| any other | an ssh host with the native Windows layout: Java 17 in `C:\ogi\jdk`, the executor's files under `C:\ogi`, approved foreign jars in `C:\ogi\rumble` | yes |
+
+- **Bundle:** at each connection the server makes the worker's `C:\ogi\bundle` equal to `harness/build/worker-bundle`
+  (SHA-256 lists compared, differences copied with scp; Windows has no rsync). `queueServer` builds the bundle from
+  the working tree when it starts, so restart the server after changing harness code.
+- **A job's jars** go to `C:\ogi\jars` and from there into every slot's robots directory; the engine rescans that
+  directory before each battle, so no slot restarts. A jar a slot already has stays (Windows does not let a jar the
+  engine holds open be replaced); a jar of the same name with other content is an error.
+- **Foreign jars:** copied into the slots only if `approved.txt` in the foreign directory lists them with their
+  SHA-256 and the jar check does not deny them; the executor reports the jars it left out.
+- **Slot JVMs:** `-XX:+UseSerialGC -XX:TieredStopAtLevel=1` (plus `-PqueueJvm`), `-Xmx1g`, the Security Manager
+  allowed, and a minimal environment: on Windows `SystemRoot` and a temporary directory of the slot's own (`TEMP`,
+  `TMP`), elsewhere the list of [Foreign robots](#foreign-robots). `sandboxCheck` accepts exactly these.
+- **CPU constant:** the executor measures it five times in fresh JVMs under the slots' options on an idle machine,
+  keeps the median in `<root>/state/cpu-constant.properties` (per Java, options and Robocode), and gives every slot
+  the median times `-PcpuFactor` (default 1.5). Measure again by deleting the file; the measurement must run while
+  the machine is otherwise idle. The factor and both constants are in each job's summary.
+
+### Jobs
+
+- **`submit`** builds the jars of `-Pbaseline` (and `-Pcandidate`) like `compare` does. Without `-Pcandidate` it
+  takes a snapshot of the working tree (`snapshotJars`): its jars get the version `w` plus 7 hex digits of a SHA-256
+  over `bot/` and the build files, tracked or not (ignored files left out), in `.robocode/snapshots/`. The same code
+  gives the same version; jobs queued from different working trees never share a jar name. The working tree's own
+  version (`botVersion`) names different code after every edit, so the queue does not use it.
+- A job is a directory `.robocode/queue/jobs/<id>/`: `job.properties` (as submitted), `opponents.txt`,
+  `status.properties` (state, times, order), and what the job writes. `submit` works whether the server runs or not;
+  the server picks a job up within seconds. Its jars are copied into `.robocode/queue/jars/`, where a name stands for
+  one content.
+- Options: those of `compare` (`opponents`, default the lab set; `bounds`, `maxPairs`, `pairsPerOpponent`, `starts`,
+  `seed`, `rounds`, `metric`), `note` (shown on the dashboard) and `timeout` (seconds per battle, default 900).
+- **Order:** jobs run in queue order, the first job that has work for a free slot gets it. Moving a job up on the
+  dashboard lets it take the slots as they free up; the job it passed keeps its state. A job waits while its jars
+  are being copied, and later jobs use the slots meanwhile.
+
+### A comparison as a job (`compare.CompareJob`)
+
+The same pairs, seeds, log, test and summary as [Comparing two versions](#comparing-two-versions), and the same
+configuration line, so its `battles.tsv` reads like a local one:
+
+- A pair's two battles go to one worker (to any of its slots). Several pairs are under way at once; the next
+  opponent is chosen as in `compare`, counting the pairs under way as played (`Sprt.next` with pending pairs), so that
+  pairs handed out at once spread over the opponents like pairs handed out one by one.
+- The test is checked after every complete pair. Once it decides, no more pairs go out; battles still being played
+  are logged when they come back, while `summary.json` and `summary.txt` are those of the decision.
+- A failed battle (an exception, a slot that died, a timeout) is retried on the same worker, twice; a third failure
+  fails the job with the reason. A worker that goes away loses its battles: their pairs are dropped and new pairs
+  take their place (a battle of a dropped pair that came back stays in the log as an incomplete pair, which the test
+  ignores).
+- `dispatch.tsv`: one line per battle: when it ended, the worker and slot, the battle, how long it waited for a slot,
+  how long it took, and how it ended (`ok`, `failed: …`, `lost: …`). `problems.log` as in `compare`.
+- Checked on 2026-10-09: a job of 2 pairs per opponent on four local slots gave, battle for battle, the same seeds,
+  score shares and shots as the sequential `compare`. On the Windows worker the same job differs in some battles
+  (the machines differ in the last bit of some doubles, [build-and-run.md](build-and-run.md#determinism-across-machines)),
+  and with 12 slots Ogi skipped a few turns in the short lab battles, so that 5 of 30 pairs of identical code
+  differed. A restarted server and a dropped connection both resumed with every pair counted once.
+
+### Dashboard
+
+`http://localhost:8765/` (`-Pport`), on 127.0.0.1 and ::1 only (another program, e.g. a Docker port, may hold the
+port on one of them; the server then stops with an error).
+
+- **Workers:** state (offline, connecting, starting, ready, backoff, stopping), busy slots, battles and battles per
+  second, failures and slot restarts, the CPU constant, Java and JVM options, the last error, the battles running.
+- **Queue:** waiting and running jobs with what they compare, how long they waited and ran, pairs (with an estimate
+  of the total: exact in fixed mode, otherwise the expected length of the test at the current estimate, rough while
+  the estimate is), the estimate of the difference with its 95 % interval, the LLR between its bounds, the job's rate
+  and ETA; buttons to move a job up or down and to cancel it.
+- **History:** finished jobs with their decision, waiting and running time, pairs, estimate and health (skipped
+  turns, problems, failed battles).
+- **A job** (click its row): the decision, noise, health, the workers' environment, both scoreboards, the
+  per-opponent table, problems and the last battles.
+- `./gradlew queueStatus` prints the same in a terminal; actions are POSTs that need the header
+  `X-Requested-With: ogi`, so another web page cannot trigger them.
+
+### Remote checks
+
+`remoteSandboxCheck`, `remoteSkeletonCheck` and the other `remote*` tasks run one main class on the Windows worker in
+a slot's environment (`queue.Remote`, the executor's `run`): the bundle is synced, the class runs in a fresh home
+`C:\ogi\run\<name>` and its output directory `C:\ogi\out\<name>` comes back to `harness/build/remote/<name>/`.
+`-PremoteHost=ogi-desktop` runs them in the WSL container instead ([build-and-run.md](build-and-run.md#remote-worker)).
+
 ## Known quirks
 
 - **The hit rate depends on the distance, not only on the gun.** At a longer distance the target has more time to
@@ -395,6 +519,3 @@ jar with anything in those packages, and `deployBots` runs the jar check.
 - The engine swallows exceptions thrown by battle listeners. `TurnRecorder` keeps the first failure and rethrows it
   from `close()`.
 
-## Planned
-
-- A job queue so a remote machine can run battle batches.

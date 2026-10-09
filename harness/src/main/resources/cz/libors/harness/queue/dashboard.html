@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ogi queue</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #677085; --line: #e2e5eb;
+  --accent: #2f6fdf; --ok: #1f8a4c; --warn: #b7791f; --bad: #c53030; --idle: #8a93a6;
+  --bar: #e9edf3; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151b; --panel: #1a1f27; --text: #e3e7ee; --muted: #9aa3b5; --line: #2b313c;
+    --accent: #6c9cff; --ok: #4cc27f; --warn: #e0a84a; --bad: #f06a6a; --idle: #7c8598; --bar: #262c37; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+header { display: flex; gap: 16px; align-items: baseline; padding: 14px 20px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; }
+header .meta { color: var(--muted); font-size: 13px; }
+main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 8px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card .name { font-weight: 600; font-size: 15px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600;
+  border: 1px solid currentColor; white-space: nowrap; }
+.s-ready, .s-RUNNING, .s-DONE { color: var(--ok); }
+.s-connecting, .s-starting, .s-stopping, .s-QUEUED { color: var(--accent); }
+.s-backoff, .s-CANCELLED { color: var(--warn); }
+.s-FAILED { color: var(--bad); }
+.s-offline { color: var(--idle); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin-top: 8px; font-size: 13px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.slots { display: flex; gap: 3px; margin-top: 10px; flex-wrap: wrap; }
+.slot { width: 18px; height: 18px; border-radius: 3px; background: var(--bar); }
+.slot.busy { background: var(--accent); }
+.err { color: var(--bad); font-size: 12px; margin-top: 6px; word-break: break-word; }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12.5px; }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+tbody tr.job { cursor: pointer; }
+tbody tr.job:hover { background: var(--bg); }
+tbody tr.selected { background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
+td.title { min-width: 260px; }
+td.title .note { color: var(--muted); font-size: 12.5px; }
+.llr { position: relative; width: 140px; height: 10px; background: var(--bar); border-radius: 5px; margin-top: 4px; }
+.llr .mid { position: absolute; left: 50%; top: -2px; width: 1px; height: 14px; background: var(--muted); }
+.llr .mark { position: absolute; top: -2px; width: 4px; height: 14px; border-radius: 2px; background: var(--accent);
+  transform: translateX(-2px); }
+.progress { width: 120px; height: 6px; background: var(--bar); border-radius: 3px; margin-top: 4px; overflow: hidden; }
+.progress div { height: 100%; background: var(--accent); }
+button { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.danger:hover { border-color: var(--bad); color: var(--bad); }
+.actions { white-space: nowrap; }
+#detail { margin-top: 18px; }
+#detail .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+#detail h3 { margin: 0; font-size: 15px; }
+pre { font-family: var(--mono); font-size: 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0 0; max-height: 320px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.empty { color: var(--muted); padding: 12px; }
+.pos { color: var(--ok); } .neg { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ogi queue</h1>
+  <span class="meta" id="meta">connecting…</span>
+</header>
+<main>
+  <h2>Workers</h2>
+  <div class="cards" id="workers"></div>
+
+  <h2>Queue</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Job</th><th>What</th><th>State</th><th>Times</th><th>Progress</th><th>Estimate</th>
+      <th>LLR</th><th>Rate · ETA</th><th></th></tr></thead>
+    <tbody id="active"></tbody>
+  </table></div>
+
+  <h2>History</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Job</th><th>What</th><th>Result</th><th>Waited</th><th>Ran</th><th>Finished</th>
+      <th>Pairs</th><th>Estimate</th><th>Health</th></tr></thead>
+    <tbody id="done"></tbody>
+  </table></div>
+
+  <div id="detail"></div>
+</main>
+<script>
+"use strict";
+let selected = (location.hash.match(/job=([\w-]+)/) || [])[1] || null;
+let lastState = null;
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const fmt = (v, d = 2, sign = false) => v == null || isNaN(v) ? "–" : (sign && v > 0 ? "+" : "") + Number(v).toFixed(d);
+function dur(ms) {
+  if (ms == null || ms < 0) return "–";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + " s";
+  if (s < 3600) return Math.floor(s / 60) + " min " + String(s % 60).padStart(2, "0") + " s";
+  return Math.floor(s / 3600) + " h " + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + " min";
+}
+const clock = t => t ? new Date(t).toLocaleString([], {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"}) : "–";
+
+async function load() {
+  try {
+    const r = await fetch("/api/state", {cache: "no-store"});
+    lastState = await r.json();
+    render(lastState);
+    if (selected) loadDetail(selected);
+  } catch (e) {
+    document.getElementById("meta").textContent = "server not reachable – " + e;
+  }
+}
+
+function render(s) {
+  document.getElementById("meta").textContent = "server up " + dur(s.now - s.startedAt) + " · updated "
+    + new Date(s.now).toLocaleTimeString() + " · " + s.stateDir;
+  document.getElementById("workers").innerHTML = s.workers.map(w => worker(w, s.now)).join("")
+    || '<div class="empty">No workers configured.</div>';
+  const active = s.jobs.filter(j => j.state === "QUEUED" || j.state === "RUNNING");
+  const done = s.jobs.filter(j => !(j.state === "QUEUED" || j.state === "RUNNING"));
+  document.getElementById("active").innerHTML = active.map((j, i) => activeRow(j, i, active.length, s.now)).join("")
+    || '<tr><td colspan="9" class="empty">Nothing waiting. Submit with ./gradlew submit -Pbaseline=HEAD</td></tr>';
+  document.getElementById("done").innerHTML = done.map(doneRow).join("")
+    || '<tr><td colspan="9" class="empty">No finished jobs yet.</td></tr>';
+}
+
+function worker(w, now) {
+  const i = w.info || {};
+  const slots = Array.from({length: w.slots}, (_, k) => `<div class="slot ${k < w.busy ? "busy" : ""}"></div>`).join("");
+  const running = (w.running || []).slice(0, 14).map(r => `<div class="num muted">#${r.slot < 0 ? "?" : r.slot} ${esc(r.job)} · ${esc(r.battle)} · ${fmt(r.seconds, 0)} s</div>`).join("");
+  return `<div class="card">
+    <div class="top"><span class="name">${esc(w.name)}</span><span class="badge s-${esc(w.state)}">${esc(w.state)}</span></div>
+    <div class="muted" style="font-size:12.5px">${esc(w.detail || (w.local ? "this Mac, trusted robots only" : "foreign robots allowed"))} · since ${dur(now - w.since)}</div>
+    <div class="slots" title="busy slots">${slots}</div>
+    <div class="kv">
+      <div>Busy</div><div class="num">${w.busy} / ${w.slots}</div>
+      <div>Battles</div><div class="num">${w.battles}${w.battlesPerSecond != null ? " · " + fmt(w.battlesPerSecond) + " /s" : ""}</div>
+      <div>Failures · restarts</div><div class="num">${w.failures} · ${w.restarts}</div>
+      ${i.cpuConstant ? `<div>CPU constant</div><div class="num">${(i.cpuConstant / 1e6).toFixed(2)} ms (idle ${(i.cpuConstantIdle / 1e6).toFixed(2)} × ${i.cpuFactor})</div>` : ""}
+      ${i.java ? `<div>Java</div><div>${esc(i.java)} · sandbox ${i.sandbox ? "on" : "OFF"}</div>` : ""}
+      ${i.jvm ? `<div>JVM</div><div class="num">${esc(i.jvm.join(" "))}</div>` : ""}
+    </div>
+    ${w.lastError ? `<div class="err">${esc(w.lastError)}</div>` : ""}
+    ${running ? `<details style="margin-top:8px"><summary class="muted">running battles</summary>${running}</details>` : ""}
+  </div>`;
+}
+
+function llrBar(p) {
+  if (p.llr == null || p.lower == null) return "";
+  const pos = Math.max(0, Math.min(1, (p.llr - p.lower) / (p.upper - p.lower)));
+  return `<div class="llr" title="LLR ${fmt(p.llr)} in [${fmt(p.lower)}, ${fmt(p.upper)}]"><div class="mid"></div><div class="mark" style="left:${pos * 100}%"></div></div>`;
+}
+
+function estimate(p) {
+  if (p.estimate == null) return "–";
+  const cls = p.estimate - p.halfWidth > 0 ? "pos" : p.estimate + p.halfWidth < 0 ? "neg" : "";
+  return `<span class="num ${cls}">${fmt(p.estimate, 2, true)} ± ${fmt(p.halfWidth)}</span><div class="muted" style="font-size:12px">${esc(p.metric)}</div>`;
+}
+
+function activeRow(j, index, count, now) {
+  const p = j.progress || {};
+  const total = p.remainingPairs != null ? p.pairs + p.remainingPairs : p.maxPairs;
+  const share = total ? Math.min(1, p.pairs / total) : 0;
+  const times = j.startedAt ? `running ${dur(now - j.startedAt)}<div class="muted">waited ${dur(j.startedAt - j.submittedAt)}</div>`
+    : `waiting ${dur(now - j.submittedAt)}`;
+  return `<tr class="job ${j.id === selected ? "selected" : ""}" onclick="select('${esc(j.id)}')">
+    <td class="num">${esc(j.id)}</td>
+    <td class="title">${esc(j.title)}${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}</td>
+    <td><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></td>
+    <td>${times}</td>
+    <td class="num">${p.pairs ?? 0}${p.pendingPairs ? " (+" + p.pendingPairs + ")" : ""} pairs${total ? `<div class="progress"><div style="width:${share * 100}%"></div></div><div class="muted">of ~${Math.round(total)}</div>` : ""}</td>
+    <td>${estimate(p)}</td>
+    <td class="num">${p.llr != null ? fmt(p.llr) : "–"}${llrBar(p)}</td>
+    <td class="num">${p.battlesPerSecond != null ? fmt(p.battlesPerSecond) + " /s" : "–"}<div class="muted">${p.etaSeconds != null ? "~" + dur(p.etaSeconds * 1000) : ""}</div></td>
+    <td class="actions" onclick="event.stopPropagation()">
+      <button ${index === 0 ? "disabled" : ""} onclick="act('up','${esc(j.id)}')" title="earlier">↑</button>
+      <button ${index === count - 1 ? "disabled" : ""} onclick="act('down','${esc(j.id)}')" title="later">↓</button>
+      <button class="danger" onclick="if (confirm('Cancel ${esc(j.id)}?')) act('cancel','${esc(j.id)}')">cancel</button>
+    </td></tr>`;
+}
+
+function doneRow(j) {
+  const p = j.progress || {};
+  const health = `${p.skippedSubject ?? 0} / ${p.skippedOpponents ?? 0} skipped · ${p.problems ?? 0} problems · ${p.failures ?? 0} failed`;
+  return `<tr class="job ${j.id === selected ? "selected" : ""}" onclick="select('${esc(j.id)}')">
+    <td class="num">${esc(j.id)}</td>
+    <td class="title">${esc(j.title)}${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}</td>
+    <td><span class="badge s-${j.state}">${j.state.toLowerCase()}</span><div style="font-size:12.5px">${esc(j.reason)}</div></td>
+    <td>${j.startedAt ? dur(j.startedAt - j.submittedAt) : "–"}</td>
+    <td>${j.startedAt ? dur(j.finishedAt - j.startedAt) : "–"}</td>
+    <td>${clock(j.finishedAt)}</td>
+    <td class="num">${p.pairs != null ? Math.round(p.pairs) : "–"}</td>
+    <td>${estimate(p)}</td>
+    <td class="muted" style="font-size:12px">${health}</td></tr>`;
+}
+
+function select(id) {
+  selected = selected === id ? null : id;
+  location.hash = selected ? "job=" + selected : "";
+  if (lastState) render(lastState);
+  if (selected) loadDetail(selected); else document.getElementById("detail").innerHTML = "";
+}
+
+async function loadDetail(id) {
+  const r = await fetch("/api/job?id=" + encodeURIComponent(id), {cache: "no-store"});
+  if (!r.ok) { document.getElementById("detail").innerHTML = ""; return; }
+  const j = await r.json();
+  if (j.id !== selected) return;
+  const d = j.detail || {};
+  const rows = (d.opponents || []).map(o => `<tr>
+      <td>${esc(o.opponent)}${o.strong ? " *" : ""}</td><td class="num">${o.pairs}</td>
+      <td class="num">${fmt(o.baseline)}</td><td class="num">${fmt(o.candidate)}</td>
+      <td class="num ${o.difference > 0 ? "pos" : o.difference < 0 ? "neg" : ""}">${fmt(o.difference, 2, true)}</td>
+      <td class="num">${fmt(o.sdDifference)}</td>
+      <td class="num">${fmt(o.hitRateBaseline)} / ${fmt(o.hitRateCandidate)}</td>
+      <td class="num">${fmt(o.hitByBaseline)} / ${fmt(o.hitByCandidate)}</td></tr>`).join("");
+  const boards = (d.scoreboards || []).map(b => `<tr><td>${esc(b.name)} (${b.opponents})</td>
+      <td class="num">${fmt(b.baseline)}</td><td class="num">${fmt(b.candidate)}</td>
+      <td class="num">${fmt(b.difference, 2, true)} ± ${fmt(b.halfWidth)}</td>
+      <td class="num">${fmt(b.apsBaseline)} / ${fmt(b.apsCandidate)}</td>
+      <td class="num">${fmt(b.pwinBaseline, 1)} / ${fmt(b.pwinCandidate, 1)}</td></tr>`).join("");
+  const n = d.noise || {}, h = d.health || {};
+  const env = Object.entries(d.environment || {}).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join("");
+  document.getElementById("detail").innerHTML = `
+    <h2>Job ${esc(j.id)}</h2>
+    <div class="card">
+      <div class="head"><h3>${esc(j.title)}</h3><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></div>
+      ${j.note ? `<div class="muted">${esc(j.note)}</div>` : ""}
+      <div class="kv">
+        <div>Decision</div><div>${esc(j.reason || d.decision || "")}</div>
+        <div>Submitted · started · finished</div><div>${clock(j.submittedAt)} · ${clock(j.startedAt)} · ${clock(j.finishedAt)}</div>
+        <div>Pairs</div><div class="num">${d.pairs ?? "–"}${d.llr != null ? ` · LLR ${fmt(d.llr)} in [${fmt(d.llrLower)}, ${fmt(d.llrUpper)}]` : ""}</div>
+        <div>Noise</div><div class="num">σ per pair ${fmt(n.sigmaPair)} · ρ ${fmt(n.pooledCorrelation)} · expected pairs ${fmt(n.expectedPairsAtBounds, 0)} at the bounds, ${fmt(n.expectedPairsMidway, 0)} midway</div>
+        <div>Health</div><div class="num">skipped turns base ${h.skippedTurnsBaseline ?? "–"}, cand ${h.skippedTurnsCandidate ?? "–"}, opponents ${h.skippedTurnsOpponents ?? "–"} · problems ${h.problems ?? "–"} · ${h.battleSeconds ?? "–"} s in battles</div>
+        <div>Directory</div><div class="num">${esc(j.dir)}</div>
+        ${env}
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="tablewrap"><table><thead><tr><th>Scoreboard</th><th>Base</th><th>Cand</th><th>Δ</th><th>APS b/c</th><th>PWIN b/c</th></tr></thead><tbody>${boards || '<tr><td colspan="6" class="empty">no pairs yet</td></tr>'}</tbody></table></div>
+    </div>
+    <div class="tablewrap" style="margin-top:12px"><table>
+      <thead><tr><th>Opponent (${esc(d.metric || "")})</th><th>Pairs</th><th>Base</th><th>Cand</th><th>Δ</th><th>sd(Δ)</th><th>Hit % b/c</th><th>Hit by % b/c</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8" class="empty">no pairs yet</td></tr>'}</tbody></table></div>
+    ${j.problems && j.problems.length ? `<h2>Problems (last ${j.problems.length})</h2><pre>${esc(j.problems.join("\n"))}</pre>` : ""}
+    ${j.dispatch && j.dispatch.length ? `<h2>Last battles</h2><pre>${esc(j.dispatch.slice().reverse().join("\n"))}</pre>` : ""}`;
+}
+
+async function act(action, id) {
+  await fetch(`/api/action?action=${action}&id=${encodeURIComponent(id)}`, {method: "POST", headers: {"X-Requested-With": "ogi"}});
+  load();
+}
+
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

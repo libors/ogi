@@ -17,7 +17,10 @@ import robocode.control.snapshot.IBulletSnapshot;
 import robocode.control.snapshot.IRobotSnapshot;
 import robocode.control.snapshot.RobotState;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -26,6 +29,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
 
@@ -94,6 +99,31 @@ public final class BattleRunner implements AutoCloseable {
 
     public String robocodeVersion() {
         return engine.getVersion();
+    }
+
+    /**
+     * Every robot and team in the repository, each as its name and its "name version". The engine rescans the
+     * robots directory first, so jars copied there since the last battle are listed.
+     */
+    public List<List<String>> repository() {
+        return Arrays.stream(engine.getLocalRepository())
+                .map(r -> List.of(r.getName(), r.getNameAndVersion()))
+                .distinct()
+                .toList();
+    }
+
+    /** The CPU constant in a Robocode home's configuration, in nanoseconds, if the engine has measured it. */
+    public static OptionalLong cpuConstant(Path robocodeHome) throws IOException {
+        Path file = robocodeHome.resolve("config/robocode.properties");
+        if (!Files.exists(file)) {
+            return OptionalLong.empty();
+        }
+        Properties p = new Properties();
+        try (InputStream in = Files.newInputStream(file)) {
+            p.load(in);
+        }
+        String value = p.getProperty("robocode.cpu.constant");
+        return value == null ? OptionalLong.empty() : OptionalLong.of(Long.parseLong(value.trim()));
     }
 
     /** The jar a robot or team is loaded from, if it comes from a jar. */

@@ -17,6 +17,7 @@ import cz.libors.harness.compare.Stratum.Metric;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -59,7 +60,7 @@ public final class Compare {
     private static final List<String> REQUIRED = List.of("robot", "team", "baseline", "candidate", "opponents", "out");
 
     /** One of the two versions under comparison. */
-    private record Subject(Side side, String name, String robotPrefix, String jarSha) {
+    record Subject(Side side, String name, String robotPrefix, String jarSha) {
     }
 
     /** The number a battle contributes to the test, in points (0–100). */
@@ -76,6 +77,15 @@ public final class Compare {
                 case SCORE -> b.share();
                 case HITS -> b.fired() == 0 ? 0 : 100.0 * b.hits() / b.fired();
                 case DODGE -> 100 - (b.opponentFired() == 0 ? 0 : 100.0 * b.opponentHits() / b.opponentFired());
+            };
+        }
+
+        static Measure parse(String metric) {
+            return switch (metric) {
+                case "score" -> SCORE;
+                case "hits" -> HITS;
+                case "dodge" -> DODGE;
+                default -> throw new IllegalArgumentException("metric: score, hits or dodge");
             };
         }
     }
@@ -139,19 +149,10 @@ public final class Compare {
         this.format = set.format();
         int roundsOption = Integer.parseInt(options.get("rounds"));
         this.rounds = roundsOption > 0 ? roundsOption : format.rounds;
-        this.fixedStarts = switch (options.get("starts")) {
-            case "fixed" -> true;
-            case "random" -> false;
-            default -> throw new IllegalArgumentException("starts: fixed or random");
-        };
+        this.fixedStarts = fixedStarts(options.get("starts"));
         this.runSeed = Long.parseLong(options.get("seed"));
         this.bounds = Bounds.parse(options.get("bounds"));
-        this.measure = switch (options.get("metric")) {
-            case "score" -> Measure.SCORE;
-            case "hits" -> Measure.HITS;
-            case "dodge" -> Measure.DODGE;
-            default -> throw new IllegalArgumentException("metric: score, hits or dodge");
-        };
+        this.measure = Measure.parse(options.get("metric"));
         this.runner = runner;
     }
 
@@ -195,23 +196,9 @@ public final class Compare {
             runner.jarFile(o.name()); // fails early on a missing opponent
         }
 
-        Map<String, String> config = new LinkedHashMap<>();
-        config.put("baseline", baseline.name());
-        config.put("baselineJar", baseline.jarSha());
-        config.put("candidate", candidate.name());
-        config.put("candidateJar", candidate.jarSha());
-        config.put("opponentSet", set.name());
-        config.put("opponents", String.join(",", set.opponents().stream().map(Opponent::name).toList()));
-        config.put("format", format.label);
-        config.put("field", format.width + "x" + format.height);
-        config.put("rounds", Integer.toString(rounds));
-        config.put("starts", fixedStarts ? "fixed" : "random");
-        config.put("seed", Long.toString(runSeed));
-
-        String dirName = String.format(Locale.ROOT, "%s-%s_vs_%s-%s_%s_s%d", options.get("baseline"),
-                baseline.jarSha().substring(0, 6), options.get("candidate"), candidate.jarSha().substring(0, 6),
-                config.get("starts"), runSeed);
-        Path dir = Path.of(options.get("out")).resolve(set.name()).resolve(dirName);
+        Map<String, String> config = config(baseline, candidate, set, rounds, fixedStarts, runSeed);
+        Path dir = Path.of(options.get("out")).resolve(set.name())
+                .resolve(dirName(options.get("baseline"), options.get("candidate"), config));
         problemsFile = dir.resolve("problems.log");
 
         List<Stratum> strata = set.opponents().stream().map(o -> new Stratum(o.name(), o.strong())).toList();
@@ -251,11 +238,50 @@ public final class Compare {
             }
         }
 
-        Summary summary = summarize(home, config, strata, (System.nanoTime() - start) / 1_000_000_000);
+        Map<String, String> environment = new LinkedHashMap<>();
+        environment.put("robocode", runner.robocodeVersion());
+        environment.put("java", System.getProperty("java.vm.vendor") + " " + System.getProperty("java.version"));
+        environment.put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"));
+        environment.put("cpuConstant", cpuConstant(home));
+        environment.put("lastRunSeconds", Long.toString((System.nanoTime() - start) / 1_000_000_000));
+        Summary summary = summarize(config, environment, options.get("metric"), bounds, strata, log);
         Path summaryFile = dir.resolve("summary.json");
         Files.writeString(summaryFile, Json.write(summary));
-        printReport(summary);
+        printReport(summary, System.out);
         System.out.println("Details: " + summaryFile);
+    }
+
+    /** The configuration a comparison's log is keyed by; a log of another configuration is refused. */
+    static Map<String, String> config(Subject baseline, Subject candidate, OpponentSet set, int rounds,
+                                      boolean fixedStarts, long runSeed) {
+        Map<String, String> config = new LinkedHashMap<>();
+        config.put("baseline", baseline.name());
+        config.put("baselineJar", baseline.jarSha());
+        config.put("candidate", candidate.name());
+        config.put("candidateJar", candidate.jarSha());
+        config.put("opponentSet", set.name());
+        config.put("opponents", String.join(",", set.opponents().stream().map(Opponent::name).toList()));
+        config.put("format", set.format().label);
+        config.put("field", set.format().width + "x" + set.format().height);
+        config.put("rounds", Integer.toString(rounds));
+        config.put("starts", fixedStarts ? "fixed" : "random");
+        config.put("seed", Long.toString(runSeed));
+        return config;
+    }
+
+    /** The comparison's directory under the opponent set's, from the versions as given and the configuration. */
+    static String dirName(String baselineVersion, String candidateVersion, Map<String, String> config) {
+        return String.format(Locale.ROOT, "%s-%s_vs_%s-%s_%s_s%s", baselineVersion,
+                config.get("baselineJar").substring(0, 6), candidateVersion, config.get("candidateJar").substring(0, 6),
+                config.get("starts"), config.get("seed"));
+    }
+
+    static boolean fixedStarts(String starts) {
+        return switch (starts) {
+            case "fixed" -> true;
+            case "random" -> false;
+            default -> throw new IllegalArgumentException("starts: fixed or random");
+        };
     }
 
     private Subject subject(Side side, String className, String version) throws IOException {
@@ -296,7 +322,8 @@ public final class Compare {
         return robotCounts.computeIfAbsent(String.join(",", robots), k -> runner.robotCount(robots));
     }
 
-    private static Battle battle(BattleOutcome outcome, Subject subject, String opponent, int pair) {
+    /** The log's line of a battle of {@code subject} against {@code opponent}. */
+    static Battle battle(BattleOutcome outcome, Subject subject, String opponent, int pair) {
         ContestantResult mine = outcome.result(subject.name()).orElseThrow(
                 () -> new IllegalStateException("no result for " + subject.name() + ": " + outcome.results()));
         ContestantResult theirs = outcome.results().stream().filter(r -> r != mine).findFirst().orElseThrow();
@@ -317,10 +344,15 @@ public final class Compare {
 
     /** In fixed mode: the opponent with the fewest pairs below the target, or −1 when all have reached it. */
     private static int leastPlayed(List<Stratum> strata, int target) {
+        return leastPlayed(strata, new int[strata.size()], target);
+    }
+
+    /** The same, counting {@code pending[h]} pairs still being played against opponent h as played. */
+    static int leastPlayed(List<Stratum> strata, int[] pending, int target) {
         int best = -1;
         for (int i = 0; i < strata.size(); i++) {
-            int n = strata.get(i).size();
-            if (n < target && (best < 0 || n < strata.get(best).size())) {
+            int n = strata.get(i).size() + pending[i];
+            if (n < target && (best < 0 || n < strata.get(best).size() + pending[best])) {
                 best = i;
             }
         }
@@ -340,7 +372,7 @@ public final class Compare {
         return z ^ (z >>> 31);
     }
 
-    private static int total(List<Stratum> strata) {
+    static int total(List<Stratum> strata) {
         return strata.stream().mapToInt(Stratum::size).sum();
     }
 
@@ -353,8 +385,9 @@ public final class Compare {
                 Sprt.llr(d, bounds));
     }
 
-    private Summary summarize(Path home, Map<String, String> config, List<Stratum> strata, long seconds)
-            throws IOException {
+    /** Both scoreboards, the per-opponent rows, noise and health of a comparison, from its strata and its log. */
+    static Summary summarize(Map<String, String> config, Map<String, String> environment, String metric,
+                             Bounds bounds, List<Stratum> strata, CompareLog log) {
         Map<String, List<Battle[]>> pairsByOpponent = log.completePairs();
         List<OpponentRow> rows = strata.stream()
                 .map(s -> row(s, pairsByOpponent.getOrDefault(s.opponent(), List.of())))
@@ -389,15 +422,8 @@ public final class Compare {
         Health health = new Health(skipped[0], skipped[1], skipped[2], problems, mismatches, battleMillis / 1000);
 
         Decision decision = Sprt.decide(strata, bounds);
-        Map<String, String> environment = new LinkedHashMap<>();
-        environment.put("robocode", runner.robocodeVersion());
-        environment.put("java", System.getProperty("java.vm.vendor") + " " + System.getProperty("java.version"));
-        environment.put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"));
-        environment.put("cpuConstant", cpuConstant(home));
-        environment.put("lastRunSeconds", Long.toString(seconds));
-        return new Summary(config, environment, options.get("metric"), bounds.toString(), describe(decision),
-                Sprt.llr(d, bounds),
-                bounds.lower(), bounds.upper(), pairs, boards, rows, noise, health);
+        return new Summary(config, environment, metric, bounds.toString(), describe(decision, bounds),
+                Sprt.llr(d, bounds), bounds.lower(), bounds.upper(), pairs, boards, rows, noise, health);
     }
 
     private static OpponentRow row(Stratum s, List<Battle[]> pairs) {
@@ -454,7 +480,7 @@ public final class Compare {
         return rows.stream().mapToDouble(value).filter(v -> !Double.isNaN(v)).average().orElse(Double.NaN);
     }
 
-    private String describe(Decision decision) {
+    static String describe(Decision decision, Bounds bounds) {
         return switch (decision) {
             case H1 -> String.format(Locale.ROOT, "H1: the candidate's gain is nearer %+.2f than %+.2f",
                     bounds.delta1(), bounds.delta0());
@@ -464,41 +490,41 @@ public final class Compare {
         };
     }
 
-    private static void printReport(Summary s) {
-        System.out.println();
-        System.out.printf(Locale.ROOT, "%-30s %5s %7s %7s %7s %7s %7s %6s | %13s | %13s%n",
+    static void printReport(Summary s, PrintStream out) {
+        out.println();
+        out.printf(Locale.ROOT, "%-30s %5s %7s %7s %7s %7s %7s %6s | %13s | %13s%n",
                 "opponent (" + s.metric() + ")", "pairs", "base", "cand", "Δ", "sd(Δ)", "sd(base)", "ρ",
                 "hit % b/c", "hit by % b/c");
         for (OpponentRow r : s.opponents()) {
-            System.out.printf(Locale.ROOT,
+            out.printf(Locale.ROOT,
                     "%-30s %5d %7.2f %7.2f %+7.2f %7.2f %7.2f %6.2f | %6.2f %6.2f | %6.2f %6.2f%n",
                     r.opponent() + (r.strong() ? " *" : ""), r.pairs(), r.baseline(), r.candidate(), r.difference(),
                     r.sdDifference(), r.sdBaseline(), r.correlation(), r.hitRateBaseline(), r.hitRateCandidate(),
                     r.hitByBaseline(), r.hitByCandidate());
         }
-        System.out.println();
+        out.println();
         for (Scoreboard b : s.scoreboards()) {
-            System.out.printf(Locale.ROOT, "%-8s (%2d opponents)  %s base %6.2f  cand %6.2f  Δ %+6.2f ± %5.2f%n",
+            out.printf(Locale.ROOT, "%-8s (%2d opponents)  %s base %6.2f  cand %6.2f  Δ %+6.2f ± %5.2f%n",
                     b.name(), b.opponents(), s.metric(), b.baseline(), b.candidate(), b.difference(), b.halfWidth());
-            System.out.printf(Locale.ROOT, "%26s APS %6.2f / %6.2f   PWIN %5.1f / %5.1f   hit %% %5.2f / %5.2f   "
+            out.printf(Locale.ROOT, "%26s APS %6.2f / %6.2f   PWIN %5.1f / %5.1f   hit %% %5.2f / %5.2f   "
                             + "hit by %% %5.2f / %5.2f%n", "", b.apsBaseline(), b.apsCandidate(), b.pwinBaseline(),
                     b.pwinCandidate(), b.hitRateBaseline(), b.hitRateCandidate(), b.hitByBaseline(),
                     b.hitByCandidate());
         }
         Noise n = s.noise();
-        System.out.printf(Locale.ROOT, "noise    σ per pair %.2f, within-opponent sd base %.2f, sd Δ %.2f, ρ %.2f; "
+        out.printf(Locale.ROOT, "noise    σ per pair %.2f, within-opponent sd base %.2f, sd Δ %.2f, ρ %.2f; "
                         + "expected pairs %.0f at the bounds, %.0f midway%n", n.sigmaPair(), n.pooledSdBaseline(),
                 n.pooledSdDifference(), n.pooledCorrelation(), n.expectedPairsAtBounds(), n.expectedPairsMidway());
         Health h = s.health();
-        System.out.printf(Locale.ROOT, "health   skipped turns base %d, cand %d, opponents %d; problems %d; "
+        out.printf(Locale.ROOT, "health   skipped turns base %d, cand %d, opponents %d; problems %d; "
                         + "start mismatches %d; %d s in battles%n", h.skippedTurnsBaseline(),
                 h.skippedTurnsCandidate(), h.skippedTurnsOpponents(), h.problems(), h.startMismatches(),
                 h.battleSeconds());
-        System.out.printf(Locale.ROOT, "result   %d pairs, LLR %+.2f in [%.2f, %.2f], bounds %s: %s%n", s.pairs(),
+        out.printf(Locale.ROOT, "result   %d pairs, LLR %+.2f in [%.2f, %.2f], bounds %s: %s%n", s.pairs(),
                 s.llr(), s.llrLower(), s.llrUpper(), s.bounds(), s.decision());
     }
 
-    private static String cpuConstant(Path home) throws IOException {
+    static String cpuConstant(Path home) throws IOException {
         Path file = home.resolve("config/robocode.properties");
         if (!Files.exists(file)) {
             return "unknown";
@@ -510,7 +536,7 @@ public final class Compare {
         return p.getProperty("robocode.cpu.constant", "unknown");
     }
 
-    private static String sha256(Path file) throws IOException {
+    static String sha256(Path file) throws IOException {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));
         } catch (NoSuchAlgorithmException e) {

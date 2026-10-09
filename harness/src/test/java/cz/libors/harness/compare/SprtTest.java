@@ -83,6 +83,27 @@ class SprtTest {
         assertEquals(4.0, strata.get(1).size() / (double) strata.get(0).size(), 0.5);
     }
 
+    @Test
+    void pairsUnderWayCountAsPlayed() {
+        double[] sd = {1, 4};
+        List<Stratum> strata = List.of(new Stratum("calm", false), new Stratum("noisy", false));
+        // Near the Neyman shares (n ∝ s): 10 and 40 pairs, differences ±1 and ±4.
+        for (int i = 0; i < 50; i++) {
+            int h = i < 10 ? 0 : 1;
+            strata.get(h).add(50, 50 + sd[h] * (i % 2 == 0 ? 1 : -1));
+        }
+        // Handing out 12 pairs at once spreads them like handing them out one by one, about 1 : 4.
+        int[] pending = new int[2];
+        for (int i = 0; i < 12; i++) {
+            pending[Sprt.next(strata, pending)]++;
+        }
+        assertTrue(pending[1] > pending[0] && pending[0] > 0, "pending " + pending[0] + ", " + pending[1]);
+        assertEquals(Sprt.next(strata), Sprt.next(strata, new int[2]));
+        // During the burn-in, a pair under way fills its opponent's place.
+        List<Stratum> fresh = List.of(new Stratum("a", false), new Stratum("b", false));
+        assertEquals(1, Sprt.next(fresh, new int[] {2, 0}));
+    }
+
     /** Simulated tests at the hypotheses: error rates and lengths as the SPRT theory predicts. */
     @Test
     void simulatedTestsMeetTheErrorRatesAndExpectedLengths() {

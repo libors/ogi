@@ -472,8 +472,10 @@ tasks.register<Test>("engineTest") {
     }
 }
 
-// The remote worker (docs/build-and-run.md, "Remote worker"): a bundle built from the working tree is synced to the
-// worker and run there in a container without network (worker/). Results come back to harness/build/remote/.
+// Remote workers (docs/build-and-run.md, "Remote worker"): a bundle built from the working tree is copied to the
+// worker and run there. The native Windows worker (default, `-PremoteHost=ogi-win`) runs it through the queue's
+// executor (queue.Remote); the WSL container worker (`-PremoteHost=ogi-desktop`) through worker/remote.sh. Results
+// come back to harness/build/remote/<name>/.
 
 val harnessJar = tasks.register<Jar>("harnessJar") {
     description = "Packages the harness's main classes for the remote worker."
@@ -496,79 +498,293 @@ val workerBundle = tasks.register<Sync>("workerBundle") {
     from(setupJar) { into("worker") }
 }
 
-// Paths inside the worker's container (worker/remote.sh mounts them).
-val remoteHome = "/ogi/robocode-run"
-val remoteBundle = "/ogi/bundle"
-
-/** A repository path as the container sees it; `rumble:<file>` is a file in the worker's ~/ogi/rumble. */
-fun remoteFile(path: String): String =
-    if (path.startsWith("rumble:")) "/ogi/rumble/" + path.removePrefix("rumble:") else "$remoteBundle/$path"
+val remoteHost = providers.gradleProperty("remoteHost").getOrElse("ogi-win")
+val remoteContainer = providers.gradleProperty("remoteKind").getOrElse(
+    if (remoteHost == "ogi-desktop") "container" else "windows") == "container"
+// The CPU constant on a worker: the median of idle measurements under the worker's JVM options, times this factor
+// (windows-worker-setup.md, load study). The queue's workers use the same.
+val cpuFactor = providers.gradleProperty("cpuFactor").getOrElse("1.5")
 
 /**
- * Runs a harness main class on the remote worker (`-PremoteHost`, default `ogi-desktop`) with worker/remote.sh,
- * under the name [name]: the container writes to /ogi/out/<name>, which comes back to harness/build/remote/<name>.
- * [jvm] are extra JVM options; [clean] empties the run's directory first. `-PremoteCpuset` pins the container to
- * some cores, e.g. `0-1` (default: all); `-PremoteBattleCore` pins the battle's threads to one core (worker/run.sh).
+ * Where a remote run finds things: its Robocode home, a repository path (`rumble:<file>` is a file in the worker's
+ * directory of approved foreign jars) and its output directory, for a run named `name`.
  */
-fun Exec.onRemote(name: String, main: String, jvm: String, clean: Boolean, arguments: () -> List<String>) {
-    group = "remote"
-    dependsOn(workerBundle)
-    val host = providers.gradleProperty("remoteHost").orElse("ogi-desktop")
+class RemoteLayout(val home: (String) -> String, val file: (String) -> String, val out: (String) -> String)
+
+// Paths inside the worker's container (worker/remote.sh mounts them).
+val containerLayout = RemoteLayout(
+    { _ -> "/ogi/robocode-run" },
+    { path -> if (path.startsWith("rumble:")) "/ogi/rumble/" + path.removePrefix("rumble:") else "/ogi/bundle/$path" },
+    { name -> "/ogi/out/$name" },
+)
+
+// Paths on the native Windows worker (windows-worker-setup.md).
+val windowsLayout = RemoteLayout(
+    { name -> "C:/ogi/run/$name" },
+    { path -> if (path.startsWith("rumble:")) "C:/ogi/rumble/" + path.removePrefix("rumble:") else "C:/ogi/bundle/$path" },
+    { name -> "C:/ogi/out/$name" },
+)
+
+val remoteLayout = if (remoteContainer) containerLayout else windowsLayout
+
+/**
+ * Registers a task that runs a harness main class on the remote worker under the name [name]: it writes to
+ * [RemoteLayout.out], which comes back to harness/build/remote/<name>. [jvm] are extra JVM options; [clean] empties
+ * the run's output first.
+ *
+ * In the container, `-PremoteCpuset` pins it to some cores, e.g. `0-1` (default: all), and `-PremoteBattleCore`
+ * pins the battle's threads to one core (worker/run.sh). On Windows the run gets a slot's JVM options and CPU
+ * constant (`-PcpuFactor`, queue.Executor).
+ */
+fun remoteTask(taskName: String, text: String, name: String, main: String, jvm: String, clean: Boolean,
+               arguments: () -> List<String>) {
     val bundle = layout.buildDirectory.dir("worker-bundle").get().asFile
     val results = layout.buildDirectory.dir("remote").get().asFile
-    val script = rootDir.resolve("worker/remote.sh")
-    executable = "bash"
-    environment("OGI_ROBOCODE_VERSION", robocodeVersion)
-    environment("OGI_ROBOCODE_SHA256", robocodeSetupSha256)
-    environment("OGI_JVM_OPTIONS", jvm)
-    environment("OGI_CLEAN", if (clean) "1" else "")
-    environment("OGI_CPUSET", providers.gradleProperty("remoteCpuset").getOrElse(""))
-    environment("OGI_BATTLE_CORE", providers.gradleProperty("remoteBattleCore").getOrElse(""))
+    if (remoteContainer) {
+        tasks.register<Exec>(taskName) {
+            group = "remote"
+            description = text
+            dependsOn(workerBundle)
+            val script = rootDir.resolve("worker/remote.sh")
+            executable = "bash"
+            environment("OGI_ROBOCODE_VERSION", robocodeVersion)
+            environment("OGI_ROBOCODE_SHA256", robocodeSetupSha256)
+            environment("OGI_JVM_OPTIONS", jvm)
+            environment("OGI_CLEAN", if (clean) "1" else "")
+            environment("OGI_CPUSET", providers.gradleProperty("remoteCpuset").getOrElse(""))
+            environment("OGI_BATTLE_CORE", providers.gradleProperty("remoteBattleCore").getOrElse(""))
+            argumentProviders.add(CommandLineArgumentProvider {
+                listOf(script.absolutePath, remoteHost, bundle.absolutePath, results.absolutePath, name, main) +
+                    arguments()
+            })
+        }
+    } else {
+        tasks.register<JavaExec>(taskName) {
+            group = "remote"
+            description = text
+            dependsOn(workerBundle)
+            mainClass = "cz.libors.harness.queue.Remote"
+            javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+            classpath = sourceSets.main.get().runtimeClasspath
+            argumentProviders.add(CommandLineArgumentProvider {
+                listOf("host=$remoteHost", "bundle=${bundle.absolutePath}", "results=${results.absolutePath}",
+                    "name=$name", "clean=$clean", "cpuFactor=$cpuFactor") +
+                    jvm.split(" ").filter { it.isNotEmpty() }.map { "runJvm=$it" } + listOf("--", main) + arguments()
+            })
+        }
+    }
+}
+
+remoteTask("remoteSkeletonCheck", "Runs skeletonCheck on the remote worker.", "skeleton-check",
+    "cz.libors.harness.SkeletonCheck", "", true) {
+    listOf(remoteLayout.home("skeleton-check"), "cz.libors.Ogi $botVersion", "cz.libors.OgiTeam $botVersion",
+        remoteLayout.out("skeleton-check") + "/skeleton-check.json")
+}
+
+remoteTask("remoteSandboxCheck", "Runs sandboxCheck on the remote worker, in its slot environment.",
+    "sandbox-check", "cz.libors.harness.SandboxCheck", "-Ddebug=true", true) {
+    listOf(remoteLayout.home("sandbox-check"), botVersion,
+        remoteLayout.file("robots/cz.libors.Ogi_$botVersion.jar"),
+        remoteLayout.file("robots/cz.libors.probe_$botVersion.jar"))
+}
+
+// Debug mode, as locally.
+remoteTask("remoteRecordProbes", "Runs recordProbes on the remote worker; compare its digests with the local ones.",
+    "recordings", "cz.libors.harness.ProbeRecordings", "-Ddebug=true", true) {
+    listOf(remoteLayout.home("recordings"), botVersion, remoteLayout.out("recordings"))
+}
+
+val remoteCompareArguments = compareArguments(remoteLayout.home("compare"), remoteLayout.file) {
+    remoteLayout.out("compare")
+}
+remoteTask("remoteCompare", "Runs compare on the remote worker in one process; the log there resumes like a local one.",
+    "compare", "cz.libors.harness.compare.Compare", "", false) { remoteCompareArguments() }
+
+val remoteRecordArguments = recordArguments("cz.libors.Ogi", null, remoteLayout.home("battle-recordings"),
+    remoteLayout.file) { remoteLayout.out("battle-recordings") }
+remoteTask("remoteRecordBattles", "Runs recordBattles on the remote worker.", "battle-recordings",
+    "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteRecordArguments() }
+
+val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", "gunshot,gunpass", remoteLayout.home("gun-logs"),
+    remoteLayout.file) { remoteLayout.out("gun-logs") }
+remoteTask("remoteRecordGunLogs", "Runs recordGunLogs on the remote worker.", "gun-logs",
+    "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteGunLogArguments() }
+
+// The queue (docs/harness.md, "Queue"): a server on this machine keeps jobs and drives the workers; `submit` adds a
+// job, whether the server runs or not. State lives in .robocode/queue/, outside the build directory.
+
+// -PqueueState=<dir> keeps a test queue apart from the real one.
+val queueDir: File = providers.gradleProperty("queueState").map { rootDir.resolve(it) }
+    .getOrElse(rootProject.layout.projectDirectory.dir(".robocode/queue").asFile)
+// Jars of working-tree snapshots, named after their content (SnapshotJars).
+val snapshotsDir = rootProject.layout.projectDirectory.dir(".robocode/snapshots")
+val snapshotVersionFile = layout.buildDirectory.file("snapshot-version.txt")
+
+/**
+ * Builds the robot, team and gun-log jars of the working tree as it is now, with a version named after the content
+ * of what goes into them (`w` and 7 hex digits of a SHA-256 over bot/ and the build files, tracked or not, ignored
+ * files left out), into [snapshots]. The same content gives the same version and is built once. The version is
+ * written to [versionFile]. Queued jobs keep their jars apart this way: the working tree's own version (botVersion)
+ * names different code after every edit.
+ */
+abstract class SnapshotJars : DefaultTask() {
+    @get:Internal
+    abstract val repository: DirectoryProperty
+
+    @get:Internal
+    abstract val workDir: DirectoryProperty
+
+    @get:Internal
+    abstract val snapshots: DirectoryProperty
+
+    @get:Internal
+    abstract val versionFile: RegularFileProperty
+
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    init {
+        outputs.upToDateWhen { false }
+    }
+
+    @TaskAction
+    fun build() {
+        val repo = repository.get().asFile
+        val listing = ByteArrayOutputStream()
+        exec.exec {
+            workingDir = repo
+            commandLine("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+            standardOutput = listing
+        }
+        val files = listing.toString().split('\u0000').filter { it.isNotEmpty() }.distinct().sorted()
+            .filter { repo.resolve(it).isFile }
+        val digest = MessageDigest.getInstance("SHA-256")
+        for (f in files) {
+            if (f.startsWith("bot/") || f.startsWith("gradle/") || f in setOf("gradle.properties", "settings.gradle.kts")) {
+                digest.update(f.toByteArray())
+                digest.update(0)
+                digest.update(repo.resolve(f).readBytes())
+                digest.update(0)
+            }
+        }
+        val version = "w" + digest.digest().joinToString("") { "%02x".format(it) }.take(7)
+        versionFile.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText(version)
+        }
+        val target = snapshots.get().asFile
+        val names = listOf("Ogi", "OgiTeam", "OgiGunLog").map { "cz.libors.${it}_$version.jar" }
+        if (names.all { target.resolve(it).exists() }) {
+            logger.lifecycle("Working tree snapshot $version: jars exist")
+            return
+        }
+        logger.lifecycle("Working tree snapshot $version: building")
+        val work = workDir.get().asFile.resolve(version)
+        work.deleteRecursively()
+        val source = work.resolve("source")
+        for (f in files) {
+            repo.resolve(f).copyTo(source.resolve(f))
+        }
+        exec.exec {
+            workingDir = source
+            commandLine("sh", "./gradlew", "--quiet", ":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar",
+                "-PbotVersion=$version")
+        }
+        target.mkdirs()
+        names.forEach { source.resolve("bot/build/robots/$it").copyTo(target.resolve(it), overwrite = true) }
+        work.deleteRecursively()
+    }
+}
+
+val snapshotJars = tasks.register<SnapshotJars>("snapshotJars") {
+    group = "queue"
+    description = "Builds the working tree's jars under a version named after their content, for queued jobs."
+    repository.set(rootProject.layout.projectDirectory)
+    workDir.set(layout.buildDirectory.dir("snapshots"))
+    snapshots.set(snapshotsDir)
+    versionFile.set(snapshotVersionFile)
+}
+
+/** The robot and team jars of a bot version: a baseline, a snapshot, or the working tree's own. */
+fun subjectJars(version: String): List<File> {
+    val dirs = listOf(baselinesDir.asFile, snapshotsDir.asFile, project(":bot").layout.buildDirectory.dir("robots")
+        .get().asFile)
+    return listOf("cz.libors.Ogi", "cz.libors.OgiTeam").map { robot ->
+        dirs.map { it.resolve("${robot}_$version.jar") }.firstOrNull { it.exists() }
+            ?: throw GradleException("No jar of $robot $version in .robocode/baselines, .robocode/snapshots or " +
+                "bot/build/robots")
+    }
+}
+
+tasks.register<JavaExec>("submit") {
+    group = "queue"
+    description = "Queues a comparison of the working tree (or -Pcandidate) with -Pbaseline; see docs/harness.md."
+    val candidateProperty = providers.gradleProperty("candidate")
+    dependsOn(baselineJars, installRobocode, ":bot:robotJar", ":bot:teamJar")
+    if (!candidateProperty.isPresent) {
+        dependsOn(snapshotJars)
+    }
+    mainClass = "cz.libors.harness.queue.Submit"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
+    val baseline = providers.gradleProperty("baseline")
+    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
+    val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "note",
+        "timeout").mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val versionFile = snapshotVersionFile
+    val port = providers.gradleProperty("port").orElse("8765")
     argumentProviders.add(CommandLineArgumentProvider {
-        listOf(script.absolutePath, host.get(), bundle.absolutePath, results.absolutePath, name, main) + arguments()
+        val baselineVersion = versionOf(baseline.orNull ?: throw GradleException("Pass -Pbaseline=<git revision or version>"))
+        val candidateVersion = candidateProperty.orNull?.let(::versionOf) ?: versionFile.get().asFile.readText().trim()
+        listOf("state=" + queueDir.absolutePath, "type=compare", "robot=cz.libors.Ogi", "team=cz.libors.OgiTeam",
+            "baseline=$baselineVersion", "candidate=$candidateVersion", "opponents=" + localFile(opponents.get())) +
+            (subjectJars(baselineVersion) + subjectJars(candidateVersion)).map { "jar=" + it.absolutePath } + passed +
+            listOf("port=" + port.get())
     })
 }
 
-tasks.register<Exec>("remoteSkeletonCheck") {
-    description = "Runs skeletonCheck on the remote worker."
-    onRemote("skeleton-check", "cz.libors.harness.SkeletonCheck", "", true) {
-        listOf(remoteHome, "cz.libors.Ogi $botVersion", "cz.libors.OgiTeam $botVersion",
-            "/ogi/out/skeleton-check/skeleton-check.json")
-    }
+tasks.register<JavaExec>("queueServer") {
+    group = "queue"
+    description = "Runs the queue's server and dashboard (http://localhost:8765) until stopped; see docs/harness.md."
+    dependsOn(workerBundle, installRobocode)
+    mainClass = "cz.libors.harness.queue.Server"
+    val launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    javaLauncher = launcher
+    classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
+    val bundle = layout.buildDirectory.dir("worker-bundle")
+    val workers = providers.gradleProperty("workers").orElse("ogi-win:12")
+    val port = providers.gradleProperty("port").orElse("8765")
+    val extraJvm = providers.gradleProperty("queueJvm").orElse("")
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf("state=" + queueDir.absolutePath, "bundle=" + bundle.get().asFile.absolutePath,
+            "workers=" + workers.get(), "port=" + port.get(), "cpuFactor=$cpuFactor",
+            "localJava=" + launcher.get().executablePath.asFile.absolutePath,
+            "localSecurityManager=" + (toolchainJava in 12..23)) +
+            extraJvm.get().split(" ").filter { it.isNotEmpty() }.map { "jvm=$it" }
+    })
 }
 
-tasks.register<Exec>("remoteSandboxCheck") {
-    description = "Runs sandboxCheck on the remote worker, in its container."
-    onRemote("sandbox-check", "cz.libors.harness.SandboxCheck", "-Ddebug=true", true) {
-        listOf(remoteHome, botVersion, "$remoteBundle/robots/cz.libors.Ogi_$botVersion.jar",
-            "$remoteBundle/robots/cz.libors.probe_$botVersion.jar")
-    }
+/** Runs the queue's terminal client: `status`, or an action on `-Pjob`. */
+fun JavaExec.queueClient(command: String) {
+    group = "queue"
+    mainClass = "cz.libors.harness.queue.QueueClient"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = sourceSets.main.get().runtimeClasspath
+    val job = providers.gradleProperty("job")
+    val port = providers.gradleProperty("port").orElse("8765")
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf(command, "port=" + port.get(), "state=" + queueDir.absolutePath) +
+            (if (command == "status") emptyList() else listOf("id=" + (job.orNull
+                ?: throw GradleException("Pass -Pjob=<id>"))))
+    })
 }
 
-tasks.register<Exec>("remoteRecordProbes") {
-    description = "Runs recordProbes on the remote worker; compare its digests with the local ones (remoteDigests)."
-    // Debug mode, as locally.
-    onRemote("recordings", "cz.libors.harness.ProbeRecordings", "-Ddebug=true", true) {
-        listOf(remoteHome, botVersion, "/ogi/out/recordings")
-    }
+tasks.register<JavaExec>("queueStatus") {
+    description = "Prints the queue: workers, waiting and running jobs, history."
+    queueClient("status")
 }
 
-tasks.register<Exec>("remoteCompare") {
-    description = "Runs compare on the remote worker; the log there resumes like a local one."
-    val arguments = compareArguments(remoteHome, ::remoteFile) { "/ogi/out/compare" }
-    onRemote("compare", "cz.libors.harness.compare.Compare", "", false, arguments)
-}
-
-tasks.register<Exec>("remoteRecordBattles") {
-    description = "Runs recordBattles on the remote worker."
-    val arguments = recordArguments("cz.libors.Ogi", null, remoteHome, ::remoteFile) { "/ogi/out/battle-recordings" }
-    onRemote("battle-recordings", "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false, arguments)
-}
-
-tasks.register<Exec>("remoteRecordGunLogs") {
-    description = "Runs recordGunLogs on the remote worker."
-    val arguments = recordArguments("cz.libors.OgiGunLog", "gunshot,gunpass", remoteHome, ::remoteFile) {
-        "/ogi/out/gun-logs"
-    }
-    onRemote("gun-logs", "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false, arguments)
+tasks.register<JavaExec>("queueCancel") {
+    description = "Cancels the queued or running job -Pjob=<id>."
+    queueClient("cancel")
 }
