@@ -21,6 +21,9 @@ results. Every score claim about the bot must come from here.
 | `compare.Sprt`, `compare.Stratum` | The stratified sequential test and the per-opponent paired statistics |
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
 | `compare.RecordBattles` | Records the battles of a comparison turn by turn; see [Recording comparison battles](#recording-comparison-battles) |
+| `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
+| `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
+| `foreign.JarCheck`, `foreign.ApiRules`, `foreign.ClassFile` | Checks a robot jar against an allowlist of the JDK and Robocode APIs before it runs |
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
 with `./gradlew engineTest`, after `recordProbes`. They read the recordings through `Recording` and need no engine.
@@ -36,7 +39,8 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
 - **Problems:** output lines containing `Exception` or `Error` are recorded with round and tick; so are
   `BattleErrorEvent`s.
 - **Shots:** every bullet in the turn snapshots counts once as fired by its owner's contestant, and once as a hit when
-  it hits a robot of another contestant (friendly fire does not count).
+  it hits a robot of another contestant (friendly fire does not count). Bullet id 0 is no shot: the engine uses it
+  for a dying robot's explosion and for the energy a dying leader takes from its teammates.
   - Only bullets that end while the round is open count. In the turn in which one contestant is left, the bullets
     still in the air are taken back, and bullets fired later are ignored. They can no longer hit an enemy, and
     without this rule a contestant that fights from further away would show a lower hit rate with the same aim,
@@ -84,6 +88,7 @@ no rule of the game; the digests are identical with and without it.
 | `MathRandomProbe` | `Math.random()` | shows that a seed does not control `Math.random()` |
 | `UtilsRandomProbe` | `Utils.getRandom()`, none once dead (engine-model G-34) | shows that a seed controls `Utils.getRandom()` |
 | `UtilsDrawProbe` | like `RandomProbe`, plus one discarded `Utils.getRandom()` draw per number used | shows that robots share the engine's generator |
+| `SandboxProbe` | none | tries what the sandbox must block; used by `sandboxCheck`, not recorded ([Foreign robots](#foreign-robots)) |
 
 - **Commands:** every turn each command channel gets a new random command with a per-round probability: ahead,
   body, gun and radar turns, max velocity, max turn rate, the three adjust flags, fire.
@@ -149,7 +154,8 @@ and writes everything to `harness/build/recordings/summary.json`.
 | Melee against 9 sample bots | 1000×1000 | 10 | rank 1 |
 | `cz.libors.OgiTeam` vs `sampleteam.MyFirstTeam` | 1200×1200 | 10 | score share ≥ 70 % |
 
-All checks also require zero skipped turns and no problems. The process exits non-zero on any failure.
+All checks also require zero skipped turns and no problems, and in the battle against `sample.SittingDuck`, which
+never fires, no bullet counted for it. The process exits non-zero on any failure.
 
 ## Comparing two versions
 
@@ -250,7 +256,7 @@ turn. A version is a git revision (built by `baselineJars`), a jar in `.robocode
 |---|---|---|
 | `versions` | required | comma-separated versions of `cz.libors.Ogi` |
 | `opponents` | `harness/opponents/lab-1v1.txt` | opponent set file; gives the format |
-| `only` | all | comma-separated opponents of the set to record |
+| `only` | all | comma-separated opponents of the set to record, named as the set lists them; an unknown name is an error |
 | `pairs` | 1 | pairs per opponent, from pair 0 |
 | `seed`, `rounds`, `starts` | as in `compare` | |
 | `out` | `harness/build/battle-recordings` | writes `<out>/<version>/<opponent>_p<pair>.rec.gz` |
@@ -258,6 +264,63 @@ turn. A version is a git revision (built by `baselineJars`), a jar in `.robocode
 The recordings have the format above. Ogi sets the debug property `gun` every turn it has a target, with the plan
 for the next turn's shot (see [bot.md](bot.md#debug-overlay-czliborsogitrace)), so a bullet first recorded in turn
 f was fired from the plan of turn f − 2, whose line in turn f − 1 says it was fired.
+
+## Foreign robots
+
+A foreign robot is any robot or team that is neither ours (`cz.libors.*`) nor one of Robocode's sample robots
+(`sample.*`, `sampleex.*`, `samplesentry.*`, `sampleteam.*`). Foreign jars are checked before they run, run only
+in Robocode's sandbox, and see only a minimal environment. Trust goes by package, so the jar check denies a foreign
+jar with anything in those packages, and `deployBots` runs the jar check.
+
+- **Sandbox:** Robocode's sandbox needs a JVM that still has a Security Manager: Java 17, or 18–23 with
+  `-Djava.security.manager=allow`, which the harness adds (engine-model G-43). `BattleRunner` refuses a battle with
+  foreign robots unless Robocode's Security Manager is installed, so they cannot run with `-PjavaVersion=25`.
+- **Environment:** robots may read environment variables, so the battle JVM gets only `PATH`, `LANG`, `LC_ALL`,
+  `LC_CTYPE` and `TZ` (if set). macOS adds `__CF_USER_TEXT_ENCODING` to every process.
+- **Sandbox check:** `./gradlew sandboxCheck` runs `SandboxProbe` against `sample.SittingDuck` and requires:
+
+  | Check | Pass condition |
+  |---|---|
+  | Security Manager | Robocode's is installed |
+  | Attempts | a connect to a closed loopback port, reading `$JAVA_HOME/release`, writing a file in the temporary directory with `FileOutputStream` and with `RobocodeFileOutputStream`, starting `true`, `checkExit(0)` and `setAccessible` are all blocked |
+  | Threads | the 6th extra thread is refused |
+  | Environment | the robot sees no variable beyond the list above |
+  | Jar check | Ogi's jar is clean; the probe jar is denied, in `SandboxProbe` only |
+
+  - Every attempt is harmless if it succeeds: it asks the Security Manager about exit instead of exiting, and it
+    deletes the file it wrote.
+  - The first blocked attempt kills the probe, but its code runs on and its next `execute()` still delivers the
+    report. The battle does not wait for dead robots, so the check slows each turn until the report arrives.
+  - On Java 24+ the check fails by design, showing what a robot can do there.
+- **Jar check:** `./gradlew jarCheck -Pjars=<jar or directory>,...` reads every class in each jar and prints a
+  verdict with the findings. It exits non-zero if a jar is denied.
+
+  | Verdict | Meaning |
+  |---|---|
+  | CLEAN | only allowed APIs |
+  | FLAGGED | allowed, but worth a look: threads, file access (data files), serialization, its own resources |
+  | DENIED | reflection, class loading, processes, exit, environment variables, network, file writes outside `RobocodeFileOutputStream`, native methods, internal JDK or Robocode engine APIs, AWT and Swing beyond painting, an API not on the allowlist; a class in a package Robocode takes from the JDK or the engine (`java.`, `javax.`, `kotlin.`, `robocode…`), anything in our or the sample packages, or two class files of the same class |
+
+  - **What is judged:** every field and method each class file references, by its own rule or its class's; the
+    classes it extends or implements; native methods; and jar entries that could hide code (class files under
+    other names, nested archives, service registrations, multi-release classes, duplicates). A class the robot
+    class loader would take from the JDK or the engine never counts as the jar's own, so it cannot hide references
+    to the real one.
+  - **Why references are enough:** without reflection and class loading, both denied, code can only call what its
+    constant pool names, lambdas and bootstrap methods included.
+  - **What it cannot see:** where a robot reads and writes files at run time; that stays with the sandbox.
+  - The rules are in `foreign.ApiRules`. Checked as our own (`JarCheck.check(jar, true)`, without the package
+    rule), Ogi's jars, the probes (except `SandboxProbe`) and the sample robots pass; `sample.SittingDuck` is
+    flagged for reading its data file.
+- **Reading the code:** `./gradlew decompileJar -Pjar=<jar>` decompiles a jar with Vineflower into
+  `harness/build/decompiled/<jar name>/`. Source files shipped in the jar are left out, so what you read is what
+  runs.
+- **Approved jars:** foreign jars live outside git, in `.robocode/foreign/`. `approved.txt` there lists one jar per
+  line, `<jar> <sha256> <notes>`.
+  - `deployBots` first runs the jar check on the listed jars (`checkForeignJars`) and stops on a denied one. It
+    copies only the listed jars into the installation, fails if a jar's SHA-256 differs from the listed one, and
+    removes every other foreign jar from the installation.
+  - An opponent set for them can live next to them and be passed as `-Popponents=.robocode/foreign/<set>.txt`.
 
 ## Known quirks
 

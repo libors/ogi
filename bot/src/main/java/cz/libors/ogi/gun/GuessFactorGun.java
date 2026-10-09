@@ -24,9 +24,9 @@ import java.util.Optional;
  * A new shot looks up the past shots with the most similar features and aims at the guess factor most of them would
  * have hit with.
  *
- * <p>Virtual guns: a plan keeps the aim of every gun, and its wave tells for each whether it would have hit. Per enemy
- * the gun with the better record fires; until the guess-factor gun has {@value #MIN_TRIES} scored aims, circular
- * targeting does.
+ * <p>Virtual guns: a plan keeps each gun's aim, the guess-factor one only when it searched its data; a wave whose plan
+ * has every aim tells for each whether it would have hit. Per enemy the gun with the better record fires; until the
+ * guess-factor gun has {@value #MIN_TRIES} weighted tries, circular targeting does.
  *
  * <p>Timing (engine-model G-01): the gun fires along the heading it reached in the turn of the fire command, so the
  * aim for a shot in turn t+1 is chosen in turn t, from our predicted position at the end of turn t+1 and the target's
@@ -39,7 +39,7 @@ public final class GuessFactorGun {
 
     /** A wave without a bullet teaches as much about a target that ignores bullets, but counts less. */
     static final double VIRTUAL_WEIGHT = 0.5;
-    /** Scored aims the guess-factor gun needs before it may replace circular targeting. */
+    /** Weighted tries the guess-factor gun needs before it may replace circular targeting. */
     static final int MIN_TRIES = 20;
 
     public static final int GUESS_FACTOR = 0;

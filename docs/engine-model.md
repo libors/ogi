@@ -118,6 +118,12 @@ to-test.
     depends on it.
   - **Source:** `net.sf.robocode.battle.BoundingRectangle`, `RobotPeer.updateBoundingBox`. · **Status:** verified;
     `RobotBox` repeats it, the recordings do not exercise it.
+- **G-44 A dead robot's bullets keep flying.** Death takes no bullet out of the air: they move, hit robots and
+  bullets, give the dead owner its 3p and its bullet-damage score, until they end or the round does.
+  - **Bites when:** waves of a robot are dropped when it dies (melee and team battles).
+  - **Source:** `RobotPeer.kill`, `BulletPeer.update`, `Battle.updateBullets`. · **Status:** tested:
+    `BulletMotionReplayTest` ("hit robot, owner dead"; in `watch-melee` seed 1 a power-3 bullet hit 64 turns after
+    its owner died). `WaveSurfer` keeps a dead robot's waves.
 
 ## Movement
 
@@ -249,6 +255,30 @@ to-test.
   - **Source:** `RobotPeer`, `BulletPeer`. · **Status:** verified.
 - **G-25 Start positions are random per robot**, not grouped by team.
   - **Source:** Robocode source. · **Status:** verified.
+- **G-43 Robocode's sandbox exists only where the JVM still has a Security Manager.**
+  - **What:** Robocode installs its Security Manager and policy when an engine starts.
+    - Java 17 allows it. Java 18–23 allow it only with `-Djava.security.manager=allow`; without the flag Robocode
+      falls back to the adapter below.
+    - On Java 24+, `RobocodeSecurityAdapter.init()` only logs, and nothing calls its checks. Robots may open
+      sockets, read and write any file, start processes and as many threads as they like.
+    - `RobocodeFileOutputStream` does not confine paths itself; only the policy does.
+    - On every version, the robot class loader still refuses `net.sf.robocode` and `robocode.control` classes.
+  - **Under the sandbox** a robot may read system properties and environment variables, read files in its own
+    directory, write and delete in its data directory through `RobocodeFileOutputStream`, and start 5 threads
+    besides its own. Everything else is denied.
+  - **The first violation kills the robot and bans it in the repository** for the rest of the session. Its code
+    runs on, and its next `execute()` still delivers its commands, so its debug properties reach a later snapshot
+    (G-34); later calls deliver nothing.
+  - **Only the main thread is metered:** the battle waits `cpuConstant` for the robot's turn, so side threads
+    compute unmetered, also during the other robots' turns.
+  - **Bites when:** foreign robots run on Java 24+, e.g. with `-PjavaVersion=25`; a test expects a robot to report
+    after a violation.
+  - **Source:** `HostManager.initSecurity`, `RobocodeSecurityPolicy`, `RobocodeSecurityManager.checkAccess`,
+    `RobocodeSecurityAdapter`, `ThreadManager.createRobotFileStream`, `RobotClassLoader.testPackages`,
+    `HostingRobotProxy.punishSecurityViolation`, `RobotPeer.punishBadBehavior`, `RobotPeer.executeImpl`,
+    `Battle.initializeBattle`. · **Status:** tested: `sandboxCheck`. On Java 17 and 21 it blocks every attempt and
+    stops at 5 extra threads; on Java 25 everything but the engine classes is allowed (2026-10-09). `BattleRunner`
+    refuses foreign robots without the sandbox.
 
 ## Determinism, files, portability
 

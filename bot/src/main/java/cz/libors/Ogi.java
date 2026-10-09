@@ -221,6 +221,7 @@ public class Ogi extends TeamRobot {
         double y = getY() + e.getDistance() * Math.sin(bearing);
         if (isTeammate(e.getName())) {
             world.observeTeammate(e.getName(), x, y, e.getTime());
+            surfer.teammateSeen(e.getName(), e.getTime(), x, y);
             return;
         }
         EnemySighting sighting = new EnemySighting(e.getName(), x, y, Angles.fromRobocode(e.getHeadingRadians()),

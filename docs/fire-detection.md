@@ -14,7 +14,10 @@ Everything comes from what the bot itself receives, in the turn it happens (engi
 | `hitUs(power)` | `HitByBulletEvent` | +3p |
 | `rammed()` | `HitRobotEvent` | −0.6 |
 | `zapped()` | our own unexplained loss of 0.1 (engine-model G-38) | −0.1 |
-| `nearOtherRobot()` | another robot was seen close to the enemy | rams among others: −0.6 each |
+| `nearOtherRobot()` | another robot, enemy or teammate, seen within 150 px of the enemy in the last 16 turns (`Neighbours`) | rams among others: −0.6 each |
+
+The bot feeds all of them except `zapped()`: the inactivity penalty needs 450 turns in which the robots lose less than
+10 energy, and Ogi fires whenever it can, so it can only happen once one side is already finished.
 
 ## Rules
 
@@ -37,8 +40,9 @@ Everything comes from what the bot itself receives, in the turn it happens (engi
 
 ## Quality
 
-Measured by `FireDetectionTest` (`./gradlew engineTest`) on the probe recordings, 2026-10-08. Every probe is an
-observer with only its own information; detections are matched with the true bullets.
+Measured by `FireDetectionTest` (`./gradlew engineTest`) on the probe recordings, 2026-10-08 (unchanged on
+2026-10-09, since the test finds ram partners with the bot's own `Neighbours`). Every probe is an observer with only
+its own information; detections are matched with the true bullets.
 
 | Scenario | Radar | Precision | Recall | Exact fire time | Origin error |
 |---|---|---|---|---|---|

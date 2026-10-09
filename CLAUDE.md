@@ -11,6 +11,10 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   stay green.
 - `./gradlew engineTest`: replays the recordings through the bot's engine model (`cz.libors.ogi.physics`) and
   requires bit-identical results. It must stay green.
+- `./gradlew sandboxCheck`: proves that robots run in Robocode's sandbox with a minimal environment. It must stay
+  green.
+- `./gradlew jarCheck -Pjars=<jar or directory>`: checks a foreign robot jar against the API allowlist before it
+  runs.
 - `./gradlew compare -Pbaseline=HEAD`: paired, sequential comparison of the working tree with a baseline revision
   against an opponent set (`docs/harness.md`).
 - `./gradlew recordBattles -Pversions=HEAD,0.1`: turn-by-turn recordings of comparison battles, with the gun's

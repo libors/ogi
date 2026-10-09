@@ -19,6 +19,7 @@ public final class SkeletonCheck {
     private static final int TEAM_ROUNDS = 10;
     private static final double MIN_DUEL_SHARE = 0.75;
     private static final double MIN_TEAM_SHARE = 0.70;
+    private static final String SITTING_DUCK = "sample.SittingDuck";
 
     private static final List<String> DUEL_OPPONENTS = List.of(
             "sample.Corners", "sample.Crazy", "sample.Fire", "sample.MyFirstJuniorRobot", "sample.MyFirstRobot",
@@ -87,15 +88,20 @@ public final class SkeletonCheck {
         int firsts = result == null ? 0 : result.firsts();
         int skipped = outcome.skippedTurns(prefix);
         List<String> problems = outcome.problems(prefix);
+        // SittingDuck never fires, so any bullet counted for it is a counting error (e.g. its death explosion).
+        boolean shotsCounted = !check.setup().robots().contains(SITTING_DUCK)
+                || outcome.shots(SITTING_DUCK).fired() == 0;
         boolean passed = result != null && share >= check.minShare() && rank <= check.maxRank()
-                && skipped == 0 && problems.isEmpty();
+                && skipped == 0 && problems.isEmpty() && shotsCounted;
         return new Verdict(check.setup().label(), passed, share, rank, firsts, check.setup().rounds(), skipped,
                 problems, outcome);
     }
 
     private static String format(Verdict v) {
-        return String.format(Locale.ROOT, "%-4s %-34s share %5.1f %%  rank %d  firsts %2d/%-2d  skipped %d  problems %d  (%.1f s)",
+        int duckShots = v.outcome().shots(SITTING_DUCK).fired();
+        return String.format(Locale.ROOT, "%-4s %-34s share %5.1f %%  rank %d  firsts %2d/%-2d  skipped %d  problems %d  (%.1f s)%s",
                 v.passed() ? "OK" : "FAIL", v.label(), 100 * v.share(), v.rank(), v.firsts(), v.rounds(),
-                v.skippedTurns(), v.problems().size(), v.outcome().elapsedMillis() / 1000.0);
+                v.skippedTurns(), v.problems().size(), v.outcome().elapsedMillis() / 1000.0,
+                duckShots > 0 ? "  SittingDuck fired " + duckShots : "");
     }
 }

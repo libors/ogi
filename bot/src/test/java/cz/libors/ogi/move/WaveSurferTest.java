@@ -55,6 +55,45 @@ class WaveSurferTest {
         assertTrue(command.get()[0] != 0, "standing still in front of a head-on gun");
     }
 
+    /** A dead robot's bullets keep flying and hitting (engine-model G-44), so the surfer still dodges them. */
+    @Test
+    void keepsTheWavesOfAShooterThatDied() {
+        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        for (long t = 0; t <= 40; t++) {
+            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+            surfer.scanned("enemy", t, 650, 300, 0, t <= 32 ? 100 : 98);
+            surfer.update(t);
+        }
+        surfer.robotDied("enemy");
+        assertTrue(surfer.command(us(250, 300), 40).isPresent(), "its bullet is still in the air");
+    }
+
+    /** A drop of 0.6 while another robot was close is a ram we could not see, not a shot (fire-detection.md). */
+    @Test
+    void aRamAmongOtherRobotsIsNoShot() {
+        for (boolean otherNear : new boolean[] {true, false}) {
+            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            for (long t = 0; t <= 40; t++) {
+                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+                if (otherNear) {
+                    surfer.teammateSeen("teammate", t, 700, 330);
+                }
+                surfer.scanned("enemy", t, 650, 300, 0, t <= 32 ? 100 : 99.4);
+                surfer.update(t);
+            }
+            assertEquals(!otherNear, surfer.command(us(250, 300), 40).isPresent(),
+                    otherNear ? "a ram is no wave" : "alone, the same drop is a shot");
+        }
+    }
+
+    private static EngineRobot us(double x, double y) {
+        EngineRobot me = new EngineRobot();
+        me.x = x;
+        me.y = y;
+        me.bodyHeading = Angles.toRobocode(Math.PI / 2);
+        return me;
+    }
+
     @Test
     void orbitIsPerpendicularToTheWaveAndSlidesAlongWalls() {
         WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);

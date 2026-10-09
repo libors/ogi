@@ -53,12 +53,24 @@ public final class RecordBattles {
         }
         OpponentSet set = OpponentSet.read(Path.of(options.get("opponents")));
         Format format = set.format();
-        List<String> only = options.get("only").isEmpty() ? List.of() : List.of(options.get("only").split(","));
-        List<String> opponents = set.opponents().stream().map(OpponentSet.Opponent::name)
-                .filter(o -> only.isEmpty() || only.contains(o)).toList();
+        List<String> only = options.get("only").isEmpty() ? List.of()
+                : Arrays.stream(options.get("only").split(",")).map(String::trim).toList();
+        List<String> names = set.opponents().stream().map(OpponentSet.Opponent::name).toList();
+        List<String> unknown = only.stream().filter(o -> !names.contains(o)).toList();
+        if (!unknown.isEmpty()) {
+            usage("not in " + set.name() + " (name and version as the set lists them): " + unknown);
+        }
+        List<String> opponents = names.stream().filter(o -> only.isEmpty() || only.contains(o)).toList();
         int rounds = Integer.parseInt(options.get("rounds")) > 0 ? Integer.parseInt(options.get("rounds"))
                 : format.rounds;
-        boolean fixedStarts = options.get("starts").equals("fixed");
+        boolean fixedStarts = switch (options.get("starts")) {
+            case "fixed" -> true;
+            case "random" -> false;
+            default -> {
+                usage("starts: fixed or random");
+                yield false;
+            }
+        };
         long runSeed = Long.parseLong(options.get("seed"));
         int pairs = Integer.parseInt(options.get("pairs"));
         Path out = Path.of(options.get("out"));

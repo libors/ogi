@@ -2,6 +2,7 @@ package cz.libors.ogi.move;
 
 import cz.libors.ogi.enemy.DetectedShot;
 import cz.libors.ogi.enemy.FireDetector;
+import cz.libors.ogi.enemy.Neighbours;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.physics.EngineRobot;
@@ -72,6 +73,7 @@ public final class WaveSurfer {
     private final Field field;
     private final double coolingRate;
     private final Map<String, FireDetector> detectors = new HashMap<>();
+    private final Neighbours neighbours = new Neighbours();
     private final List<EnemyWave> waves = new ArrayList<>();
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
@@ -91,7 +93,17 @@ public final class WaveSurfer {
 
     /** Our scan of an enemy; a shot it reveals becomes a wave. */
     public void scanned(String name, long time, double x, double y, double velocity, double energy) {
-        detector(name).scanned(time, x, y, velocity, energy).ifPresent(this::addWave);
+        neighbours.seen(name, time, x, y);
+        FireDetector detector = detector(name);
+        if (neighbours.nearOther(name, time)) {
+            detector.nearOtherRobot();
+        }
+        detector.scanned(time, x, y, velocity, energy).ifPresent(this::addWave);
+    }
+
+    /** Our scan of a teammate, which can ram an enemy out of our sight. */
+    public void teammateSeen(String name, long time, double x, double y) {
+        neighbours.seen(name, time, x, y);
     }
 
     public void ourBulletHit(String name, double power) {
@@ -113,8 +125,8 @@ public final class WaveSurfer {
         learn(shooter, time, x, y, heading, power);
     }
 
+    /** A dead robot fires no more, but its bullets in the air still fly and hit, so its waves stay. */
     public void robotDied(String name) {
-        waves.removeIf(w -> w.wave.shooter().equals(name));
         detectors.remove(name);
     }
 

@@ -12,6 +12,9 @@ val robocodeVersion = providers.gradleProperty("robocodeVersion").get()
 val robocodeSetupSha256 = providers.gradleProperty("robocodeSetupSha256").get()
 val toolchainJava = providers.gradleProperty("javaVersion").get().toInt()
 
+// A decompiler for reading foreign robot jars before they run; only `decompileJar` uses it.
+val decompiler: Configuration by configurations.creating
+
 // Differential tests of the bot's engine model against the recordings; they need `recordProbes` to run first.
 val engineTest: SourceSet = sourceSets.create("engineTest") {
     compileClasspath += sourceSets.main.get().output
@@ -31,6 +34,8 @@ dependencies {
     "engineTestImplementation"(platform("org.junit:junit-bom:6.1.3"))
     "engineTestImplementation"("org.junit.jupiter:junit-jupiter")
     "engineTestRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+
+    decompiler("org.vineflower:vineflower:1.12.0")
 }
 
 java {
@@ -172,20 +177,76 @@ val baselineJars = tasks.register<BaselineJars>("baselineJars") {
     baselines.set(baselinesDir)
 }
 
+// Foreign robot jars approved for this machine, kept out of git: `.robocode/foreign/approved.txt` lists one jar per
+// line as "<jar> <sha256> <notes>" (docs/harness.md, "Foreign robots").
+val foreignDir = rootProject.layout.projectDirectory.dir(".robocode/foreign")
+
+fun approvedForeignJars(): Map<String, String> {
+    val list = foreignDir.file("approved.txt").asFile
+    if (!list.exists()) {
+        return emptyMap()
+    }
+    return list.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+        .associate { line -> line.split(Regex("\\s+")).let { it[0] to it[1] } }
+}
+
+fun sha256Of(file: File): String =
+    MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
+
+// The jar check runs on the approved foreign jars before they are deployed; a denied jar stops the build. A jar
+// in our or the sample packages is denied, because the harness trusts robots by package (Sandbox.foreign).
+val checkForeignJars = tasks.register<JavaExec>("checkForeignJars") {
+    group = "verification"
+    description = "Runs the jar check on the foreign jars listed in .robocode/foreign/approved.txt."
+    mainClass = "cz.libors.harness.foreign.JarCheck"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = sourceSets.main.get().runtimeClasspath
+    val jars = approvedForeignJars().keys.map { foreignDir.file(it).asFile }
+    val marker = layout.buildDirectory.file("foreign-jars-checked")
+    args(jars.map { it.absolutePath })
+    inputs.files(jars)
+    outputs.file(marker)
+    onlyIf { jars.isNotEmpty() }
+    doLast {
+        marker.get().asFile.writeText(jars.joinToString("\n") { it.name } + "\n")
+    }
+}
+
 val deployBots = tasks.register<Copy>("deployBots") {
     group = "robocode"
-    description = "Copies the freshly built robot, team and probe jars and the baseline jars into the installation."
-    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":probe:probeJar", baselineJars)
+    description = "Copies our robot, team, probe and baseline jars and the approved foreign jars into the installation."
+    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":probe:probeJar", baselineJars, checkForeignJars)
     val robotsDir = robocodeHome.dir("robots").asFile
+    val approved = approvedForeignJars()
+    val foreign = foreignDir.asFile
     from(project(":bot").layout.buildDirectory.dir("robots"))
     from(project(":probe").layout.buildDirectory.dir("robots"))
     from(baselinesDir)
+    if (approved.isNotEmpty()) {
+        from(foreignDir) { include(approved.keys) }
+    }
     into(robotsDir)
     doFirst {
-        robotsDir.listFiles { file -> file.name.startsWith("cz.libors.") }?.forEach { it.delete() }
+        for ((jar, expected) in approved) {
+            val file = foreign.resolve(jar)
+            if (!file.exists()) {
+                throw GradleException("Approved foreign jar is missing: $file")
+            }
+            val actual = sha256Of(file)
+            if (actual != expected) {
+                throw GradleException("SHA-256 of $file is $actual, but $expected was approved")
+            }
+        }
+        // Only our jars and the approved foreign jars stay; the sample robots are directories, not jars.
+        robotsDir.listFiles { file ->
+            file.name.startsWith("cz.libors.") || file.name.endsWith(".jar") && file.name !in approved.keys
+        }?.forEach { it.delete() }
         robotsDir.resolve("robot.database").delete()
     }
 }
+
+// Robots may read environment variables, so the battle JVM gets only these; sandboxCheck verifies it.
+val battleEnvironment = listOf("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
 
 /** Runs a harness main class against the Robocode installation, on the configured toolchain. */
 fun JavaExec.onRobocode(main: String) {
@@ -194,6 +255,7 @@ fun JavaExec.onRobocode(main: String) {
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
     workingDir = robocodeHome.asFile
+    setEnvironment(battleEnvironment.mapNotNull { key -> System.getenv(key)?.let { key to it } }.toMap())
     jvmArgs(
         "-Xmx1g",
         "-XX:+IgnoreUnrecognizedVMOptions",
@@ -216,6 +278,24 @@ val skeletonCheck = tasks.register<JavaExec>("skeletonCheck") {
         "cz.libors.Ogi $botVersion",
         "cz.libors.OgiTeam $botVersion",
         layout.buildDirectory.file("skeleton-check.json").get().asFile.absolutePath,
+    )
+}
+
+tasks.register<JavaExec>("sandboxCheck") {
+    group = "verification"
+    description = "Checks that robots run in Robocode's sandbox with a minimal environment, and the jar check."
+    onRobocode("cz.libors.harness.SandboxCheck")
+    // A security violation bans the robot in the repository, and the robot database could keep the ban.
+    val database = robocodeHome.file("robots/robot.database").asFile
+    doFirst {
+        database.delete()
+    }
+    args(
+        robocodeHome.asFile.absolutePath,
+        botVersion,
+        project(":bot").layout.buildDirectory.file("robots/cz.libors.Ogi_$botVersion.jar").get().asFile.absolutePath,
+        project(":probe").layout.buildDirectory.file("robots/cz.libors.probe_$botVersion.jar").get().asFile
+            .absolutePath,
     )
 }
 
@@ -280,6 +360,39 @@ tasks.register<JavaExec>("recordBattles") {
             "opponents=" + root.resolve(opponents.get()).absolutePath,
             "out=" + root.resolve(out.get()).absolutePath,
         ) + passed
+    })
+}
+
+tasks.register<JavaExec>("jarCheck") {
+    group = "verification"
+    description = "Checks foreign robot jars against the allowlist before they run; see docs/harness.md."
+    mainClass = "cz.libors.harness.foreign.JarCheck"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = sourceSets.main.get().runtimeClasspath
+    val jars = providers.gradleProperty("jars")
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        (jars.orNull ?: throw GradleException("Pass -Pjars=<jar or directory>,..."))
+            .split(",").map { root.resolve(it).absolutePath }
+    })
+}
+
+tasks.register<JavaExec>("decompileJar") {
+    group = "verification"
+    description = "Decompiles a robot jar for review into harness/build/decompiled/<jar name>/; nothing in it runs."
+    mainClass = "org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = decompiler
+    val jar = providers.gradleProperty("jar")
+    val out = layout.buildDirectory.dir("decompiled")
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        val file = root.resolve(jar.orNull ?: throw GradleException("Pass -Pjar=<robot jar>"))
+        val target = out.get().dir(file.nameWithoutExtension).asFile
+        target.deleteRecursively()
+        target.mkdirs()
+        // Only the decompiled classes: a source file shipped in the jar must not stand in for its class.
+        listOf("--skip-extra-files=true", "--silent", file.absolutePath, target.absolutePath)
     })
 }
 

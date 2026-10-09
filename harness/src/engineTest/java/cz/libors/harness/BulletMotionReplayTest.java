@@ -47,6 +47,8 @@ class BulletMotionReplayTest {
         mismatches.examples.forEach(e -> System.out.println("  " + e));
         assertTrue(outcomes.getOrDefault("spawned", 0) > 5_000, "Too few bullets: " + outcomes);
         assertTrue(outcomes.getOrDefault("hit robot", 0) > 500, "Too few robot hits: " + outcomes);
+        // A dead robot's bullets keep flying and hitting (engine-model G-44).
+        assertTrue(outcomes.getOrDefault("hit robot, owner dead", 0) > 0, "No hit by a dead owner: " + outcomes);
         assertEquals(Map.of(), mismatches.byField, "Model and engine disagree, examples:\n"
                 + String.join("\n", mismatches.examples));
     }
@@ -133,6 +135,10 @@ class BulletMotionReplayTest {
                     return;
                 }
                 count(outcomes, victims.size() > 1 ? "hit robot, several crossed" : "hit robot");
+                RobotTick owner = trace.tick(actual.round(), turn - 1, actual.owner());
+                if (owner != null && owner.state().equals("DEAD")) {
+                    count(outcomes, "hit robot, owner dead");
+                }
                 RobotTick victim = trace.tick(actual.round(), turn, actual.victim());
                 double[] impact = BulletMotion.impact(b, new RobotBox(victim.x(), victim.y()));
                 mismatches.compare(where, "x", actual.x(), impact[0]);

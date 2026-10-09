@@ -28,11 +28,16 @@ battles.
 | `./gradlew engineTest` | Runs `recordProbes`, then replays the recordings through the bot's engine model (`harness/src/engineTest`) |
 | `./gradlew compare -Pbaseline=HEAD` | Paired, sequential comparison of the working tree with a baseline revision; see [harness.md](harness.md#comparing-two-versions) |
 | `./gradlew :harness:baselineJars -Pbaseline=<rev>` | Only builds the robot and team jars of a git revision into `.robocode/baselines/` |
+| `./gradlew sandboxCheck` | Checks that robots run in Robocode's sandbox with a minimal environment; see [harness.md](harness.md#foreign-robots) |
+| `./gradlew jarCheck -Pjars=<jar or directory>,...` | Checks foreign robot jars against the allowlist before they run |
+| `./gradlew decompileJar -Pjar=<jar>` | Decompiles a robot jar for review into `harness/build/decompiled/` |
 | `./gradlew skeletonCheck -PjavaVersion=21` | The same on another JVM (17, 21 and 25 are tested) |
 | `./gradlew :harness:installRobocode` | Only downloads and unpacks Robocode |
 
 For Java 12–23 the harness adds `-Djava.security.manager=allow`, as Robocode's own launch scripts do. Java 24+ refuses
-that option.
+that option, and Robocode has no sandbox there (engine-model G-43): the harness refuses foreign robots on such a JVM.
+
+Battle JVMs get only `PATH`, `LANG`, `LC_ALL`, `LC_CTYPE` and `TZ` from the environment, because robots may read it.
 
 ## Robocode installation
 
@@ -43,7 +48,9 @@ that option.
   2026-10-08).
 - **Deployment:** `deployBots` deletes every `cz.libors.*` jar from `.robocode/<version>/robots/`, copies in the
   freshly built robot, team and probe jars and the baseline jars from `.robocode/baselines/`, and deletes the robot
-  database cache so Robocode rescans. Baseline jars are built from git revisions (`baselineJars`) and kept there
+  database cache so Robocode rescans. It also deploys the approved foreign jars from `.robocode/foreign/`, after
+  the jar check (`checkForeignJars`) and a check of their SHA-256, and removes any other foreign jar
+  ([harness.md](harness.md#foreign-robots)). Baseline jars are built from git revisions (`baselineJars`) and kept there
   across reinstalls; delete the ones no longer needed by hand.
 - **CPU constant:** the engine measures it on first start and stores it in `config/robocode.properties`. It sets
   the per-turn time limit.

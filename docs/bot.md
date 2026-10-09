@@ -42,10 +42,12 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   the last deceleration, room to the wall ahead and behind (in escape angles), distance moved over 10 turns, and how
   the path curves.
 - **Aim:** the nearest √n stored shots (at most 50), weighted by distance, vote with their whole hit ranges; the gun
-  aims at the guess factor most weight covers. The search runs only in the last 4 turns before the gun is cool.
-- **Virtual guns:** every plan also holds the circular aim (`CircularAim`), and every passed wave scores both guns:
-  would that aim have been inside the hit range? Per enemy, the gun with the better weighted record fires; circular
-  targeting until the guess-factor gun has 20 scored aims.
+  aims at the guess factor most weight covers. The search runs only once the gun heat is at most 4 cooling steps:
+  the 4 turns before the gun is cool and the turns it stays cool.
+- **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
+  the guess-factor gun searched for its plan (at power 1.9, 5 waves in 14): would each aim have been inside the hit
+  range? Per enemy, the gun with the better weighted record fires; circular targeting until the guess-factor gun
+  has 20 weighted tries (a real bullet counts 1, a virtual wave 0.5).
 
 ## Movement (`cz.libors.ogi.move`)
 
@@ -54,6 +56,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 - **Danger** (`DangerStats`, per enemy, for the battle): a smoothed histogram of the guess factors at which the enemy's
   bullets passed us, learned from bullets that hit us and bullets one of ours hit. It starts with all weight at guess
   factor 0, a gun aiming straight at us.
+- **A dead enemy's waves stay** until they pass us: its bullets keep flying (engine-model G-44).
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
   `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
   400 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin

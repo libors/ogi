@@ -56,9 +56,12 @@ public final class BattleRunner implements AutoCloseable {
      * <p>Fixed starts go to the engine as its initial-positions string, which, unlike the specification's
      * {@code RobotSetup} array, can place every member of a team (engine-model G-41).
      *
+     * <p>A battle with foreign robots runs only while Robocode's sandbox is active ({@link Sandbox}).
+     *
      * @param listeners extra listeners for this battle only, e.g. a recorder
      */
     public BattleOutcome run(BattleSetup setup, IBattleListener... listeners) {
+        Sandbox.requireFor(setup.robots(), Sandbox.active());
         RobotSpecification[] robots = resolve(setup.robots());
         long seed = setup.seed() != null ? setup.seed() : seeds.nextLong();
         RandomFactory.resetDeterministic(seed);
@@ -218,7 +221,8 @@ public final class BattleRunner implements AutoCloseable {
 
         /**
          * Counts each bullet once when it first appears and once when it hits a robot of another contestant; a
-         * contestant's name is its team's, or the robot's own outside a team.
+         * contestant's name is its team's, or the robot's own outside a team. Bullet id 0 is no shot: a dying robot's
+         * explosion, and the energy a dying leader takes from its teammates (engine {@code RobotPeer.kill}).
          *
          * <p>Only bullets that end while the round is open count. Once one contestant is left, the bullets still in
          * the air are taken back and later ones are ignored: they can no longer hit an enemy, and their number grows
@@ -230,7 +234,7 @@ public final class BattleRunner implements AutoCloseable {
             }
             for (IBulletSnapshot b : bullets) {
                 int owner = b.getOwnerIndex();
-                if (owner < 0 || owner >= robots.length) {
+                if (owner < 0 || owner >= robots.length || b.isExplosion() || b.getBulletId() == 0) {
                     continue;
                 }
                 long key = ((long) round << 48) | ((long) owner << 32) | (b.getBulletId() & 0xffffffffL);
@@ -249,7 +253,7 @@ public final class BattleRunner implements AutoCloseable {
                 decidedRound = round;
                 for (IBulletSnapshot b : bullets) {
                     int owner = b.getOwnerIndex();
-                    if (owner >= 0 && owner < robots.length
+                    if (owner >= 0 && owner < robots.length && !b.isExplosion() && b.getBulletId() != 0
                             && (b.getState() == BulletState.FIRED || b.getState() == BulletState.MOVING)) {
                         shots.get(robots[owner].getTeamName())[0]--;
                     }

@@ -10,6 +10,7 @@ val toolchainJava = providers.gradleProperty("javaVersion").get().toInt()
 val probePackage = "cz.libors.probe"
 val probeNames = listOf(
     "RandomProbe", "PassiveProbe", "WatchingProbe", "MathRandomProbe", "UtilsRandomProbe", "UtilsDrawProbe",
+    "SandboxProbe",
 )
 
 dependencies {

@@ -6,6 +6,7 @@ import cz.libors.harness.recording.Recording.BulletTick;
 import cz.libors.harness.recording.Recording.RobotTick;
 import cz.libors.ogi.enemy.DetectedShot;
 import cz.libors.ogi.enemy.FireDetector;
+import cz.libors.ogi.enemy.Neighbours;
 import cz.libors.ogi.physics.BulletMotion;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.physics.RobotMotion;
@@ -38,10 +39,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * as far as the recording shows them.
  */
 class FireDetectionTest {
-
-    /** How old and how far a sighting of another robot may be to count as a possible ram partner. */
-    private static final int RAM_MEMORY = 16;
-    private static final double RAM_DISTANCE = 150;
 
     /** A shot that really happened. */
     private record TrueShot(int shooter, long fireTime, double power, double x, double y) {
@@ -110,6 +107,7 @@ class FireDetectionTest {
         for (Recording.RoundEnd round : trace.recording.roundEnds()) {
             int r = round.round();
             Map<String, FireDetector> detectors = new HashMap<>();
+            Neighbours neighbours = new Neighbours();
             // The observer's last known position of every robot: turn, x, y.
             Map<String, double[]> known = new HashMap<>();
             List<DetectedShot> detections = new ArrayList<>();
@@ -144,7 +142,9 @@ class FireDetectionTest {
                     if (e[0].equals("ScannedRobot")) {
                         double[] p = known.get(e[2]);
                         FireDetector detector = detector(detectors, trace, e[2]);
-                        if (nearOther(known, e[2], turn)) {
+                        // As the bot does it (WaveSurfer.scanned), scan by scan in event order.
+                        neighbours.seen(e[2], turn, p[1], p[2]);
+                        if (neighbours.nearOther(e[2], turn)) {
                             detector.nearOtherRobot();
                         }
                         detector.scanned(turn, p[1], p[2], Double.parseDouble(e[6]), Double.parseDouble(e[7]))
@@ -191,19 +191,6 @@ class FireDetectionTest {
         }
         double unexplained = before.energy() - now.energy() - known;
         return Math.abs(unexplained - 0.1) < 1e-6 || (now.energy() == 0 && unexplained > 1e-6 && unexplained < 0.1);
-    }
-
-    /** Whether a robot other than us was recently seen close to the enemy, close enough to have rammed it. */
-    private static boolean nearOther(Map<String, double[]> known, String enemy, int turn) {
-        double[] e = known.get(enemy);
-        for (Map.Entry<String, double[]> other : known.entrySet()) {
-            double[] o = other.getValue();
-            if (!other.getKey().equals(enemy) && turn - o[0] <= RAM_MEMORY
-                    && Math.hypot(o[1] - e[1], o[2] - e[2]) < RAM_DISTANCE) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static FireDetector detector(Map<String, FireDetector> detectors, ProbeTrace trace, String name) {
