@@ -765,7 +765,7 @@ tasks.register<JavaExec>("submit") {
     val baseline = providers.gradleProperty("baseline")
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
     val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "note",
-        "timeout").mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+        "timeout", "reuse").mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val versionFile = snapshotVersionFile
     val port = providers.gradleProperty("port").orElse("8765")
     argumentProviders.add(CommandLineArgumentProvider {

@@ -46,7 +46,7 @@ public final class Slot {
                     "os", System.getProperty("os.name") + " " + System.getProperty("os.arch"),
                     "sandbox", Sandbox.active(),
                     "cpuConstant", BattleRunner.cpuConstant(home).orElse(0),
-                    "robots", runner.repository()));
+                    "robots", runner.repository(), "robotJars", runner.repositoryJars()));
             String line;
             while ((line = in.readLine()) != null) {
                 Optional<Message> parsed = Protocol.parse(line);

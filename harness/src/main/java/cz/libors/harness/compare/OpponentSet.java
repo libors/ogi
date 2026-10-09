@@ -11,6 +11,7 @@ import java.util.List;
  *
  * <pre>
  * # comment
+ * title The sample bots
  * format 1v1
  * [strong]
  * sample.RamFire
@@ -18,12 +19,16 @@ import java.util.List;
  * sample.SpinBot
  * </pre>
  *
- * <p>One robot or team per line, named as Robocode lists it (with its version, if it has one). Opponents in the
- * {@code [strong]} section make up the second scoreboard.
+ * <p>One robot or team per line, named as Robocode lists it (with its version, if it has one). A line {@code [name]}
+ * starts a group: opponents under {@code [strong]} make up the second scoreboard, every other group but
+ * {@code [other]} a scoreboard of its own. The optional {@code title} says in words what the set is.
+ *
+ * @param title the set's {@code title} line, or empty
  */
-record OpponentSet(String name, Format format, List<Opponent> opponents) {
+record OpponentSet(String name, String title, Format format, List<Opponent> opponents) {
 
-    record Opponent(String name, boolean strong) {
+    /** @param group the section the opponent is listed under, empty before the first */
+    record Opponent(String name, boolean strong, String group) {
     }
 
     /** The rumble's battle settings. */
@@ -61,7 +66,8 @@ record OpponentSet(String name, Format format, List<Opponent> opponents) {
 
     static OpponentSet parse(String name, List<String> lines) {
         Format format = null;
-        boolean strong = false;
+        String title = "";
+        String group = "";
         List<Opponent> opponents = new ArrayList<>();
         for (String raw : lines) {
             int comment = raw.indexOf('#');
@@ -71,17 +77,19 @@ record OpponentSet(String name, Format format, List<Opponent> opponents) {
             }
             if (line.startsWith("format ")) {
                 format = Format.of(line.substring("format ".length()).trim());
-            } else if (line.equals("[strong]") || line.equals("[other]")) {
-                strong = line.equals("[strong]");
+            } else if (line.startsWith("title ")) {
+                title = line.substring("title ".length()).trim();
+            } else if (line.startsWith("[") && line.endsWith("]")) {
+                group = line.substring(1, line.length() - 1).trim();
             } else if (opponents.stream().anyMatch(o -> o.name().equals(line))) {
                 throw new IllegalArgumentException(name + ": " + line + " is listed twice");
             } else {
-                opponents.add(new Opponent(line, strong));
+                opponents.add(new Opponent(line, group.equals("strong"), group));
             }
         }
         if (format == null || opponents.isEmpty()) {
             throw new IllegalArgumentException(name + ": needs a format line and at least one opponent");
         }
-        return new OpponentSet(name, format, List.copyOf(opponents));
+        return new OpponentSet(name, title, format, List.copyOf(opponents));
     }
 }

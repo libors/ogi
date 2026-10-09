@@ -224,9 +224,11 @@ compares uncommitted changes with `HEAD`:
 
 ### Opponent sets
 
-A text file per set in `harness/opponents/`: a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10
-rounds), then one robot or team per line as Robocode lists it, including its version. Opponents under `[strong]` form
-the second scoreboard; `[other]` starts the rest. Only trusted robots are in the repository: `sample-1v1.txt` and
+A text file per set in `harness/opponents/`: an optional `title` line that says in words what the set is (the
+dashboard shows it), a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10 rounds), then one robot or
+team per line as Robocode lists it, including its version. A line `[name]` starts a group: opponents under
+`[strong]` form the second scoreboard, every other group but `[other]` a scoreboard of its own (e.g. rumble tiers);
+a group may start again further down. Only trusted robots are in the repository: `sample-1v1.txt` and
 `sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes, whose version
 follows `botVersion`), for gun and movement work. Sets of rumble bots belong next to their jars on the machine that
 runs them.
@@ -572,21 +574,43 @@ job type `record` takes any robot and keys (`queue.Submit`).
   2026-10-09 the gun bench's parity failed against 4 of 125 opponents, each one where Ogi had skipped turns (141 of
   2.4 million decisions, one wave without its plan).
 
+### Battle cache (`queue.BattleCache`)
+
+The server keeps every battle a comparison played in `<state>/battle-cache.jsonl`, and a comparison takes a battle
+from there instead of playing it again. After A vs B, a comparison of B with C plays only C's battles: a pair's seed
+comes from the run seed, the opponent and the pair's number, so B meets the same opponents on the same seeds.
+
+- **The same battle:** the field, the rounds, the seed, the start positions, each participant's name and the SHA-256
+  of its jar (ours from the job, the opponents' as each slot resolves them, `BattleRunner.repositoryJars`; "builtin"
+  for Robocode's own robots), and the worker with its operating system, Java, Robocode, JVM options, CPU factor and
+  sandbox. The CPU constant is left out: the worker measures it anew at every start (a few per cent of jitter).
+- **Never cached:** a battle against an opponent whose jar the worker did not report, recorded battles and battles in
+  debug mode.
+- A cached outcome is one sample of its battle, not a replay of it (robots that skip turns do not repeat bit for bit),
+  so it serves as well as a new one. `-Preuse=false` plays every battle anew; another `-Pseed` gives other battles.
+- The job counts reused battles (`reusedBattles`, shown on the dashboard); its rate and ETA count only battles played.
+
 ### Dashboard
 
 `http://localhost:8765/` (`-Pport`), on 127.0.0.1 and ::1 only (another program, e.g. a Docker port, may hold the
 port on one of them; the server then stops with an error).
 
-- **Workers:** state (offline, connecting, starting, ready, backoff, stopping), busy slots, battles and battles per
-  second, failures and slot restarts, the CPU constant, Java and JVM options, the last error, the battles running.
-- **Queue:** waiting and running jobs with what they compare, how long they waited and ran, pairs (with an estimate
-  of the total: exact in fixed mode, otherwise the expected length of the test at the current estimate, rough while
-  the estimate is), the estimate of the difference with its 95 % interval, the LLR between its bounds, the job's rate
-  and ETA; buttons to move a job up or down and to cancel it.
-- **History:** finished jobs with their decision, waiting and running time, pairs, estimate and health (skipped
-  turns, problems, failed battles).
-- **A job** (click its row): the decision, noise, health, the workers' environment, both scoreboards, the
-  per-opponent table, problems and the last battles.
+It is written for a human watching the queue: words first, numbers in tooltips and in "Technical details". It
+refreshes every 2 s and keeps open the sections the viewer opened.
+
+- **Workers:** state (offline, connecting, starting, ready, backoff, stopping), the slots (blue: playing a battle),
+  battles and battles per second, failures and slot restarts; under "more" the CPU constant, Java and JVM options and
+  the battles running.
+- **Jobs, on the left:** running and waiting, then finished. Each shows its note (`-Pnote`) as its title, the test
+  and the opponents in words (the set's `title`), and the result in words: "Better by" or "Worse by" only when the
+  whole 95 % interval of the estimate says so, otherwise "No clear difference". A running job shows the evidence as a
+  marker between the test's two answers (the LLR between its bounds), its progress and the time left; a finished one
+  how the test ended. Buttons move a waiting job up or down or cancel it.
+- **The job on the right:** the clicked one (kept in the URL), else the running one. The result and the test in
+  words, the scoreboards (all, strong, every other named group of the set: old and new score share, the change with
+  its interval, how often they hit us, how often we hit them, wins), each opponent (worst change first) and the
+  technical details (job id, the job as submitted, the decision, LLR, noise, health, own turns, the directory, the
+  workers' environment, problems, the last battles).
 - `./gradlew queueStatus` prints the same in a terminal; actions are POSTs that need the header
   `X-Requested-With: ogi`, so another web page cannot trigger them.
 

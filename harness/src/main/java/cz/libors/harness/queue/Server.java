@@ -57,6 +57,7 @@ public final class Server {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final Path stateDir;
+    private final BattleCache battleCache;
     private final Path jobsDir;
     private final Path jarsDir;
     private final Path localBundle;
@@ -99,6 +100,8 @@ public final class Server {
         int connectFailures;
         Map<String, Object> info = Map.of();
         Set<String> robots = Set.of();
+        /** The SHA-256 of the jar each robot or team is loaded from, as the worker reported it ("builtin" for none). */
+        Map<String, String> robotJars = Map.of();
         final Map<Long, InFlight> inFlight = new LinkedHashMap<>();
         final Deque<Work> pending = new ArrayDeque<>();
         final Set<String> deployed = new HashSet<>();
@@ -135,6 +138,30 @@ public final class Server {
         Files.createDirectories(jarsDir);
         logFile = new PrintStream(Files.newOutputStream(this.stateDir.resolve("server.log"), StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND), true, StandardCharsets.UTF_8);
+        battleCache = new BattleCache(this.stateDir.resolve("battle-cache.jsonl"), new BattleCache.Workers() {
+            @Override
+            public Optional<Map<String, String>> environment(String worker) {
+                return link(worker).filter(l -> !l.info.isEmpty()).map(Server::battleEnvironment);
+            }
+
+            @Override
+            public Optional<String> robotJar(String worker, String robot) {
+                return link(worker).map(l -> l.robotJars.get(robot));
+            }
+        });
+    }
+
+    private Optional<Link> link(String worker) {
+        return links.stream().filter(l -> l.name().equals(worker)).findFirst();
+    }
+
+    /** What decides a battle on a worker, for the battle cache; not the CPU constant, which it measures anew. */
+    private static Map<String, String> battleEnvironment(Link link) {
+        Map<String, String> m = new TreeMap<>();
+        for (String key : List.of("os", "java", "robocode", "jvm", "cpuFactor", "sandbox")) {
+            m.put(key, String.valueOf(link.info.get(key)));
+        }
+        return m;
     }
 
     public static void main(String[] args) throws Exception {
@@ -247,6 +274,7 @@ public final class Server {
                 QueueJob job = QueueJob.open(dir);
                 if (job instanceof CompareJob c) {
                     c.environment(this::environment);
+                    c.cache(battleCache);
                 }
                 jobs.put(id, job);
                 if (job.state().active()) {
@@ -484,8 +512,14 @@ public final class Server {
                     names.addAll(((List<?>) entry).stream().map(String::valueOf).toList());
                 }
                 info.remove("robots");
+                Map<String, String> jarsByRobot = new LinkedHashMap<>();
+                Object reported = info.remove("robotJars");
+                if (reported instanceof Map<?, ?> jarMap) {
+                    jarMap.forEach((robot, sha) -> jarsByRobot.put(String.valueOf(robot), String.valueOf(sha)));
+                }
                 link.info = info;
                 link.robots = names;
+                link.robotJars = jarsByRobot;
                 link.deployed.clear();
                 link.deploying.clear();
                 link.connectFailures = 0;

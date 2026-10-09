@@ -87,8 +87,8 @@ public abstract class QueueJob {
         saveStatus();
     }
 
-    /** Marks the job started when its first battle goes out. */
-    void started() throws IOException {
+    /** Marks the job started when its first battle goes out, or when it first takes a battle from the cache. */
+    protected void started() throws IOException {
         if (state() == State.QUEUED) {
             status.setProperty("state", State.RUNNING.name());
             status.setProperty("startedAt", Long.toString(System.currentTimeMillis()));

@@ -1,5 +1,6 @@
 # The sample bots plus the random-moving probes, at the 1v1 rumble's settings: the trusted opponents for gun and
 # movement work on a machine that runs no foreign code. The probes' version follows botVersion.
+title The sample bots and the random-moving probes (1v1)
 format 1v1
 
 [strong]

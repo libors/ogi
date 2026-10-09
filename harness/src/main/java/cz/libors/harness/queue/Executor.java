@@ -186,7 +186,8 @@ public final class Executor {
             server.send(Message.of("ready", "slots", count, "cpuConstant", cpuConstant, "cpuConstantIdle", m.idle(),
                     "cpuSamples", m.samples(), "cpuFactor", cpuFactor, "jvm", jvm,
                     "java", first.string("java"), "robocode", first.string("robocode"), "os", first.string("os"),
-                    "sandbox", first.bool("sandbox"), "robots", first.list("robots"), "rejected", rejected));
+                    "sandbox", first.bool("sandbox"), "robots", first.list("robots"), "robotJars",
+                    first.map("robotJars"), "rejected", rejected));
             loop(idleTimeout);
         } catch (Exception e) {
             server.send(Message.of("fatal", "message", e.toString()));

@@ -22,7 +22,7 @@ import java.util.Properties;
  *
  * <p>Usage: {@code Submit state=<dir> type=compare robot=<class> team=<class> baseline=<version>
  * candidate=<version> opponents=<file> jar=<path>... [bounds=..] [maxPairs=n] [pairsPerOpponent=n] [starts=..]
- * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>]}, or {@code type=record robot=<class>
+ * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>] [reuse=false]}, or {@code type=record robot=<class>
  * version=<version> opponents=<file> jar=<path> [pairs=n] [keys=<debug key>,...] [seed=n] [rounds=n] [starts=..]
  * [timeout=..] [note=..]}.
  */
@@ -30,7 +30,7 @@ public final class Submit {
 
     private static final List<String> PASSED = List.of("robot", "team", "baseline", "candidate", "bounds",
             "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "timeout", "note", "version", "pairs",
-            "keys");
+            "keys", "reuse");
 
     private Submit() {
     }

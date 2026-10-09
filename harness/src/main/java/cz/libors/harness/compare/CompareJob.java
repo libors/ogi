@@ -12,6 +12,7 @@ import cz.libors.harness.compare.Sprt.Bounds;
 import cz.libors.harness.compare.Sprt.Decision;
 import cz.libors.harness.compare.Sprt.Estimate;
 import cz.libors.harness.compare.Stratum.Metric;
+import cz.libors.harness.queue.BattleCache;
 import cz.libors.harness.queue.BattleSpec;
 import cz.libors.harness.queue.QueueJob;
 
@@ -30,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.function.Supplier;
 
@@ -48,6 +50,9 @@ import java.util.function.Supplier;
  *       ignores), and a new pair takes its place.</li>
  *   <li>The log is {@link Compare}'s, keyed by the same configuration, so the server resumes a job after a restart
  *       from its complete pairs.</li>
+ *   <li>A battle the {@link BattleCache} already holds for the worker is not played: its outcome counts at once
+ *       (unless {@code reuse=false}). One that another job is playing now is waited for. A battle played goes into
+ *       the cache.</li>
  * </ul>
  */
 public final class CompareJob extends QueueJob {
@@ -86,6 +91,12 @@ public final class CompareJob extends QueueJob {
     /** The versions' own turn times (P-04), by side, from the battles of this server run. */
     private final BattleOutcome.TurnTimes[] turnTimes = {BattleOutcome.TurnTimes.NONE, BattleOutcome.TurnTimes.NONE};
     private Supplier<Map<String, String>> environment = Map::of;
+    private BattleCache cache;
+    private final boolean reuse;
+    /** The cache keys of the battles handed out, by work key. */
+    private final Map<String, String> cacheKeys = new HashMap<>();
+    /** Battles taken from the cache in this server run. */
+    private int reused;
 
     /** A pair handed out and not yet complete. */
     private static final class PairState {
@@ -114,13 +125,14 @@ public final class CompareJob extends QueueJob {
         maxPairs = Integer.parseInt(spec.getProperty("maxPairs", "1000"));
         pairsPerOpponent = Integer.parseInt(spec.getProperty("pairsPerOpponent", "0"));
         timeoutSeconds = Long.parseLong(spec.getProperty("timeout", "900"));
+        reuse = Boolean.parseBoolean(spec.getProperty("reuse", "true"));
         spec.stringPropertyNames().stream().filter(k -> k.startsWith("jar.")).sorted()
                 .forEach(k -> jars.put(k.substring(4), spec.getProperty(k)));
         String subjectClass = format == Format.TEAM ? spec.getProperty("team") : spec.getProperty("robot");
         baseline = subject(Side.BASELINE, subjectClass, spec.getProperty("baseline"));
         candidate = subject(Side.CANDIDATE, subjectClass, spec.getProperty("candidate"));
         config = Compare.config(baseline, candidate, set, rounds, fixedStarts, runSeed);
-        set.opponents().forEach(o -> strata.add(new Stratum(o.name(), o.strong())));
+        set.opponents().forEach(o -> strata.add(new Stratum(o.name(), o.strong(), o.group())));
         pendingPairs = new int[strata.size()];
         if (state().active()) {
             log = CompareLog.open(dir.resolve("battles.tsv"), config);
@@ -182,6 +194,11 @@ public final class CompareJob extends QueueJob {
         environment = supplier;
     }
 
+    /** Where battles already played come from, and where new ones go. */
+    public void cache(BattleCache battles) {
+        cache = battles;
+    }
+
     @Override
     public Map<String, String> jars() {
         return jars;
@@ -205,7 +222,7 @@ public final class CompareJob extends QueueJob {
     }
 
     @Override
-    public List<Work> next(String worker) {
+    public List<Work> next(String worker) throws IOException {
         if (!state().active()) {
             return List.of();
         }
@@ -214,37 +231,92 @@ public final class CompareJob extends QueueJob {
             outstanding++;
             return List.of(retry.poll());
         }
-        int h;
-        if (pairsPerOpponent > 0) {
-            h = Compare.leastPlayed(strata, pendingPairs, pairsPerOpponent);
-        } else {
-            if (Sprt.decide(strata, bounds) != Decision.CONTINUE || Compare.total(strata) + pairs.size() >= maxPairs) {
+        // A pair whose battles all come from the cache is complete at once; the next pair follows.
+        while (state().active()) {
+            int h;
+            if (pairsPerOpponent > 0) {
+                h = Compare.leastPlayed(strata, pendingPairs, pairsPerOpponent);
+            } else {
+                if (Sprt.decide(strata, bounds) != Decision.CONTINUE
+                        || Compare.total(strata) + pairs.size() >= maxPairs) {
+                    return List.of();
+                }
+                h = Sprt.next(strata, pendingPairs);
+            }
+            if (h < 0) {
                 return List.of();
             }
-            h = Sprt.next(strata, pendingPairs);
+            String opponent = strata.get(h).opponent();
+            int pair = nextPair.merge(opponent, 1, Integer::sum) - 1;
+            long seed = Compare.pairSeed(runSeed, opponent, pair);
+            pairs.put(pairKey(opponent, pair), new PairState(h, worker));
+            pendingPairs[h]++;
+            // Which version goes first alternates, as in Compare; with many slots both usually run at once.
+            List<Subject> order = pair % 2 == 0 ? List.of(baseline, candidate) : List.of(candidate, baseline);
+            List<Work> works = new ArrayList<>();
+            Map<Work, Map<String, Object>> cached = new LinkedHashMap<>();
+            for (Subject subject : order) {
+                BattleSpec battle = new BattleSpec(format.label + " vs " + opponent, format.width, format.height,
+                        rounds, List.of(subject.name(), opponent), seed, fixedStarts ? Compare.mix(seed) : null);
+                Work work = new Work(this, opponent + "\t" + pair + "\t" + subject.side(), battle, timeoutSeconds);
+                Optional<String> key = reuse && cache != null ? cache.key(worker, battle, subject.jarSha())
+                        : Optional.empty();
+                Optional<Map<String, Object>> hit = key.flatMap(k -> cache.get(k));
+                if (hit.isPresent()) {
+                    cached.put(work, hit.get());
+                } else if (key.isPresent() && !cache.claim(key.get())) {
+                    awaitOther(work, key.get(), worker);
+                } else {
+                    key.ifPresent(k -> cacheKeys.put(work.key(), k));
+                    works.add(work);
+                }
+            }
+            outstanding += works.size() + cached.size();
+            if (!cached.isEmpty()) {
+                started();
+            }
+            for (Map.Entry<Work, Map<String, Object>> e : cached.entrySet()) {
+                reused++;
+                record(e.getKey(), e.getValue(), worker, true);
+            }
+            if (!works.isEmpty()) {
+                return works;
+            }
         }
-        if (h < 0) {
-            return List.of();
-        }
-        String opponent = strata.get(h).opponent();
-        int pair = nextPair.merge(opponent, 1, Integer::sum) - 1;
-        long seed = Compare.pairSeed(runSeed, opponent, pair);
-        pairs.put(pairKey(opponent, pair), new PairState(h, worker));
-        pendingPairs[h]++;
-        // Which version goes first alternates, as in Compare; with many slots both usually run at once.
-        List<Subject> order = pair % 2 == 0 ? List.of(baseline, candidate) : List.of(candidate, baseline);
-        List<Work> works = new ArrayList<>();
-        for (Subject subject : order) {
-            BattleSpec battle = new BattleSpec(format.label + " vs " + opponent, format.width, format.height, rounds,
-                    List.of(subject.name(), opponent), seed, fixedStarts ? Compare.mix(seed) : null);
-            works.add(new Work(this, opponent + "\t" + pair + "\t" + subject.side(), battle, timeoutSeconds));
-        }
-        outstanding += works.size();
-        return works;
+        return List.of();
+    }
+
+    /**
+     * Waits for a battle another job is playing; counts its outcome when it comes, or plays it if that job does not
+     * bring it back.
+     */
+    private void awaitOther(Work work, String key, String worker) {
+        outstanding++;
+        cache.await(key, outcome -> {
+            if (outcome.isPresent()) {
+                reused++;
+                record(work, outcome.get(), worker, true);
+            } else {
+                outstanding--;
+                cache.claim(key);
+                cacheKeys.put(work.key(), key);
+                retries.computeIfAbsent(worker, k -> new ArrayDeque<>()).add(work);
+            }
+        });
     }
 
     @Override
     public void completed(Work work, Map<String, Object> outcomeMap, String worker) throws IOException {
+        String key = cacheKeys.remove(work.key());
+        if (key != null) {
+            cache.put(key, work.spec(), outcomeMap);
+        }
+        record(work, outcomeMap, worker, false);
+    }
+
+    /** Counts a battle's outcome, played now or taken from the cache. */
+    private void record(Work work, Map<String, Object> outcomeMap, String worker, boolean fromCache)
+            throws IOException {
         outstanding--;
         String[] key = work.key().split("\t");
         String opponent = key[0];
@@ -259,7 +331,9 @@ public final class CompareJob extends QueueJob {
         }
         count(battle);
         long now = System.currentTimeMillis();
-        completions.add(now);
+        if (!fromCache) {
+            completions.add(now);
+        }
         while (!completions.isEmpty() && completions.peek() < now - RATE_WINDOW_MILLIS) {
             completions.poll();
         }
@@ -283,6 +357,9 @@ public final class CompareJob extends QueueJob {
     @Override
     public void failed(Work work, String reason, String worker) throws IOException {
         outstanding--;
+        if (!state().active()) {
+            release(work);
+        }
         failures++;
         String[] key = work.key().split("\t");
         problems(List.of(key[2] + " " + key[0] + " pair " + key[1] + " (" + worker + ") failed: " + reason));
@@ -294,14 +371,24 @@ public final class CompareJob extends QueueJob {
         if (++p.attempts[side] < ATTEMPTS) {
             retries.computeIfAbsent(worker, k -> new ArrayDeque<>()).add(work);
         } else {
+            release(work);
             end(State.FAILED, key[2] + " " + key[0] + " pair " + key[1] + " failed " + ATTEMPTS + " times on "
                     + worker + ": " + reason);
         }
     }
 
     @Override
-    public void lost(Work work) {
+    public void lost(Work work) throws IOException {
         outstanding--;
+        release(work);
+    }
+
+    /** This job will not bring a claimed battle back: jobs waiting for it play it themselves. */
+    private void release(Work work) throws IOException {
+        String key = cacheKeys.remove(work.key());
+        if (key != null) {
+            cache.release(key);
+        }
     }
 
     @Override
@@ -382,10 +469,18 @@ public final class CompareJob extends QueueJob {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("metric", metric);
         m.put("bounds", pairsPerOpponent > 0 ? "fixed" : spec.getProperty("bounds", "gainer"));
+        m.put("delta0", pairsPerOpponent > 0 ? null : bounds.delta0());
+        m.put("delta1", pairsPerOpponent > 0 ? null : bounds.delta1());
+        m.put("pairsPerOpponent", pairsPerOpponent > 0 ? pairsPerOpponent : null);
         m.put("opponents", strata.size());
+        m.put("opponentSet", set.name());
+        m.put("opponentsTitle", set.title().isEmpty() ? null : set.title());
+        m.put("candidate", spec.getProperty("candidate"));
+        m.put("baseline", spec.getProperty("baseline"));
         if (!state().active() && log == null) {
             for (String key : List.of("pairs", "estimate", "halfWidth", "llr", "lower", "upper", "decision",
-                    "battles", "failures", "problems", "skippedSubject", "skippedOpponents", "maxPairs", "ownTurns",
+                    "battles", "reusedBattles", "failures", "problems", "skippedSubject", "skippedOpponents",
+                    "maxPairs", "ownTurns",
                     "ownTurnMaxMicros", "ownTurnsOverHalfBaseline", "ownTurnsOverHalfCandidate",
                     "ownTurnsOverIdleBaseline", "ownTurnsOverIdleCandidate")) {
                 String v = result(key);
@@ -405,6 +500,7 @@ public final class CompareJob extends QueueJob {
         m.put("upper", bounds.upper());
         m.put("decision", pairsPerOpponent > 0 ? null : Compare.describe(Sprt.decide(strata, bounds), bounds));
         m.put("battles", battles);
+        m.put("reusedBattles", reused);
         m.put("failures", failures);
         m.put("problems", problems);
         m.put("skippedSubject", skippedSubject);
@@ -421,7 +517,9 @@ public final class CompareJob extends QueueJob {
         m.put("battlesPerSecond", finite(rate));
         Double remaining = remainingPairs(total, d);
         m.put("remainingPairs", remaining);
-        m.put("etaSeconds", remaining == null || !(rate > 0) ? null : 2 * remaining / rate);
+        // Pairs take their battles from the cache as often as they did so far.
+        double played = battles == 0 ? 1 : Math.max(0.05, 1 - (double) reused / battles);
+        m.put("etaSeconds", remaining == null || !(rate > 0) ? null : 2 * remaining * played / rate);
         return m;
     }
 

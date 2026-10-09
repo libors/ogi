@@ -25,11 +25,22 @@ final class Stratum {
 
     private final String opponent;
     private final boolean strong;
+    private final String group;
     private final List<double[]> pairs = new ArrayList<>();
 
     Stratum(String opponent, boolean strong) {
+        this(opponent, strong, strong ? "strong" : "");
+    }
+
+    /** @param group the opponent set's section the opponent is listed under ({@link OpponentSet}) */
+    Stratum(String opponent, boolean strong, String group) {
         this.opponent = opponent;
         this.strong = strong;
+        this.group = group;
+    }
+
+    String group() {
+        return group;
     }
 
     String opponent() {

@@ -16,60 +16,85 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
-header { display: flex; gap: 16px; align-items: baseline; padding: 14px 20px; border-bottom: 1px solid var(--line);
-  background: var(--panel); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+header { display: flex; gap: 16px; align-items: baseline; padding: 12px 20px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 3; flex-wrap: wrap; }
 header h1 { font-size: 17px; margin: 0; }
 header .meta { color: var(--muted); font-size: 13px; }
-main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 8px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-.card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.card .name { font-weight: 600; font-size: 15px; }
-.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600;
+main { padding: 12px 20px 40px; max-width: 1600px; margin: 0 auto; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+h2:first-child { margin-top: 4px; }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.pos { color: var(--ok); } .neg { color: var(--bad); }
+.badge { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600;
   border: 1px solid currentColor; white-space: nowrap; }
 .s-ready, .s-RUNNING, .s-DONE { color: var(--ok); }
 .s-connecting, .s-starting, .s-stopping, .s-QUEUED { color: var(--accent); }
 .s-backoff, .s-CANCELLED { color: var(--warn); }
 .s-FAILED { color: var(--bad); }
 .s-offline { color: var(--idle); }
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin-top: 8px; font-size: 13px; }
-.kv div:nth-child(odd) { color: var(--muted); }
-.slots { display: flex; gap: 3px; margin-top: 10px; flex-wrap: wrap; }
-.slot { width: 18px; height: 18px; border-radius: 3px; background: var(--bar); }
+
+/* Workers */
+.workers { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card .name { font-weight: 600; font-size: 15px; }
+.slots { display: flex; gap: 3px; margin-top: 8px; flex-wrap: wrap; }
+.slot { width: 16px; height: 16px; border-radius: 3px; background: var(--bar); }
 .slot.busy { background: var(--accent); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin-top: 8px; font-size: 13px; }
+.kv > div:nth-child(odd) { color: var(--muted); }
 .err { color: var(--bad); font-size: 12px; margin-top: 6px; word-break: break-word; }
-.muted { color: var(--muted); }
-.num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12.5px; }
+details summary { cursor: pointer; color: var(--muted); }
+
+/* Jobs left, detail right */
+.layout { display: grid; grid-template-columns: minmax(380px, 5fr) 7fr; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.job { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+.job:hover { border-color: var(--accent); }
+.job.selected { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+.job .jtop { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.job .jtitle { font-weight: 600; }
+.job .jsub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.job .jres { margin-top: 6px; font-weight: 600; }
+.job .jfoot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 6px;
+  font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.empty { color: var(--muted); padding: 10px 2px; }
+.panel { position: sticky; top: 58px; max-height: calc(100vh - 70px); overflow-y: auto; }
+.panel .card + .card, .panel .tablewrap { margin-top: 12px; }
+.big { font-size: 18px; font-weight: 700; margin: 6px 0 2px; }
+.explain { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+/* Bars */
+.evidence { margin-top: 6px; }
+.evidence .labels { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); }
+.evidence .track { position: relative; height: 10px; border-radius: 5px; margin-top: 2px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--bad) 35%, var(--bar)), var(--bar) 50%,
+    color-mix(in srgb, var(--ok) 35%, var(--bar))); }
+.evidence .mid { position: absolute; left: 50%; top: -2px; width: 1px; height: 14px; background: var(--muted); }
+.evidence .mark { position: absolute; top: -3px; width: 6px; height: 16px; border-radius: 3px; background: var(--accent);
+  transform: translateX(-3px); }
+.progress { height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; width: 140px; display: inline-block;
+  vertical-align: middle; margin-right: 6px; }
+.progress div { height: 100%; background: var(--accent); }
+
+/* Tables */
 .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.r, th.r { text-align: right; }
 th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+th[title] { cursor: help; text-decoration: underline dotted; }
 tr:last-child td { border-bottom: none; }
-tbody tr.job { cursor: pointer; }
-tbody tr.job:hover { background: var(--bg); }
-tbody tr.selected { background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
-td.title { min-width: 260px; }
-td.title .note { color: var(--muted); font-size: 12.5px; }
-.llr { position: relative; width: 140px; height: 10px; background: var(--bar); border-radius: 5px; margin-top: 4px; }
-.llr .mid { position: absolute; left: 50%; top: -2px; width: 1px; height: 14px; background: var(--muted); }
-.llr .mark { position: absolute; top: -2px; width: 4px; height: 14px; border-radius: 2px; background: var(--accent);
-  transform: translateX(-2px); }
-.progress { width: 120px; height: 6px; background: var(--bar); border-radius: 3px; margin-top: 4px; overflow: hidden; }
-.progress div { height: 100%; background: var(--accent); }
-button { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px;
+button { font: inherit; font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 5px;
   background: var(--panel); color: var(--text); cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.danger:hover { border-color: var(--bad); color: var(--bad); }
-.actions { white-space: nowrap; }
-#detail { margin-top: 18px; }
-#detail .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-#detail h3 { margin: 0; font-size: 15px; }
-pre { font-family: var(--mono); font-size: 12px; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0 0; max-height: 320px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
-.empty { color: var(--muted); padding: 12px; }
-.pos { color: var(--ok); } .neg { color: var(--bad); }
+button:disabled { opacity: .4; cursor: default; }
+pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px; overflow-x: auto; margin: 6px 0 0; max-height: 300px; }
 </style>
 </head>
 <body>
@@ -79,26 +104,21 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--panel); borde
 </header>
 <main>
   <h2>Workers</h2>
-  <div class="cards" id="workers"></div>
+  <div class="workers" id="workers"></div>
 
-  <h2>Queue</h2>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Job</th><th>What</th><th>State</th><th>Times</th><th>Progress</th><th>Estimate</th>
-      <th>LLR</th><th>Rate · ETA</th><th></th></tr></thead>
-    <tbody id="active"></tbody>
-  </table></div>
-
-  <h2>History</h2>
-  <div class="tablewrap"><table>
-    <thead><tr><th>Job</th><th>What</th><th>Result</th><th>Waited</th><th>Ran</th><th>Finished</th>
-      <th>Pairs</th><th>Estimate</th><th>Health</th></tr></thead>
-    <tbody id="done"></tbody>
-  </table></div>
-
-  <div id="detail"></div>
+  <div class="layout">
+    <div>
+      <h2>Running and waiting</h2>
+      <div class="list" id="active"></div>
+      <h2>Finished</h2>
+      <div class="list" id="done"></div>
+    </div>
+    <div class="panel" id="detail"></div>
+  </div>
 </main>
 <script>
 "use strict";
+// The job shown on the right: picked by a click (kept in the URL), else the running one.
 let selected = (location.hash.match(/job=([\w-]+)/) || [])[1] || null;
 let lastState = null;
 
@@ -111,154 +131,292 @@ function dur(ms) {
   if (s < 3600) return Math.floor(s / 60) + " min " + String(s % 60).padStart(2, "0") + " s";
   return Math.floor(s / 3600) + " h " + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + " min";
 }
-const clock = t => t ? new Date(t).toLocaleString([], {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"}) : "–";
+const pad = n => String(n).padStart(2, "0");
+/** dd.MM.yyyy HH:mm */
+function clock(t) {
+  if (!t) return "–";
+  const d = new Date(t);
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+const timeOfDay = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+
+/** The refresh redraws everything every 2 s; folded sections the viewer opened stay open. */
+function openKeys() {
+  return new Set([...document.querySelectorAll("details[data-key]")].filter(d => d.open).map(d => d.dataset.key));
+}
+const openAttr = (keys, key) => keys.has(key) ? " open" : "";
+
+// ---- Words for the numbers ----
+
+const METRIC = {
+  score: "score share",
+  hits: "our hit rate",
+  dodge: "dodging (100 − their hit rate)",
+  recordings: "recordings",
+};
+const METRIC_HELP = "Score share: our part of both robots' points in a battle, in %. 50 is even, 100 means the "
+  + "opponent got nothing. The rumble ranks by its average over opponents (APS).";
+
+/** What the test looks for, in words. */
+function testWords(p) {
+  if (p.metric === "recordings") return "Recordings for debugging and the benches";
+  if (p.bounds === "fixed") return `Fixed ${p.pairsPerOpponent ?? ""} pairs per opponent, no stopping test`;
+  const d0 = p.delta0, d1 = p.delta1, m = METRIC[p.metric] || p.metric;
+  if (p.bounds === "gainer") return `Looking for a gain of ${fmt(d1, 1, true)} ${m} or more`;
+  if (p.bounds === "screening") return `Quick look for a big gain (${fmt(d1, 1, true)} ${m})`;
+  if (p.bounds === "nonregression") return `Checking that it loses no more than ${fmt(-d0, 2)} ${m}`;
+  return d0 == null ? m : `Testing ${fmt(d0, 2, true)} against ${fmt(d1, 2, true)} ${m}`;
+}
+
+/** The two answers the test chooses between: [left, right]. */
+function answers(p) {
+  if (p.bounds === "nonregression") return [`loses ${fmt(-p.delta0, 2)}`, "no loss"];
+  if (p.delta0 === 0) return ["no gain", `gain ${fmt(p.delta1, 1, true)}`];
+  return [fmt(p.delta0, 2, true), fmt(p.delta1, 2, true)];
+}
+
+function opponentsWords(p) {
+  if (p.opponentsTitle) return p.opponentsTitle;
+  return `${p.opponents ?? "?"} opponents${p.opponentSet ? " (" + p.opponentSet + ")" : ""}`;
+}
+
+/** The estimate in words: better or worse when the whole 95 % interval says so. */
+function resultWords(p, active) {
+  if (p.metric === "recordings") {
+    return {text: `${p.pairs ?? 0} of ${p.maxPairs ?? "?"} battles recorded`, cls: ""};
+  }
+  if (p.estimate == null) return {text: active ? "No pairs yet" : "No result", cls: "muted"};
+  const e = p.estimate, h = p.halfWidth;
+  const range = `${fmt(e, 2, true)} ± ${fmt(h)}`;
+  if (e - h > 0) return {text: `Better by ${range}`, cls: "pos"};
+  if (e + h < 0) return {text: `Worse by ${range}`, cls: "neg"};
+  return {text: `No clear difference${active ? " yet" : ""}: ${range}`, cls: "muted"};
+}
+
+/** How the test ended, in words. */
+function verdictWords(j) {
+  const p = j.progress || {}, r = j.reason || "";
+  if (j.state === "CANCELLED") return "Cancelled before the test decided";
+  if (j.state === "FAILED") return "Failed: " + r;
+  if (p.metric === "recordings") return r;
+  const [no, yes] = answers(p);
+  if (r.startsWith("H1")) return `Test: ${yes} (the data is nearer “${yes}” than “${no}”)`;
+  if (r.startsWith("H0")) return `Test: ${no} (the data is nearer “${no}” than “${yes}”)`;
+  return r ? "Test: " + r : "";
+}
+
+function evidenceBar(p) {
+  if (p.llr == null || p.lower == null) return "";
+  const pos = Math.max(0, Math.min(1, (p.llr - p.lower) / (p.upper - p.lower)));
+  const [no, yes] = answers(p);
+  return `<div class="evidence" title="How strong the evidence is. The test stops when the marker reaches an end. `
+    + `(LLR ${fmt(p.llr)} between ${fmt(p.lower)} and ${fmt(p.upper)})">
+      <div class="labels"><span>← ${esc(no)}</span><span>evidence</span><span>${esc(yes)} →</span></div>
+      <div class="track"><div class="mid"></div><div class="mark" style="left:${pos * 100}%"></div></div></div>`;
+}
+
+/** Battles taken from earlier jobs instead of played (the battle cache). */
+function reusedWords(p) {
+  return p.reusedBattles ? ` · ${p.reusedBattles} battles reused` : "";
+}
+
+function titleOf(j) {
+  if (j.note) return j.note;
+  const p = j.progress || {};
+  return p.candidate ? `Ogi ${p.candidate} against ${p.baseline}` : j.title;
+}
+
+// ---- Rendering ----
 
 async function load() {
   try {
     const r = await fetch("/api/state", {cache: "no-store"});
     lastState = await r.json();
     render(lastState);
-    if (selected) loadDetail(selected);
+    const shown = shownJob(lastState);
+    if (shown) loadDetail(shown); else document.getElementById("detail").innerHTML =
+      '<div class="card empty">Click a job to see what it compares and how it went.</div>';
   } catch (e) {
     document.getElementById("meta").textContent = "server not reachable – " + e;
   }
 }
 
-function render(s) {
-  document.getElementById("meta").textContent = "server up " + dur(s.now - s.startedAt) + " · updated "
-    + new Date(s.now).toLocaleTimeString() + " · " + s.stateDir;
-  document.getElementById("workers").innerHTML = s.workers.map(w => worker(w, s.now)).join("")
-    || '<div class="empty">No workers configured.</div>';
-  const active = s.jobs.filter(j => j.state === "QUEUED" || j.state === "RUNNING");
-  const done = s.jobs.filter(j => !(j.state === "QUEUED" || j.state === "RUNNING"));
-  document.getElementById("active").innerHTML = active.map((j, i) => activeRow(j, i, active.length, s.now)).join("")
-    || '<tr><td colspan="9" class="empty">Nothing waiting. Submit with ./gradlew submit -Pbaseline=HEAD</td></tr>';
-  document.getElementById("done").innerHTML = done.map(doneRow).join("")
-    || '<tr><td colspan="9" class="empty">No finished jobs yet.</td></tr>';
+function shownJob(s) {
+  if (selected) return selected;
+  const running = s.jobs.find(j => j.state === "RUNNING");
+  return running ? running.id : null;
 }
 
-function worker(w, now) {
+function render(s) {
+  const keys = openKeys();
+  document.getElementById("meta").textContent = "server up " + dur(s.now - s.startedAt) + " · updated "
+    + timeOfDay(s.now);
+  document.getElementById("workers").innerHTML = s.workers.map(w => worker(w, s.now, keys)).join("")
+    || '<div class="empty">No workers configured.</div>';
+  const shown = shownJob(s);
+  const active = s.jobs.filter(j => j.state === "QUEUED" || j.state === "RUNNING");
+  const done = s.jobs.filter(j => !(j.state === "QUEUED" || j.state === "RUNNING"));
+  document.getElementById("active").innerHTML = active.map((j, i) => jobCard(j, s.now, shown, i, active.length)).join("")
+    || '<div class="empty">Nothing waiting. Submit with ./gradlew submit -Pbaseline=HEAD "-Pnote=what changed"</div>';
+  document.getElementById("done").innerHTML = done.map(j => jobCard(j, s.now, shown)).join("")
+    || '<div class="empty">No finished jobs yet.</div>';
+}
+
+function worker(w, now, keys) {
   const i = w.info || {};
   const slots = Array.from({length: w.slots}, (_, k) => `<div class="slot ${k < w.busy ? "busy" : ""}"></div>`).join("");
-  const running = (w.running || []).slice(0, 14).map(r => `<div class="num muted">#${r.slot < 0 ? "?" : r.slot} ${esc(r.job)} · ${esc(r.battle)} · ${fmt(r.seconds, 0)} s</div>`).join("");
+  const running = (w.running || []).slice(0, 14).map(r => `<div class="mono muted">slot ${r.slot < 0 ? "?" : r.slot} · ${esc(r.battle)} · ${fmt(r.seconds, 0)} s</div>`).join("");
   return `<div class="card">
     <div class="top"><span class="name">${esc(w.name)}</span><span class="badge s-${esc(w.state)}">${esc(w.state)}</span></div>
     <div class="muted" style="font-size:12.5px">${esc(w.detail || (w.local ? "this Mac, trusted robots only" : "foreign robots allowed"))} · since ${dur(now - w.since)}</div>
-    <div class="slots" title="busy slots">${slots}</div>
+    <div class="slots" title="Battle slots: blue ones are playing a battle now">${slots}</div>
     <div class="kv">
-      <div>Busy</div><div class="num">${w.busy} / ${w.slots}</div>
-      <div>Battles</div><div class="num">${w.battles}${w.battlesPerSecond != null ? " · " + fmt(w.battlesPerSecond) + " /s" : ""}</div>
-      <div>Failures · restarts</div><div class="num">${w.failures} · ${w.restarts}</div>
-      ${i.cpuConstant ? `<div>CPU constant</div><div class="num">${(i.cpuConstant / 1e6).toFixed(2)} ms (idle ${(i.cpuConstantIdle / 1e6).toFixed(2)} × ${i.cpuFactor})</div>` : ""}
-      ${i.java ? `<div>Java</div><div>${esc(i.java)} · sandbox ${i.sandbox ? "on" : "OFF"}</div>` : ""}
-      ${i.jvm ? `<div>JVM</div><div class="num">${esc(i.jvm.join(" "))}</div>` : ""}
+      <div>Playing</div><div class="num">${w.busy} of ${w.slots} slots</div>
+      <div>Battles</div><div class="num">${w.battles}${w.battlesPerSecond != null ? " · " + fmt(w.battlesPerSecond) + " per second" : ""}</div>
+      ${w.failures || w.restarts ? `<div>Failures · restarts</div><div class="num">${w.failures} · ${w.restarts}</div>` : ""}
     </div>
     ${w.lastError ? `<div class="err">${esc(w.lastError)}</div>` : ""}
-    ${running ? `<details style="margin-top:8px"><summary class="muted">running battles</summary>${running}</details>` : ""}
+    <details data-key="worker-${esc(w.name)}"${openAttr(keys, "worker-" + w.name)} style="margin-top:6px">
+      <summary>more</summary>
+      <div class="kv">
+        ${i.cpuConstant ? `<div>CPU constant</div><div class="num">${(i.cpuConstant / 1e6).toFixed(2)} ms (idle ${(i.cpuConstantIdle / 1e6).toFixed(2)} × ${i.cpuFactor})</div>` : ""}
+        ${i.java ? `<div>Java</div><div>${esc(i.java)} · sandbox ${i.sandbox ? "on" : "OFF"}</div>` : ""}
+        ${i.jvm ? `<div>JVM</div><div class="mono">${esc(i.jvm.join(" "))}</div>` : ""}
+      </div>
+      ${running ? `<div style="margin-top:6px">${running}</div>` : ""}
+    </details>
   </div>`;
 }
 
-function llrBar(p) {
-  if (p.llr == null || p.lower == null) return "";
-  const pos = Math.max(0, Math.min(1, (p.llr - p.lower) / (p.upper - p.lower)));
-  return `<div class="llr" title="LLR ${fmt(p.llr)} in [${fmt(p.lower)}, ${fmt(p.upper)}]"><div class="mid"></div><div class="mark" style="left:${pos * 100}%"></div></div>`;
-}
-
-function estimate(p) {
-  if (p.estimate == null) return "–";
-  const cls = p.estimate - p.halfWidth > 0 ? "pos" : p.estimate + p.halfWidth < 0 ? "neg" : "";
-  return `<span class="num ${cls}">${fmt(p.estimate, 2, true)} ± ${fmt(p.halfWidth)}</span><div class="muted" style="font-size:12px">${esc(p.metric)}</div>`;
-}
-
-function activeRow(j, index, count, now) {
+function jobCard(j, now, shown, index, count) {
   const p = j.progress || {};
-  const total = p.remainingPairs != null ? p.pairs + p.remainingPairs : p.maxPairs;
-  const share = total ? Math.min(1, p.pairs / total) : 0;
-  const times = j.startedAt ? `running ${dur(now - j.startedAt)}<div class="muted">waited ${dur(j.startedAt - j.submittedAt)}</div>`
-    : `waiting ${dur(now - j.submittedAt)}`;
-  return `<tr class="job ${j.id === selected ? "selected" : ""}" onclick="select('${esc(j.id)}')">
-    <td class="num">${esc(j.id)}</td>
-    <td class="title">${esc(j.title)}${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}</td>
-    <td><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></td>
-    <td>${times}</td>
-    <td class="num">${p.pairs ?? 0}${p.pendingPairs ? " (+" + p.pendingPairs + ")" : ""} ${p.unit || "pairs"}${total ? `<div class="progress"><div style="width:${share * 100}%"></div></div><div class="muted">of ~${Math.round(total)}</div>` : ""}</td>
-    <td>${estimate(p)}</td>
-    <td class="num">${p.llr != null ? fmt(p.llr) : "–"}${llrBar(p)}</td>
-    <td class="num">${p.battlesPerSecond != null ? fmt(p.battlesPerSecond) + " /s" : "–"}<div class="muted">${p.etaSeconds != null ? "~" + dur(p.etaSeconds * 1000) : ""}</div></td>
-    <td class="actions" onclick="event.stopPropagation()">
-      <button ${index === 0 ? "disabled" : ""} onclick="act('up','${esc(j.id)}')" title="earlier">↑</button>
-      <button ${index === count - 1 ? "disabled" : ""} onclick="act('down','${esc(j.id)}')" title="later">↓</button>
-      <button class="danger" onclick="if (confirm('Cancel ${esc(j.id)}?')) act('cancel','${esc(j.id)}')">cancel</button>
-    </td></tr>`;
-}
-
-function doneRow(j) {
-  const p = j.progress || {};
-  const health = `${p.skippedSubject ?? 0} / ${p.skippedOpponents ?? 0} skipped · ${p.problems ?? 0} problems · ${p.failures ?? 0} failed`
-    + (p.ownTurns ? `<br>own turns max ${fmt(p.ownTurnMaxMicros / 1000)} ms · over idle b/c ${p.ownTurnsOverIdleBaseline ?? 0} / ${p.ownTurnsOverIdleCandidate ?? 0}` : "");
-  return `<tr class="job ${j.id === selected ? "selected" : ""}" onclick="select('${esc(j.id)}')">
-    <td class="num">${esc(j.id)}</td>
-    <td class="title">${esc(j.title)}${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}</td>
-    <td><span class="badge s-${j.state}">${j.state.toLowerCase()}</span><div style="font-size:12.5px">${esc(j.reason)}</div></td>
-    <td>${j.startedAt ? dur(j.startedAt - j.submittedAt) : "–"}</td>
-    <td>${j.startedAt ? dur(j.finishedAt - j.startedAt) : "–"}</td>
-    <td>${clock(j.finishedAt)}</td>
-    <td class="num">${p.pairs != null ? Math.round(p.pairs) : "–"}</td>
-    <td>${estimate(p)}</td>
-    <td class="muted" style="font-size:12px">${health}</td></tr>`;
+  const active = j.state === "QUEUED" || j.state === "RUNNING";
+  const res = resultWords(p, active);
+  let foot;
+  if (j.state === "RUNNING") {
+    const total = p.remainingPairs != null ? p.pairs + p.remainingPairs : p.maxPairs;
+    const share = total ? Math.min(1, p.pairs / total) : 0;
+    const unit = p.unit || "pairs";
+    foot = `<span><span class="progress"><div style="width:${share * 100}%"></div></span>${p.pairs ?? 0} of ~${total ? Math.round(total) : "?"} ${unit}`
+      + `${p.etaSeconds != null ? " · about " + dur(p.etaSeconds * 1000) + " left" : ""}${reusedWords(p)}</span>`;
+  } else if (j.state === "QUEUED") {
+    foot = `<span>waiting ${dur(now - j.submittedAt)}</span>`;
+  } else {
+    foot = `<span>${clock(j.finishedAt)} · ran ${j.startedAt ? dur(j.finishedAt - j.startedAt) : "–"}`
+      + `${p.pairs != null ? " · " + Math.round(p.pairs) + " " + (p.unit || "pairs") : ""}${reusedWords(p)}</span>`;
+  }
+  const actions = active ? `<span onclick="event.stopPropagation()">
+      <button ${index === 0 ? "disabled" : ""} onclick="act('up','${esc(j.id)}')" title="Run earlier">↑</button>
+      <button ${index === count - 1 ? "disabled" : ""} onclick="act('down','${esc(j.id)}')" title="Run later">↓</button>
+      <button class="danger" onclick="if (confirm('Cancel this job?')) act('cancel','${esc(j.id)}')">cancel</button></span>` : "";
+  return `<div class="job ${j.id === shown ? "selected" : ""}" onclick="select('${esc(j.id)}')">
+    <div class="jtop"><span class="jtitle">${esc(titleOf(j))}</span><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></div>
+    <div class="jsub">${esc(testWords(p))} · ${esc(opponentsWords(p))}</div>
+    <div class="jres ${res.cls}">${esc(res.text)}</div>
+    ${active ? evidenceBar(p) : `<div class="jsub">${esc(verdictWords(j))}</div>`}
+    <div class="jfoot">${foot}${actions}</div>
+  </div>`;
 }
 
 function select(id) {
   selected = selected === id ? null : id;
   location.hash = selected ? "job=" + selected : "";
-  if (lastState) render(lastState);
-  if (selected) loadDetail(selected); else document.getElementById("detail").innerHTML = "";
+  load();
 }
 
 async function loadDetail(id) {
   const r = await fetch("/api/job?id=" + encodeURIComponent(id), {cache: "no-store"});
   if (!r.ok) { document.getElementById("detail").innerHTML = ""; return; }
   const j = await r.json();
-  if (j.id !== selected) return;
+  if (j.id !== shownJob(lastState)) return;
+  const keys = openKeys();
+  const p = j.progress || {};
   const d = j.detail || {};
-  const rows = (d.opponents || []).map(o => `<tr>
-      <td>${esc(o.opponent)}${o.strong ? " *" : ""}</td><td class="num">${o.pairs}</td>
-      <td class="num">${fmt(o.baseline)}</td><td class="num">${fmt(o.candidate)}</td>
-      <td class="num ${o.difference > 0 ? "pos" : o.difference < 0 ? "neg" : ""}">${fmt(o.difference, 2, true)}</td>
-      <td class="num">${fmt(o.sdDifference)}</td>
-      <td class="num">${fmt(o.hitRateBaseline)} / ${fmt(o.hitRateCandidate)}</td>
-      <td class="num">${fmt(o.hitByBaseline)} / ${fmt(o.hitByCandidate)}</td></tr>`).join("");
-  const boards = (d.scoreboards || []).map(b => `<tr><td>${esc(b.name)} (${b.opponents})</td>
-      <td class="num">${fmt(b.baseline)}</td><td class="num">${fmt(b.candidate)}</td>
-      <td class="num">${fmt(b.difference, 2, true)} ± ${fmt(b.halfWidth)}</td>
-      <td class="num">${fmt(b.apsBaseline)} / ${fmt(b.apsCandidate)}</td>
-      <td class="num">${fmt(b.pwinBaseline, 1)} / ${fmt(b.pwinCandidate, 1)}</td></tr>`).join("");
+  const active = j.state === "QUEUED" || j.state === "RUNNING";
+  const res = resultWords(p, active);
+  const isCompare = p.metric !== "recordings";
+
+  const head = `<div class="card">
+    <div class="top"><span class="name">${esc(titleOf(j))}</span><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></div>
+    <div class="big ${res.cls}">${esc(res.text)}</div>
+    ${isCompare ? `<div class="explain">Change in ${esc(METRIC[p.metric] || p.metric)}, new version minus old, averaged over
+      the opponents; ± is the 95 % interval. Better or worse only when the whole interval says so.</div>` : ""}
+    ${active ? evidenceBar(p) : `<div style="margin-top:6px">${esc(verdictWords(j))}</div>`}
+    <div class="kv">
+      ${isCompare ? `<div>Compares</div><div>new <span class="mono">${esc(p.candidate)}</span> against old <span class="mono">${esc(p.baseline)}</span></div>` : ""}
+      <div>Opponents</div><div>${esc(opponentsWords(p))}</div>
+      <div>Test</div><div>${esc(testWords(p))}</div>
+      ${p.reusedBattles ? `<div>Reused</div><div>${p.reusedBattles} of ${p.battles} battles came from earlier jobs instead of being played again</div>` : ""}
+      <div>When</div><div>submitted ${clock(j.submittedAt)}${j.startedAt ? " · started " + clock(j.startedAt) : ""}${j.finishedAt ? " · finished " + clock(j.finishedAt) : ""}</div>
+    </div>
+  </div>`;
+
+  const boards = (d.scoreboards || []).map(b => {
+    const diff = b.difference, h = b.halfWidth;
+    const cls = diff - h > 0 ? "pos" : diff + h < 0 ? "neg" : "";
+    return `<tr><td>${esc(boardName(b.name))} <span class="muted">(${b.opponents})</span></td>
+      <td class="r num">${fmt(b.baseline, 1)}</td><td class="r num">${fmt(b.candidate, 1)}</td>
+      <td class="r num ${cls}">${fmt(diff, 2, true)} ± ${fmt(h)}</td>
+      <td class="r num">${fmt(b.hitByBaseline, 1)} → ${fmt(b.hitByCandidate, 1)}</td>
+      <td class="r num">${fmt(b.hitRateBaseline, 1)} → ${fmt(b.hitRateCandidate, 1)}</td>
+      <td class="r num">${fmt(b.pwinBaseline, 0)} → ${fmt(b.pwinCandidate, 0)}</td></tr>`;
+  }).join("");
+  const boardTable = isCompare ? `<div class="tablewrap"><table>
+    <thead><tr><th>Opponents</th>
+      <th class="r" title="${esc(METRIC_HELP)} Old version.">Old</th>
+      <th class="r" title="The same for the new version.">New</th>
+      <th class="r" title="New minus old, averaged over the opponents of the row; ± is the 95 % interval.">Change</th>
+      <th class="r" title="How often their bullets hit us, in %, old → new: lower is better movement.">Hit by %</th>
+      <th class="r" title="How often our bullets hit them, in %, old → new: higher is a better gun.">Our hits %</th>
+      <th class="r" title="Battles won, in %, old → new.">Wins %</th></tr></thead>
+    <tbody>${boards || '<tr><td colspan="7" class="empty">no pairs yet</td></tr>'}</tbody></table></div>` : "";
+
+  const rows = (d.opponents || []).slice().sort((a, b) => (a.difference ?? 0) - (b.difference ?? 0)).map(o => {
+    const cls = o.difference > 0 ? "pos" : o.difference < 0 ? "neg" : "";
+    return `<tr><td>${esc(o.opponent)}${o.strong ? ' <span class="muted" title="one of the strong opponents">★</span>' : ""}</td>
+      <td class="r num">${o.pairs}</td><td class="r num">${fmt(o.baseline, 1)}</td><td class="r num">${fmt(o.candidate, 1)}</td>
+      <td class="r num ${cls}">${fmt(o.difference, 1, true)}</td>
+      <td class="r num">${fmt(o.hitByBaseline, 1)} → ${fmt(o.hitByCandidate, 1)}</td>
+      <td class="r num">${fmt(o.hitRateBaseline, 1)} → ${fmt(o.hitRateCandidate, 1)}</td></tr>`;
+  }).join("");
+  const opponentTable = isCompare && rows ? `<div class="card">
+    <details data-key="opponents-${esc(j.id)}"${openAttr(keys, "opponents-" + j.id)}>
+      <summary>Each opponent, worst change first</summary>
+      <div class="tablewrap" style="margin-top:8px"><table>
+        <thead><tr><th>Opponent</th><th class="r" title="Pairs of battles played: the old and the new version on the same seed.">Pairs</th>
+          <th class="r">Old</th><th class="r">New</th><th class="r" title="New minus old. A few pairs per opponent are noisy: ±7 points per pair is normal.">Change</th>
+          <th class="r">Hit by %</th><th class="r">Our hits %</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+    </details></div>` : "";
+
   const n = d.noise || {}, h = d.health || {};
-  const env = Object.entries(d.environment || {}).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join("");
-  document.getElementById("detail").innerHTML = `
-    <h2>Job ${esc(j.id)}</h2>
-    <div class="card">
-      <div class="head"><h3>${esc(j.title)}</h3><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></div>
-      ${j.note ? `<div class="muted">${esc(j.note)}</div>` : ""}
+  const env = Object.entries(d.environment || {}).map(([k, v]) => `<div>${esc(k)}</div><div class="mono">${esc(v)}</div>`).join("");
+  const tech = `<div class="card">
+    <details data-key="tech-${esc(j.id)}"${openAttr(keys, "tech-" + j.id)}>
+      <summary>Technical details</summary>
       <div class="kv">
-        <div>Decision</div><div>${esc(j.reason || d.decision || "")}</div>
-        <div>Submitted · started · finished</div><div>${clock(j.submittedAt)} · ${clock(j.startedAt)} · ${clock(j.finishedAt)}</div>
-        <div>Pairs</div><div class="num">${d.pairs ?? "–"}${d.llr != null ? ` · LLR ${fmt(d.llr)} in [${fmt(d.llrLower)}, ${fmt(d.llrUpper)}]` : ""}</div>
-        <div>Noise</div><div class="num">σ per pair ${fmt(n.sigmaPair)} · ρ ${fmt(n.pooledCorrelation)} · expected pairs ${fmt(n.expectedPairsAtBounds, 0)} at the bounds, ${fmt(n.expectedPairsMidway, 0)} midway</div>
-        <div>Health</div><div class="num">skipped turns base ${h.skippedTurnsBaseline ?? "–"}, cand ${h.skippedTurnsCandidate ?? "–"}, opponents ${h.skippedTurnsOpponents ?? "–"} · problems ${h.problems ?? "–"} · ${h.battleSeconds ?? "–"} s in battles</div>
-        ${j.progress && j.progress.ownTurns ? `<div>Own turns (P-04)</div><div class="num">${j.progress.ownTurns} reported, max ${fmt(j.progress.ownTurnMaxMicros / 1000)} ms · over half the idle constant b/c ${j.progress.ownTurnsOverHalfBaseline} / ${j.progress.ownTurnsOverHalfCandidate} · over it ${j.progress.ownTurnsOverIdleBaseline} / ${j.progress.ownTurnsOverIdleCandidate}</div>` : ""}
-        <div>Directory</div><div class="num">${esc(j.dir)}</div>
+        <div>Job</div><div class="mono">${esc(j.id)}</div>
+        <div>As submitted</div><div class="mono">${esc(j.title)}</div>
+        <div>Decision</div><div>${esc(j.reason || d.decision || "–")}</div>
+        ${d.llr != null ? `<div>LLR</div><div class="num">${fmt(d.llr)} between ${fmt(d.llrLower)} and ${fmt(d.llrUpper)}</div>` : ""}
+        ${n.sigmaPair != null ? `<div>Noise</div><div class="num">σ per pair ${fmt(n.sigmaPair)} · ρ ${fmt(n.pooledCorrelation)} · expected ${fmt(n.expectedPairsAtBounds, 0)} pairs at the bounds, ${fmt(n.expectedPairsMidway, 0)} midway</div>` : ""}
+        ${h.problems != null ? `<div>Health</div><div class="num">skipped turns old ${h.skippedTurnsBaseline}, new ${h.skippedTurnsCandidate}, opponents ${h.skippedTurnsOpponents} · problems ${h.problems} · ${h.battleSeconds} s in battles</div>` : ""}
+        ${p.ownTurns ? `<div>Own turns</div><div class="num">${p.ownTurns} reported, longest ${fmt(p.ownTurnMaxMicros / 1000)} ms · over half the idle constant old/new ${p.ownTurnsOverHalfBaseline ?? "–"} / ${p.ownTurnsOverHalfCandidate ?? "–"}</div>` : ""}
+        <div>Directory</div><div class="mono">${esc(j.dir)}</div>
         ${env}
       </div>
-    </div>
-    <div class="grid2" style="margin-top:12px">
-      <div class="tablewrap"><table><thead><tr><th>Scoreboard</th><th>Base</th><th>Cand</th><th>Δ</th><th>APS b/c</th><th>PWIN b/c</th></tr></thead><tbody>${boards || '<tr><td colspan="6" class="empty">no pairs yet</td></tr>'}</tbody></table></div>
-    </div>
-    <div class="tablewrap" style="margin-top:12px"><table>
-      <thead><tr><th>Opponent (${esc(d.metric || "")})</th><th>Pairs</th><th>Base</th><th>Cand</th><th>Δ</th><th>sd(Δ)</th><th>Hit % b/c</th><th>Hit by % b/c</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="8" class="empty">no pairs yet</td></tr>'}</tbody></table></div>
-    ${j.problems && j.problems.length ? `<h2>Problems (last ${j.problems.length})</h2><pre>${esc(j.problems.join("\n"))}</pre>` : ""}
-    ${j.dispatch && j.dispatch.length ? `<h2>Last battles</h2><pre>${esc(j.dispatch.slice().reverse().join("\n"))}</pre>` : ""}`;
+      ${j.problems && j.problems.length ? `<div class="muted" style="margin-top:8px">Problems (last ${j.problems.length})</div><pre>${esc(j.problems.join("\n"))}</pre>` : ""}
+      ${j.dispatch && j.dispatch.length ? `<div class="muted" style="margin-top:8px">Last battles</div><pre>${esc(j.dispatch.slice().reverse().join("\n"))}</pre>` : ""}
+      ${d.index && d.index.length ? `<div class="muted" style="margin-top:8px">Last recordings</div><pre>${esc(d.index.slice().reverse().join("\n"))}</pre>` : ""}
+    </details></div>`;
+
+  document.getElementById("detail").innerHTML = head + boardTable + opponentTable + tech;
+}
+
+function boardName(name) {
+  if (name === "all") return "All";
+  if (name === "strong") return "Strong";
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 async function act(action, id) {

@@ -23,14 +23,19 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.TreeMap;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
@@ -150,6 +155,49 @@ public final class BattleRunner implements AutoCloseable {
                 .map(r -> List.of(r.getName(), r.getNameAndVersion()))
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * The SHA-256 of the jar each robot and team would be loaded from in a battle, under each name a set may use for
+     * it ("name version" and the bare name, resolved as battles resolve them); "builtin" for one from Robocode's own
+     * robots directory. For the queue's battle cache.
+     */
+    public Map<String, String> repositoryJars() throws IOException {
+        Map<Path, String> hashed = new HashMap<>();
+        Map<String, String> jars = new TreeMap<>();
+        for (List<String> entry : repository()) {
+            for (String name : entry) {
+                if (jars.containsKey(name)) {
+                    continue;
+                }
+                Optional<Path> jar = jarFile(name);
+                if (jar.isEmpty()) {
+                    jars.put(name, "builtin");
+                } else if (hashed.containsKey(jar.get())) {
+                    jars.put(name, hashed.get(jar.get()));
+                } else {
+                    String sha = sha256(jar.get());
+                    hashed.put(jar.get(), sha);
+                    jars.put(name, sha);
+                }
+            }
+        }
+        return jars;
+    }
+
+    private static String sha256(Path file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = Files.newInputStream(file)) {
+                byte[] buffer = new byte[1 << 16];
+                for (int n = in.read(buffer); n > 0; n = in.read(buffer)) {
+                    digest.update(buffer, 0, n);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** The CPU constant in a Robocode home's configuration, in nanoseconds, if the engine has measured it. */

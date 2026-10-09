@@ -287,6 +287,8 @@ public final class RecordJob extends QueueJob {
         m.put("unit", "battles");
         m.put("metric", "recordings");
         m.put("opponents", set.opponents().size());
+        m.put("opponentSet", set.name());
+        m.put("opponentsTitle", set.title().isEmpty() ? null : set.title());
         m.put("pairs", done);
         m.put("pendingPairs", outstanding);
         m.put("maxPairs", total);

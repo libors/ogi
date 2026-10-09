@@ -2,6 +2,7 @@ package cz.libors.harness.compare;
 
 import cz.libors.harness.BattleOutcome;
 import cz.libors.harness.ContestantResult;
+import cz.libors.harness.queue.BattleCache;
 import cz.libors.harness.queue.BattleSpec;
 import cz.libors.harness.queue.QueueJob.State;
 import cz.libors.harness.queue.QueueJob.Work;
@@ -17,8 +18,10 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Random;
+import java.util.TreeMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -156,7 +159,9 @@ class CompareJobTest {
         List<Work> second = job.next("a");
         job.completed(first.get(0), outcome(first.get(0), 50), "a");
         job.lost(first.get(1));
-        second.forEach(job::lost);
+        for (Work w : second) {
+            job.lost(w);
+        }
         job.workerLost("a");
         assertEquals(0, job.inFlight());
         // Both opponents are free again; the new pairs get new indices and seeds.
@@ -203,5 +208,156 @@ class CompareJobTest {
         }
         assertEquals(10, handedOut);
         assertEquals(8.0, ((Number) resumed.progress().get("pairs")).doubleValue());
+    }
+
+    /** A comparison of two versions, each with a jar of its own. */
+    private static Path chained(Path dir, String baseline, String candidate) throws IOException {
+        Path d = job(dir, Map.of("pairsPerOpponent", "3", "baseline", baseline, "candidate", candidate,
+                "jar.cz.libors.Ogi_" + baseline + ".jar", baseline.repeat(32),
+                "jar.cz.libors.Ogi_" + candidate + ".jar", candidate.repeat(32)));
+        return d;
+    }
+
+    /** Plays a job to its end on twelve slots; returns the battles it handed out. */
+    private static int play(CompareJob job, Random random) throws IOException {
+        Deque<Work> running = new ArrayDeque<>();
+        int handedOut = 0;
+        while (job.state().active()) {
+            while (running.size() < 12) {
+                List<Work> works = job.next("w");
+                if (works.isEmpty()) {
+                    break;
+                }
+                handedOut += works.size();
+                running.addAll(works);
+            }
+            if (running.isEmpty()) {
+                break;
+            }
+            Work w = running.poll();
+            job.completed(w, outcome(w, 60 + 5 * random.nextGaussian()), "w");
+        }
+        return handedOut;
+    }
+
+    /** Score shares of a version's battles in a job's log, by opponent and pair. */
+    private static Map<String, String> shares(Path dir, String side) throws IOException {
+        Map<String, String> m = new TreeMap<>();
+        for (String line : Files.readAllLines(dir.resolve("battles.tsv"))) {
+            String[] f = line.split("\t");
+            if (f[0].equals("battle") && f[3].equals(side)) {
+                m.put(f[1] + " " + f[2], f[5]);
+            }
+        }
+        return m;
+    }
+
+    @Test
+    void aChainedComparisonTakesTheSharedVersionsBattlesFromTheCache(@TempDir Path tmp) throws IOException {
+        BattleCache cache = new BattleCache(tmp.resolve("battle-cache.jsonl"), new BattleCache.Workers() {
+            @Override
+            public Optional<Map<String, String>> environment(String worker) {
+                return Optional.of(Map.of("java", "17"));
+            }
+
+            @Override
+            public Optional<String> robotJar(String worker, String robot) {
+                return Optional.of("builtin");
+            }
+        });
+        Random random = new Random(3);
+        Path ab = chained(tmp.resolve("ab"), "a", "b");
+        CompareJob first = open(ab);
+        first.cache(cache);
+        assertEquals(12, play(first, random));
+        assertEquals(12, cache.size());
+
+        Path bc = chained(tmp.resolve("bc"), "b", "c");
+        CompareJob second = open(bc);
+        second.cache(cache);
+        assertEquals(6, play(second, random), "only c's battles are played");
+        assertEquals(State.DONE, second.state());
+        assertEquals(12, battles(bc));
+        assertEquals(6, ((Number) second.progress().get("reusedBattles")).intValue());
+        assertEquals(shares(ab, "CANDIDATE"), shares(bc, "BASELINE"), "b's battles are the same in both");
+
+        Path again = job(tmp.resolve("again"), Map.of("pairsPerOpponent", "3", "baseline", "b", "candidate", "c",
+                "reuse", "false", "jar.cz.libors.Ogi_b.jar", "b".repeat(32), "jar.cz.libors.Ogi_c.jar",
+                "c".repeat(32)));
+        CompareJob fresh = open(again);
+        fresh.cache(cache);
+        assertEquals(12, play(fresh, random), "reuse=false plays everything");
+    }
+
+    private static BattleCache sharedCache(Path tmp) throws IOException {
+        return new BattleCache(tmp.resolve("battle-cache.jsonl"), new BattleCache.Workers() {
+            @Override
+            public Optional<Map<String, String>> environment(String worker) {
+                return Optional.of(Map.of("java", "17"));
+            }
+
+            @Override
+            public Optional<String> robotJar(String worker, String robot) {
+                return Optional.of("builtin");
+            }
+        });
+    }
+
+    /** Everything a job hands out now. */
+    private static List<Work> drain(CompareJob job) throws IOException {
+        List<Work> all = new java.util.ArrayList<>();
+        for (List<Work> works = job.next("w"); !works.isEmpty(); works = job.next("w")) {
+            all.addAll(works);
+        }
+        return all;
+    }
+
+    @Test
+    void jobsAtOnceWaitForTheBattlesAnotherIsPlaying(@TempDir Path tmp) throws IOException {
+        BattleCache cache = sharedCache(tmp);
+        CompareJob first = open(chained(tmp.resolve("ab"), "a", "b"));
+        CompareJob second = open(chained(tmp.resolve("bc"), "b", "c"));
+        first.cache(cache);
+        second.cache(cache);
+        List<Work> firstWorks = drain(first);
+        List<Work> secondWorks = drain(second);
+        assertEquals(12, firstWorks.size());
+        assertEquals(6, secondWorks.size(), "b's battles are being played by the first job");
+        Random random = new Random(4);
+        for (Work w : firstWorks) {
+            first.completed(w, outcome(w, 60 + 5 * random.nextGaussian()), "w");
+        }
+        for (Work w : secondWorks) {
+            second.completed(w, outcome(w, 60 + 5 * random.nextGaussian()), "w");
+        }
+        assertEquals(State.DONE, first.state());
+        assertEquals(State.DONE, second.state());
+        assertEquals(6, ((Number) second.progress().get("reusedBattles")).intValue());
+        assertEquals(0, second.inFlight());
+        assertEquals(shares(tmp.resolve("ab"), "CANDIDATE"), shares(tmp.resolve("bc"), "BASELINE"));
+    }
+
+    @Test
+    void aBattleTheOtherJobLosesIsPlayedByTheOneWaiting(@TempDir Path tmp) throws IOException {
+        BattleCache cache = sharedCache(tmp);
+        CompareJob first = open(chained(tmp.resolve("ab"), "a", "b"));
+        CompareJob second = open(chained(tmp.resolve("bc"), "b", "c"));
+        first.cache(cache);
+        second.cache(cache);
+        List<Work> firstWorks = drain(first);
+        List<Work> secondWorks = new java.util.ArrayList<>(drain(second));
+        // The first job's worker goes away: its battles of b come back to the second job to play.
+        for (Work w : firstWorks) {
+            first.lost(w);
+        }
+        secondWorks.addAll(drain(second));
+        assertEquals(12, secondWorks.size());
+        Random random = new Random(5);
+        for (Work w : secondWorks) {
+            second.completed(w, outcome(w, 60 + 5 * random.nextGaussian()), "w");
+        }
+        assertEquals(State.DONE, second.state());
+        assertEquals(0, ((Number) second.progress().get("reusedBattles")).intValue());
+        assertEquals(0, second.inFlight());
     }
 }

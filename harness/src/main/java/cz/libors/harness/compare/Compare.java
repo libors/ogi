@@ -201,7 +201,8 @@ public final class Compare {
                 .resolve(dirName(options.get("baseline"), options.get("candidate"), config));
         problemsFile = dir.resolve("problems.log");
 
-        List<Stratum> strata = set.opponents().stream().map(o -> new Stratum(o.name(), o.strong())).toList();
+        List<Stratum> strata = set.opponents().stream().map(o -> new Stratum(o.name(), o.strong(), o.group()))
+                .toList();
         Map<String, Integer> nextPair = new HashMap<>();
         int pairsPerOpponent = Integer.parseInt(options.get("pairsPerOpponent"));
         int maxPairs = Integer.parseInt(options.get("maxPairs"));
@@ -385,7 +386,10 @@ public final class Compare {
                 Sprt.llr(d, bounds));
     }
 
-    /** Both scoreboards, the per-opponent rows, noise and health of a comparison, from its strata and its log. */
+    /**
+     * The scoreboards (all, strong, then one per other named group), the per-opponent rows, noise and health of a
+     * comparison, from its strata and its log.
+     */
     static Summary summarize(Map<String, String> config, Map<String, String> environment, String metric,
                              Bounds bounds, List<Stratum> strata, CompareLog log) {
         Map<String, List<Battle[]>> pairsByOpponent = log.completePairs();
@@ -397,6 +401,9 @@ public final class Compare {
         if (strata.stream().anyMatch(Stratum::strong)) {
             boards.add(scoreboard("strong", strata, rows, Stratum::strong));
         }
+        // Every other named group of the set but [other], in the order of the set.
+        strata.stream().map(Stratum::group).filter(g -> !g.isEmpty() && !g.equals("strong") && !g.equals("other"))
+                .distinct().forEach(g -> boards.add(scoreboard(g, strata, rows, s -> s.group().equals(g))));
 
         Estimate d = Sprt.estimate(strata, Metric.DIFFERENCE, x -> true);
         int pairs = total(strata);
