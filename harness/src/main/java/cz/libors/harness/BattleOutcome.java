@@ -15,6 +15,7 @@ import java.util.Optional;
  * @param startMismatches robot rounds that did not begin at the start the setup asked for; 0 without fixed starts
  * @param shots        bullets fired and bullets that hit an enemy, per contestant name as the results name it; only
  *                     bullets that ended before one contestant was left count
+ * @param turnTimes    the times robots reported for their own turns (our robots, P-04), per robot name
  */
 public record BattleOutcome(
         BattleSetup setup,
@@ -24,7 +25,34 @@ public record BattleOutcome(
         List<String> problems,
         int startMismatches,
         Map<String, Shots> shots,
-        long elapsedMillis) {
+        long elapsedMillis,
+        Map<String, TurnTimes> turnTimes) {
+
+    /**
+     * A robot's own turn times as it reported them ({@code TurnClock} in the bot): the longest, how many took longer
+     * than half the CPU constant of an idle machine, and how many longer than that constant, which the engine would
+     * have skipped with it.
+     */
+    public record TurnTimes(int turns, long maxMicros, int overHalf, int overIdleConstant) {
+
+        public static final TurnTimes NONE = new TurnTimes(0, 0, 0, 0);
+
+        public TurnTimes plus(TurnTimes o) {
+            return new TurnTimes(turns + o.turns, Math.max(maxMicros, o.maxMicros), overHalf + o.overHalf,
+                    overIdleConstant + o.overIdleConstant);
+        }
+    }
+
+    /** The turn times of the robots whose names start with {@code prefix}, combined. */
+    public TurnTimes turnTimes(String prefix) {
+        TurnTimes sum = TurnTimes.NONE;
+        for (Map.Entry<String, TurnTimes> e : turnTimes.entrySet()) {
+            if (e.getKey().startsWith(prefix)) {
+                sum = sum.plus(e.getValue());
+            }
+        }
+        return sum;
+    }
 
     /**
      * Bullets a contestant fired that ended while the round was open, and how many of them hit a robot of another

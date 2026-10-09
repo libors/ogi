@@ -43,7 +43,11 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
 ## How results are gathered
 
 - **Score components** come from `BattleCompletedEvent.getSortedResults()`.
-- **Skipped turns** are counted from each robot's per-turn console output, where the engine writes "skipped turn".
+- **Skipped turns** are counted from each robot's per-turn console output, where the engine writes
+  `SYSTEM: <name> skipped turn <turn>` (`RobotPeer`). Only that line counts: some robots print their own statistics,
+  e.g. "skipped turns: 0" once a round, which an earlier substring match counted as one skipped turn per round
+  (Hydra, Horizon, deBroglie, LifelongObsession; found 2026-10-09 because they still "skipped" 35 turns per battle in
+  debug mode).
 - **Problems:** output lines containing `Exception` or `Error` are recorded with round and tick; so are
   `BattleErrorEvent`s.
 - **Shots:** every bullet in the turn snapshots counts once as fired by its owner's contestant, and once as a hit when
@@ -55,6 +59,17 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
     because more of its bullets are in flight at the kill (5–16 % of Ogi's bullets against the lab set).
   - Hit rates are therefore "hits per bullet that could still hit". A stationary target that is hit every time
     shows 100 %.
+- **Own turn times (P-04):** our robots report the wall time of their previous turn in the debug property `cpu`
+  ([bot.md](bot.md#debug-overlay-czliborsogitrace)). `BattleOutcome.turnTimes` keeps per robot the number of turns
+  reported, the longest, and how many took longer than half the CPU constant of an idle machine and than all of it:
+  the home's constant locally, the executor's measured idle constant on a queue worker, whose slots run with a raised
+  one. The engine would skip a turn only later than the constant (engine-model G-45), so these counts see a robot
+  growing heavy before skipped turns do.
+  - On a loaded worker the wall time includes the other battles' load and the garbage collections of the slot's JVM,
+    which the opponent's allocations trigger too. With 12 battles at once on the desktop (2026-10-09) Ogi's longest
+    turns were 23 ms (lab set) and 70 ms (against BeepBoop and Diamond), and 10–37 turns per job went over the idle
+    constant. So the gate for Ogi's own weight is the skeleton check on an idle machine; the queue shows the counts
+    as health.
 - **Matching:** a contestant is matched by name prefix. Team results are named after the team plus an index, e.g.
   `cz.libors.OgiTeam 0.1 (1)`.
 
@@ -140,7 +155,7 @@ end     round  turns
 |---|---|
 | Integrity, per recording | every live probe has a `cmd` of the current turn while two or more robots are alive; no skipped turns or problems |
 | Different seeds | three seeds give three different digests, per scenario |
-| Replay | the first seed of each scenario, run again, gives the same digest (SHA-256 of the uncompressed text) |
+| Replay | the first seed of each scenario, run again, gives the same digest (SHA-256 of the uncompressed text, without the debug properties that measure time: Ogi's `cpu`) |
 | `Utils.getRandom()` | two runs of `UtilsRandomProbe` with one seed are identical |
 | `Math.random()` | two runs of `MathRandomProbe` with one seed differ |
 | Ogi | two runs of Ogi against `RandomProbe` with one seed are identical |
@@ -163,7 +178,10 @@ and writes everything to `harness/build/recordings/summary.json`.
 | `cz.libors.OgiTeam` vs `sampleteam.MyFirstTeam` | 1200×1200 | 10 | score share ≥ 70 % |
 
 All checks also require zero skipped turns and no problems, and in the battle against `sample.SittingDuck`, which
-never fires, no bullet counted for it. The process exits non-zero on any failure.
+never fires, no bullet counted for it. Of our robots' own turns (P-04) at most 0.5 % may take longer than half the
+CPU constant and at most 0.05 % longer than all of it; Ogi has 0–5 over half per battle (2026-10-09), once a single
+turn of 2.1 ms against a 2.0 ms constant (a garbage collection or the JIT), and an Ogi that spends 1.2 ms per turn
+fails every battle without a single skipped turn. The process exits non-zero on any failure.
 
 ## Comparing two versions
 
@@ -290,8 +308,10 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 ```
 
 - **`recordGunLogs`** is `recordBattles` (same options, same seeds) for `cz.libors.OgiGunLog`, which plays like Ogi
-  and logs its gun ([bot.md](bot.md#debug-overlay-czliborsogitrace)). Its recordings keep only the debug
-  properties `gunshot` and `gunpass`, about 0.9 MB per 35-round battle, in `harness/build/gun-logs/<version>/`.
+  and logs its gun ([bot.md](bot.md#debug-overlay-czliborsogitrace)). Against foreign robots, queue them on the
+  desktop with `submitGunLogs` ([Recordings as a job](#recordings-as-a-job-comparerecordjob)). Its recordings keep
+  only the debug properties `gunshot`, `gunpass` and `gunshield`, about 0.9–1.7 MB per 35-round battle, in
+  `harness/build/gun-logs/<version>/`.
   Only the working tree has an `OgiGunLog` jar.
 - **`gunBench`** reads every `*.rec.gz` of `-Plogs=<dir>,...` and replays each battle with a fresh model per target:
   in each turn the waves that passed teach the model, then the turn's plan asks it. The movement, the fire timing
@@ -304,15 +324,22 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 | `shots` | plans replayed |
 | `gf tries`, `gf hit %` | passed waves whose plan had a guess factor, and how many it would have hit |
 | `gf real %` | the same over waves that carried a bullet |
-| `fired %` | waves with a bullet, aimed by the gun the replay chose |
+| `fired %` | waves with a bullet, aimed by the gun the replay chose; bullets an enemy bullet destroyed are left out |
+| `shielded` | waves whose bullet an enemy bullet destroyed (`gunshield`): the aim did not decide them |
 | `harness %`, `bullets/harness` | the harness's hit rate of the same battles, and both bullet counts |
 | `differ` | plans whose guess factor or gun differ from the log |
 
 - **Parity:** with the bot's parameters every replayed decision must equal the logged one, bit for bit; the task
   fails otherwise. `GunLogTest` checks the same on a simulated fight.
+- **Bullets shot down:** some robots shoot our bullets down with theirs (bullet shielding). The bench scores a wave
+  by the target's position, so before `gunshield` such bullets counted as hits: against DrussGT, Saguaro and
+  Roborio the bench showed 23–37 % fired against the harness's 6–12 % (2026-10-09). Left out, the bench shows 7.6,
+  13.3 and 12.0 %. The harness counts them as misses, so its rate stays a little lower against these robots.
+- `./gradlew gunTrend -Plogs=<dir>` compares the fired hit rate in the first 10 rounds of each battle with the last 10
+  (`-Prounds`), per opponent, sorted by the change over its standard error.
 - **`fired %` against `harness %`:** checked bullet by bullet on four lab battles (2026-10-09). Every bullet whose
   wave passed the target got the verdict the engine gave it, except bullets destroyed by an enemy bullet, which the
-  bench counts as hits. The two counts differ only in which bullets they include:
+  bench now leaves out (`shielded`). The two counts differ only in which bullets they include:
   - the bullet that kills the target counts for the harness, but its wave never passes (a dead target is not
     scanned), so the bench and the bot never see it: one hit per round won;
   - a bullet that has passed the target but is still flying when the round is decided counts for the bench, not for
@@ -431,7 +458,8 @@ is waiting.
   engine holds open be replaced); a jar of the same name with other content is an error.
 - **Foreign jars:** copied into the slots only if `approved.txt` in the foreign directory lists them with their
   SHA-256 and the jar check does not deny them; the executor reports the jars it left out.
-- **Slot JVMs:** `-XX:+UseSerialGC -XX:TieredStopAtLevel=1` (plus `-PqueueJvm`), `-Xmx1g`, the Security Manager
+- **Slot JVMs:** `-XX:+UseSerialGC -XX:TieredStopAtLevel=1` (plus `-PqueueJvm`; `-Ddebug=true` for battles that ask
+  for the engine's debug mode), `-Xmx1g`, the Security Manager
   allowed, and a minimal environment: on Windows `SystemRoot` and a temporary directory of the slot's own (`TEMP`,
   `TMP`), elsewhere the list of [Foreign robots](#foreign-robots). `sandboxCheck` accepts exactly these.
 - **CPU constant:** the executor measures it five times in fresh JVMs under the slots' options on an idle machine,
@@ -471,12 +499,35 @@ configuration line, so its `battles.tsv` reads like a local one:
   take their place (a battle of a dropped pair that came back stays in the log as an incomplete pair, which the test
   ignores).
 - `dispatch.tsv`: one line per battle: when it ended, the worker and slot, the battle, how long it waited for a slot,
-  how long it took, and how it ended (`ok`, `failed: …`, `lost: …`). `problems.log` as in `compare`.
+  how long it took, and how it ended (`ok`, with our robots' longest own turn and the turns over half the idle
+  constant and over it; `failed: …`; `lost: …`). `problems.log` as in `compare`.
+- The job's health on the dashboard adds the versions' own turn times (P-04) from the battles of the current server
+  run; they are not in the log, so a restarted server starts counting anew.
 - Checked on 2026-10-09: a job of 2 pairs per opponent on four local slots gave, battle for battle, the same seeds,
   score shares and shots as the sequential `compare`. On the Windows worker the same job differs in some battles
   (the machines differ in the last bit of some doubles, [build-and-run.md](build-and-run.md#determinism-across-machines)),
   and with 12 slots Ogi skipped a few turns in the short lab battles, so that 5 of 30 pairs of identical code
   differed. A restarted server and a dropped connection both resumed with every pair counted once.
+
+### Recordings as a job (`compare.RecordJob`)
+
+`./gradlew submitGunLogs -Popponents=<set> -Ppairs=2` queues the gun's logs of the working tree (a snapshot's
+`OgiGunLog`, keys `gunshot,gunpass,gunshield`) against a set, on the seeds of `compare` and `recordBattles`; `gunBench
+-Plogs=.robocode/queue/jobs/<id>/recordings/<version>` then replays them here. The job type `record` takes any robot
+and keys (`queue.Submit`).
+
+- Each battle runs on any free slot; the slot records it into a temporary file and sends it back in Base64 inside
+  its result, so the worker keeps nothing. The job writes `recordings/<version>/<opponent>_p<pair>.rec.gz` and a line
+  to `recordings/<version>/battles.tsv`: the columns of `recordBattles`, then the opponent's skipped turns and our
+  robot's own turn times.
+- Battles go out pair by pair over all opponents, so a job stopped early covers every opponent alike. A recording
+  that exists is not played again: a restarted server goes on where it stopped.
+- **In debug mode**, like `recordBattles` (engine-model G-17): a battle can ask for it (`BattleSpec.debug`), and
+  the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag once per JVM. A job's
+  battles all want the same mode, so each slot switches once when such a job starts. Without debug mode a robot that
+  skips a turn can lose that turn's debug properties (its late commands are replaced, as in engine-model G-34): on
+  2026-10-09 the gun bench's parity failed against 4 of 125 opponents, each one where Ogi had skipped turns (141 of
+  2.4 million decisions, one wave without its plan).
 
 ### Dashboard
 
@@ -514,8 +565,8 @@ a slot's environment (`queue.Remote`, the executor's `run`): the bundle is synce
   (engine-model G-42). `BattleRunner` picks the jar named after the robot.
 - `BattleResults.getRank()` in melee does not always follow the score order (engine-model G-31). Do not rely on it
   in new checks; rank by score.
-- The output-based skipped-turn detection depends on the engine's message text. Replace it with an explicit signal
-  when the bot reports its own timing.
+- The output-based skipped-turn detection depends on the engine's message text (`BattleRunner.skippedTurn`). Our
+  robots now report their own turn times (P-04), but skipped turns, of every robot, still come from the text.
 - The engine swallows exceptions thrown by battle listeners. `TurnRecorder` keeps the first failure and rethrows it
   from `close()`.
 

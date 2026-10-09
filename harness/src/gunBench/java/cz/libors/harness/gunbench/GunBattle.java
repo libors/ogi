@@ -14,12 +14,17 @@ import java.util.List;
  * the waves that passed, then the turn's plan.
  *
  * @param subject the robot whose log it is, as the recording names it
- * @param events  {@link RoundStart}, {@link GunModel.Pass} and {@link GunLog.LoggedShot} in replay order
+ * @param events  {@link RoundStart}, {@link Shielded}, {@link GunModel.Pass} and {@link GunLog.LoggedShot} in replay
+ *                order
  */
 public record GunBattle(Path file, String subject, String opponent, List<Object> events) {
 
     /** The start of a round: waves of the previous round that had not passed never will. */
     public record RoundStart(int round) {
+    }
+
+    /** An enemy bullet destroyed the bullet of the plan of turn {@code time} ({@link GunLog#SHIELD}). */
+    public record Shielded(long time) {
     }
 
     /** Reads the log of the robot whose name starts with {@code subjectPrefix}; the opponent is the other robot. */
@@ -38,6 +43,7 @@ public record GunBattle(Path file, String subject, String opponent, List<Object>
             throw new IOException(file + ": no robot named " + subjectPrefix + "…");
         }
         List<Object> events = new ArrayList<>();
+        List<Object> shields = new ArrayList<>();
         List<GunModel.Pass> passes = new ArrayList<>();
         List<GunLog.LoggedShot> shots = new ArrayList<>();
         int round = -1;
@@ -47,7 +53,7 @@ public record GunBattle(Path file, String subject, String opponent, List<Object>
                 continue;
             }
             if (d.round() != round || d.turn() != turn) {
-                flush(events, passes, shots);
+                flush(events, shields, passes, shots);
                 if (d.round() != round) {
                     events.add(new RoundStart(d.round()));
                 }
@@ -58,6 +64,7 @@ public record GunBattle(Path file, String subject, String opponent, List<Object>
                 switch (d.key()) {
                     case GunLog.PASS -> passes.add(GunLog.pass(d.value()));
                     case GunLog.SHOT -> shots.add(GunLog.shot(d.value()));
+                    case GunLog.SHIELD -> shields.add(new Shielded(GunLog.shieldTime(d.value())));
                     default -> {
                     }
                 }
@@ -65,11 +72,15 @@ public record GunBattle(Path file, String subject, String opponent, List<Object>
                 throw new IOException(file + ": round " + d.round() + ", turn " + d.turn() + ": " + e.getMessage(), e);
             }
         }
-        flush(events, passes, shots);
+        flush(events, shields, passes, shots);
         return new GunBattle(file, subject.name(), opponent, List.copyOf(events));
     }
 
-    private static void flush(List<Object> events, List<GunModel.Pass> passes, List<GunLog.LoggedShot> shots) {
+    private static void flush(List<Object> events, List<Object> shields, List<GunModel.Pass> passes,
+                              List<GunLog.LoggedShot> shots) {
+        // A bullet is shot down before its wave passes the target.
+        events.addAll(shields);
+        shields.clear();
         events.addAll(passes);
         events.addAll(shots);
         passes.clear();

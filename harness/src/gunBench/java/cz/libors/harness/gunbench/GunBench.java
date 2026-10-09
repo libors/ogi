@@ -114,13 +114,15 @@ public final class GunBench {
         System.out.println("Parameters: " + parameters);
         System.out.printf(Locale.ROOT, "%d battles, read in %.1f s, replayed in %.2f s%n%n", battles, loadSeconds,
                 replaySeconds);
-        System.out.printf(Locale.ROOT, "%-34s %7s %8s %8s %9s %9s %9s %9s %15s %8s%n", "opponent", "battles",
-                "shots", "gf tries", "gf hit %", "gf real %", "fired %", "harness %", "bullets/harness", "differ");
+        System.out.printf(Locale.ROOT, "%-34s %7s %8s %8s %9s %9s %9s %9s %15s %8s %8s%n", "opponent", "battles",
+                "shots", "gf tries", "gf hit %", "gf real %", "fired %", "harness %", "bullets/harness", "shielded",
+                "differ");
         for (Row r : rows) {
             GunReplay.Tally t = r.tally();
-            System.out.printf(Locale.ROOT, "%-34s %7d %8d %8d %9.2f %9.2f %9.2f %9.2f %15s %8d%n", r.opponent(),
+            System.out.printf(Locale.ROOT, "%-34s %7d %8d %8d %9.2f %9.2f %9.2f %9.2f %15s %8d %8d%n", r.opponent(),
                     r.battles(), t.shots(), t.guessFactorTries(), t.guessFactorRate(), t.realGuessFactorRate(),
-                    t.firedRate(), r.harnessRate(), t.firedTries() + "/" + r.harnessFired(), t.differing());
+                    t.firedRate(), r.harnessRate(), t.firedTries() + "/" + r.harnessFired(), t.shielded(),
+                    t.differing());
         }
         System.out.printf(Locale.ROOT, "%-34s %7s %8s %8s %9.2f %9.2f %9.2f %9.2f%n", "mean over opponents", "", "",
                 "", mean(rows, r -> r.tally().guessFactorRate()), mean(rows, r -> r.tally().realGuessFactorRate()),

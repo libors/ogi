@@ -83,6 +83,8 @@ public final class CompareJob extends QueueJob {
     private int problems;
     private int skippedSubject;
     private int skippedOpponents;
+    /** The versions' own turn times (P-04), by side, from the battles of this server run. */
+    private final BattleOutcome.TurnTimes[] turnTimes = {BattleOutcome.TurnTimes.NONE, BattleOutcome.TurnTimes.NONE};
     private Supplier<Map<String, String>> environment = Map::of;
 
     /** A pair handed out and not yet complete. */
@@ -249,7 +251,9 @@ public final class CompareJob extends QueueJob {
         int pair = Integer.parseInt(key[1]);
         Side side = Side.valueOf(key[2]);
         BattleOutcome outcome = work.spec().outcomeFromMap(outcomeMap);
-        Battle battle = Compare.battle(outcome, side == Side.BASELINE ? baseline : candidate, opponent, pair);
+        Subject subject = side == Side.BASELINE ? baseline : candidate;
+        Battle battle = Compare.battle(outcome, subject, opponent, pair);
+        turnTimes[side.ordinal()] = turnTimes[side.ordinal()].plus(outcome.turnTimes(subject.robotPrefix()));
         if (log != null) {
             log.append(battle);
         }
@@ -381,7 +385,9 @@ public final class CompareJob extends QueueJob {
         m.put("opponents", strata.size());
         if (!state().active() && log == null) {
             for (String key : List.of("pairs", "estimate", "halfWidth", "llr", "lower", "upper", "decision",
-                    "battles", "failures", "problems", "skippedSubject", "skippedOpponents", "maxPairs")) {
+                    "battles", "failures", "problems", "skippedSubject", "skippedOpponents", "maxPairs", "ownTurns",
+                    "ownTurnMaxMicros", "ownTurnsOverHalfBaseline", "ownTurnsOverHalfCandidate",
+                    "ownTurnsOverIdleBaseline", "ownTurnsOverIdleCandidate")) {
                 String v = result(key);
                 m.put(key, v == null ? null : number(v));
             }
@@ -403,6 +409,13 @@ public final class CompareJob extends QueueJob {
         m.put("problems", problems);
         m.put("skippedSubject", skippedSubject);
         m.put("skippedOpponents", skippedOpponents);
+        BattleOutcome.TurnTimes both = turnTimes[0].plus(turnTimes[1]);
+        m.put("ownTurns", both.turns());
+        m.put("ownTurnMaxMicros", both.maxMicros());
+        m.put("ownTurnsOverHalfBaseline", turnTimes[0].overHalf());
+        m.put("ownTurnsOverHalfCandidate", turnTimes[1].overHalf());
+        m.put("ownTurnsOverIdleBaseline", turnTimes[0].overIdleConstant());
+        m.put("ownTurnsOverIdleCandidate", turnTimes[1].overIdleConstant());
         double rate = completions.size() < 2 ? Double.NaN
                 : (completions.size() - 1) * 1000.0 / Math.max(1, completions.peekLast() - completions.peekFirst());
         m.put("battlesPerSecond", finite(rate));

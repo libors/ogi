@@ -11,6 +11,9 @@ package cz.libors.ogi.gun;
  *   <li>{@value #PASS}, once for each wave that passed its target in this turn, before the turn's plan: the plan's
  *       turn, whether a bullet was fired with it (1 or 0), the wave's reference and escape angle, whether any heading
  *       would have hit (1 or 0), the lowest and the highest hitting heading, and the target.</li>
+ *   <li>{@value #SHIELD}, when an enemy bullet destroyed one of ours ({@code OgiGunLog} only): the turn of the
+ *       bullet's plan and the name of the robot whose bullet it was. That bullet's wave still passes, but the bullet
+ *       never got there.</li>
  * </ul>
  *
  * <p>Fields are comma-separated, the target's name comes last and may contain commas. Numbers are written as
@@ -20,6 +23,7 @@ public final class GunLog {
 
     public static final String SHOT = "gunshot";
     public static final String PASS = "gunpass";
+    public static final String SHIELD = "gunshield";
 
     private static final int SHOT_FIELDS = 9 + TargetingFeatures.COUNT;
     private static final int PASS_FIELDS = 8;
@@ -45,6 +49,15 @@ public final class GunLog {
     public static String line(GunModel.Pass p) {
         return p.time() + "," + (p.real() ? 1 : 0) + "," + p.reference() + "," + p.escape() + "," + (p.hits() ? 1 : 0)
                 + "," + p.minOffset() + "," + p.maxOffset() + "," + p.target();
+    }
+
+    public static String shieldLine(long planTime, String shooter) {
+        return planTime + "," + shooter;
+    }
+
+    /** The plan's turn of a bullet that an enemy bullet destroyed. */
+    public static long shieldTime(String line) {
+        return Long.parseLong(line.substring(0, line.indexOf(',')));
     }
 
     public static LoggedShot shot(String line) {

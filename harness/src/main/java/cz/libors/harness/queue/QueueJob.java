@@ -193,6 +193,9 @@ public abstract class QueueJob {
         if ("compare".equals(type)) {
             return cz.libors.harness.compare.CompareJob.open(dir, spec);
         }
+        if ("record".equals(type)) {
+            return cz.libors.harness.compare.RecordJob.open(dir, spec);
+        }
         throw new IOException(dir + ": unknown job type " + type);
     }
 }

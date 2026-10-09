@@ -37,6 +37,7 @@ battles.
 | `./gradlew remoteSkeletonCheck` (and `remoteSandboxCheck`, `remoteRecordProbes`, `remoteCompare`, `remoteRecordBattles`, `remoteRecordGunLogs`) | The same on the Windows worker in a slot's environment; `-PremoteHost=ogi-desktop` for the WSL container |
 | `./gradlew queueServer` | The queue's server and dashboard (`http://localhost:8765/`) until stopped; `-Pworkers=ogi-win:12` (default), `local:4`; see [harness.md](harness.md#queue) |
 | `./gradlew submit -Pbaseline=HEAD` | Queues a comparison of the working tree (a snapshot, `snapshotJars`) with a baseline; the options of `compare`, plus `-Pnote` |
+| `./gradlew submitGunLogs -Popponents=<set>` | Queues the gun's logs of the working tree against a set, for the gun bench |
 | `./gradlew queueStatus`, `./gradlew queueCancel -Pjob=<id>` | The queue in a terminal; cancel a job |
 
 For Java 12–23 the harness adds `-Djava.security.manager=allow`, as Robocode's own launch scripts do. Java 24+ refuses

@@ -65,7 +65,8 @@ class CompareJobTest {
         BattleOutcome o = new BattleOutcome(spec.setup(), spec.seed(),
                 List.of(new ContestantResult(subject, 1, mine, 0, 0, 0, 0, 0, 0, 1),
                         new ContestantResult(opponent, 2, 1000 - mine, 0, 0, 0, 0, 0, 0, 0)),
-                Map.of(), List.of(), 0, Map.of(subject, new BattleOutcome.Shots(10, 5)), 100);
+                Map.of(), List.of(), 0, Map.of(subject, new BattleOutcome.Shots(10, 5)), 100,
+                Map.of(subject, new BattleOutcome.TurnTimes(1000, 900, 0, 0)));
         return BattleSpec.outcomeToMap(o);
     }
 

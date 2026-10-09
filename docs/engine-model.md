@@ -240,6 +240,17 @@ to-test.
   - **Source:** Talk:BeepBoop. · **Status:** wiki.
 - **G-21 Robots run serially within a tick by default** (`wakeupSerial`), so one battle ≈ one core.
   - **Source:** `Battle.java`. · **Status:** verified.
+- **G-45 A robot gets up to a millisecond more than the CPU constant.**
+  - **What:** the engine splits the constant into whole milliseconds and the rest, then waits `wait(0, 999999)` once
+    per millisecond and `wait(0, rest)` once more. Java 17 rounds every such wait up to a whole millisecond, so the
+    robot has about `floor(constant in ms) + 1` ms, plus the timer's slack, before its turn is skipped: 2 ms for a
+    constant of 1.73 ms or 2.00 ms, 3 ms for 2.71 ms.
+  - **Bites when:** a robot's own time is compared with the constant: it can exceed it without a skipped turn, so
+    the engine's skipped turns notice a robot growing heavy late. The harness counts the turns Ogi reports above half
+    the idle constant and above all of it (P-04, `TurnClock`, `BattleOutcome.TurnTimes`).
+  - **Source:** `RobotPeer.waitSleeping` (bytecode of 1.11.1), `Object.wait(long, int)` in Java 17. · **Status:**
+    verified in the bytecode; observed 2026-10-09: an Ogi variant that spun 1.2 ms per turn took up to 2.09 ms with a
+    constant of 1.73 ms and skipped no turn. No dedicated test yet.
 
 ## Teams and isolation
 

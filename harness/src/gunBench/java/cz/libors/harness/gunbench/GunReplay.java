@@ -4,8 +4,12 @@ import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.gun.GunParameters;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Replays a battle's gun log with some {@link GunParameters}: the plans ask a fresh {@link GunModel} per target, as
@@ -20,18 +24,20 @@ public final class GunReplay {
      *
      * @param differing plans whose guess factor or gun differ from the logged decision; 0 with the bot's parameters
      * @param orphans   passed waves without their plan in the log
+     * @param shielded  passed waves whose bullet an enemy bullet destroyed: left out of the fired and real counts,
+     *                  because the aim did not decide them
      */
     public record Tally(long shots, long searched, long differing, long orphans, long guessFactorTries,
                         long guessFactorHits, long realGuessFactorTries, long realGuessFactorHits, long firedTries,
-                        long firedHits) {
+                        long firedHits, long shielded) {
 
-        public static final Tally ZERO = new Tally(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        public static final Tally ZERO = new Tally(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         public Tally plus(Tally o) {
             return new Tally(shots + o.shots, searched + o.searched, differing + o.differing, orphans + o.orphans,
                     guessFactorTries + o.guessFactorTries, guessFactorHits + o.guessFactorHits,
                     realGuessFactorTries + o.realGuessFactorTries, realGuessFactorHits + o.realGuessFactorHits,
-                    firedTries + o.firedTries, firedHits + o.firedHits);
+                    firedTries + o.firedTries, firedHits + o.firedHits, shielded + o.shielded);
         }
 
         /** The guess-factor gun's hits per try over all passed waves, in percent. */
@@ -58,6 +64,13 @@ public final class GunReplay {
     }
 
     public static Tally replay(GunBattle battle, GunParameters parameters) {
+        return replayRounds(battle, parameters).stream().reduce(Tally.ZERO, Tally::plus);
+    }
+
+    /** The same, counted per round: element r is round r's tally (a wave counts in the round its plan was made). */
+    public static List<Tally> replayRounds(GunBattle battle, GunParameters parameters) {
+        Map<Integer, Tally> byRound = new HashMap<>();
+        int round = 0;
         Map<String, GunModel> models = new HashMap<>();
         Map<Long, GunLog.LoggedShot> shots = new HashMap<>();
         Map<Long, GunModel.Aim> aims = new HashMap<>();
@@ -71,10 +84,20 @@ public final class GunReplay {
         long realGfHits = 0;
         long firedTries = 0;
         long firedHits = 0;
+        long shieldedCount = 0;
+        Set<Long> shielded = new HashSet<>();
         for (Object event : battle.events()) {
-            if (event instanceof GunBattle.RoundStart) {
+            if (event instanceof GunBattle.RoundStart start) {
+                byRound.merge(round, new Tally(shotCount, searched, differing, orphans, gfTries, gfHits, realGfTries,
+                        realGfHits, firedTries, firedHits, shieldedCount), Tally::plus);
+                round = start.round();
+                shotCount = searched = differing = orphans = gfTries = gfHits = 0;
+                realGfTries = realGfHits = firedTries = firedHits = shieldedCount = 0;
                 shots.clear();
                 aims.clear();
+                shielded.clear();
+            } else if (event instanceof GunBattle.Shielded s) {
+                shielded.add(s.time());
             } else if (event instanceof GunModel.Pass pass) {
                 GunLog.LoggedShot logged = shots.get(pass.time());
                 if (logged == null) {
@@ -83,16 +106,18 @@ public final class GunReplay {
                 }
                 GunModel.Aim aim = aims.get(pass.time());
                 int hit = model(models, pass.target(), parameters).learn(logged.shot(), aim, pass);
+                boolean real = pass.real() && !shielded.contains(pass.time());
+                shieldedCount += pass.real() && !real ? 1 : 0;
                 if (!Double.isNaN(aim.guessFactor())) {
                     boolean gfHit = (hit & 1 << GunModel.GUESS_FACTOR) != 0;
                     gfTries++;
                     gfHits += gfHit ? 1 : 0;
-                    if (pass.real()) {
+                    if (real) {
                         realGfTries++;
                         realGfHits += gfHit ? 1 : 0;
                     }
                 }
-                if (pass.real()) {
+                if (real) {
                     firedTries++;
                     firedHits += (hit & 1 << aim.gun()) != 0 ? 1 : 0;
                 }
@@ -108,8 +133,14 @@ public final class GunReplay {
                 aims.put(logged.shot().time(), aim);
             }
         }
-        return new Tally(shotCount, searched, differing, orphans, gfTries, gfHits, realGfTries, realGfHits,
-                firedTries, firedHits);
+        byRound.merge(round, new Tally(shotCount, searched, differing, orphans, gfTries, gfHits, realGfTries,
+                realGfHits, firedTries, firedHits, shieldedCount), Tally::plus);
+        List<Tally> rounds = new ArrayList<>();
+        int last = byRound.keySet().stream().mapToInt(Integer::intValue).max().orElse(0);
+        for (int r = 0; r <= last; r++) {
+            rounds.add(byRound.getOrDefault(r, Tally.ZERO));
+        }
+        return rounds;
     }
 
     private static GunModel model(Map<String, GunModel> models, String target, GunParameters parameters) {

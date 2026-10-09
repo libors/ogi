@@ -7,22 +7,27 @@ import cz.libors.harness.Sandbox;
 import cz.libors.harness.Starts;
 import cz.libors.harness.queue.Protocol.Channel;
 import cz.libors.harness.queue.Protocol.Message;
+import cz.libors.harness.recording.TurnRecorder;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * One battle at a time, in a JVM of its own with a Robocode home of its own; the executor starts one per slot.
  *
  * <p>Reads {@code battle} messages ({@link BattleSpec}) from standard input and answers each with {@code result} (the
- * outcome) or {@code error}. {@code measure} runs one short battle in a home without a CPU constant, so that the engine
- * measures it, and answers {@code measured}. Ends on {@code quit} or at the end of input. Everything else the
- * process prints goes to standard error.
+ * outcome, with the recording in Base64 if the spec asks for one) or {@code error}. {@code measure} runs one short
+ * battle in a home without a CPU constant, so that the engine measures it, and answers {@code measured}. Ends on
+ * {@code quit} or at the end of input. Everything else the process prints goes to standard error.
  *
  * <p>Usage: {@code Slot <robocodeHome>}.
  */
@@ -77,9 +82,24 @@ public final class Slot {
                 setup = setup.withStarts(Starts.random(spec.startsSeed(), runner.robotCount(spec.robots()),
                         spec.width(), spec.height()));
             }
-            BattleOutcome outcome = runner.run(setup);
-            return Message.of("result", "id", id, "outcome", BattleSpec.outcomeToMap(outcome));
-        } catch (RuntimeException e) {
+            if (!spec.record()) {
+                return Message.of("result", "id", id, "outcome", BattleSpec.outcomeToMap(runner.run(setup)));
+            }
+            // A recording goes back inside the result, so the worker keeps nothing.
+            Path file = Files.createTempFile("battle", ".rec.gz");
+            try {
+                BattleOutcome outcome;
+                try (TurnRecorder recorder = TurnRecorder.open(file, setup,
+                        spec.recordKeys() == null ? null : Set.copyOf(spec.recordKeys()))) {
+                    outcome = runner.run(setup, recorder);
+                }
+                Map<String, Object> result = BattleSpec.outcomeToMap(outcome);
+                result.put("recording", Base64.getEncoder().encodeToString(Files.readAllBytes(file)));
+                return Message.of("result", "id", id, "outcome", result);
+            } finally {
+                Files.deleteIfExists(file);
+            }
+        } catch (IOException | RuntimeException e) {
             e.printStackTrace();
             return Message.of("error", "id", id, "message", e.toString());
         }

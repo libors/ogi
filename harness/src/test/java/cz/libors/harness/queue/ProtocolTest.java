@@ -41,7 +41,8 @@ class ProtocolTest {
                         new ContestantResult("sample.Walls", 2, 100, 0, 0, 90, 0, 10, 0, 0)),
                 Map.of("cz.libors.Ogi w1234567", 2), List.of("sample.Walls [round 3, turn 9]: Exception x"), 1,
                 Map.of("cz.libors.Ogi w1234567", new BattleOutcome.Shots(300, 120),
-                        "sample.Walls", new BattleOutcome.Shots(400, 30)), 2345);
+                        "sample.Walls", new BattleOutcome.Shots(400, 30)), 2345,
+                Map.of("cz.libors.Ogi w1234567", new BattleOutcome.TurnTimes(1000, 2500, 3, 1)));
         Map<String, Object> wire = Protocol.parse(Message.of("result", "outcome",
                 BattleSpec.outcomeToMap(outcome)).line()).orElseThrow().map("outcome");
         assertEquals(outcome, spec.outcomeFromMap(wire));

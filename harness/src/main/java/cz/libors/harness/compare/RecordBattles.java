@@ -125,7 +125,7 @@ public final class RecordBattles {
                 StandardOpenOption.APPEND);
     }
 
-    private static String fileName(String robot) {
+    static String fileName(String robot) {
         return robot.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 

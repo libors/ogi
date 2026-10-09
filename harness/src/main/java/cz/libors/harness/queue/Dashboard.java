@@ -167,7 +167,8 @@ final class Dashboard {
             long submitted = ((Number) j.get("submittedAt")).longValue();
             long started = ((Number) j.get("startedAt")).longValue();
             long finished = ((Number) j.get("finishedAt")).longValue();
-            String when = finished > 0 ? "ran " + duration(finished - started) + ", done " + time(finished)
+            String when = finished > 0 && started == 0 ? "ended " + time(finished) + " without starting"
+                    : finished > 0 ? "ran " + duration(finished - started) + ", done " + time(finished)
                     : started > 0 ? "running " + duration(now - started) : "waiting " + duration(now - submitted);
             sb.append(String.format(Locale.ROOT, "  %-18s %-9s %s%n", j.get("id"), j.get("state"), j.get("title")));
             if (!String.valueOf(j.get("note")).isEmpty()) {

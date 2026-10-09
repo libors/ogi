@@ -1,6 +1,7 @@
 package cz.libors.harness.queue;
 
 import cz.libors.harness.compare.CompareJob;
+import cz.libors.harness.compare.RecordJob;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -21,12 +22,15 @@ import java.util.Properties;
  *
  * <p>Usage: {@code Submit state=<dir> type=compare robot=<class> team=<class> baseline=<version>
  * candidate=<version> opponents=<file> jar=<path>... [bounds=..] [maxPairs=n] [pairsPerOpponent=n] [starts=..]
- * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>]}.
+ * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>]}, or {@code type=record robot=<class>
+ * version=<version> opponents=<file> jar=<path> [pairs=n] [keys=<debug key>,...] [seed=n] [rounds=n] [starts=..]
+ * [timeout=..] [note=..]}.
  */
 public final class Submit {
 
     private static final List<String> PASSED = List.of("robot", "team", "baseline", "candidate", "bounds",
-            "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "timeout", "note");
+            "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "timeout", "note", "version", "pairs",
+            "keys");
 
     private Submit() {
     }
@@ -35,7 +39,7 @@ public final class Submit {
         Options o = Options.parse(args, 0);
         Path state = Path.of(o.get("state")).toAbsolutePath();
         String type = o.get("type", "compare");
-        if (!type.equals("compare")) {
+        if (!type.equals("compare") && !type.equals("record")) {
             throw new IllegalArgumentException("unknown job type: " + type);
         }
         long now = System.currentTimeMillis();
@@ -70,7 +74,7 @@ public final class Submit {
             }
             spec.setProperty("jar." + name, sha);
         }
-        String what = CompareJob.check(spec, lines);
+        String what = type.equals("compare") ? CompareJob.check(spec, lines) : RecordJob.check(spec, lines);
 
         String id = new SimpleDateFormat("yyMMdd-HHmmss").format(new Date(now)) + "-"
                 + Integer.toHexString(0x100 + new SecureRandom().nextInt(0xf00));

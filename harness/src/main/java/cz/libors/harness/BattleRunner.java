@@ -14,6 +14,7 @@ import robocode.control.events.RoundStartedEvent;
 import robocode.control.events.TurnEndedEvent;
 import robocode.control.snapshot.BulletState;
 import robocode.control.snapshot.IBulletSnapshot;
+import robocode.control.snapshot.IDebugProperty;
 import robocode.control.snapshot.IRobotSnapshot;
 import robocode.control.snapshot.RobotState;
 
@@ -39,15 +40,42 @@ public final class BattleRunner implements AutoCloseable {
 
     private static final int MAX_PROBLEMS = 50;
 
+    /**
+     * The CPU constant of an idle machine, in ns, for robots' own turn times (P-04): the queue's executor passes it,
+     * because its slots run with a raised constant; elsewhere the home's constant is the idle one.
+     */
+    public static final String IDLE_CONSTANT_PROPERTY = "ogi.cpuConstantIdle";
+
+    /** The debug property in which our robots report their last turn's time, in µs (the bot's TurnClock). */
+    public static final String TURN_TIME_PROPERTY = "cpu";
+
+    private final Path home;
     private final RobocodeEngine engine;
     private final Collector collector = new Collector();
     private final Random seeds = new Random();
 
     public BattleRunner(Path robocodeHome) {
         RobocodeEngine.setLogMessagesEnabled(false);
+        home = robocodeHome;
         engine = new RobocodeEngine(robocodeHome.toFile());
         engine.addBattleListener(collector);
         engine.setVisible(false);
+    }
+
+    /**
+     * The idle machine's CPU constant in µs: the executor's, or else the home's, read after a battle because a fresh
+     * home gets it only when the engine measures it at the start of its first battle.
+     */
+    private long idleConstantMicros() {
+        long idle = Long.getLong(IDLE_CONSTANT_PROPERTY, 0);
+        if (idle <= 0) {
+            try {
+                idle = cpuConstant(home).orElse(0);
+            } catch (IOException e) {
+                idle = 0;
+            }
+        }
+        return idle > 0 ? idle / 1000 : Long.MAX_VALUE;
     }
 
     /**
@@ -87,8 +115,20 @@ public final class BattleRunner implements AutoCloseable {
         }
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         return new BattleOutcome(setup, seed, List.copyOf(collector.results), Map.copyOf(collector.skippedTurns),
-                List.copyOf(collector.problems), collector.startMismatches, collector.shots(), elapsedMillis);
+                List.copyOf(collector.problems), collector.startMismatches, collector.shots(), elapsedMillis,
+                collector.turnTimes(idleConstantMicros()));
     }
+
+    /**
+     * Whether a line of a robot's output is the engine's report of a skipped turn, {@code SYSTEM: <name> skipped turn
+     * <turn>} ({@code RobotPeer}). Robots print their own statistics too, e.g. "skipped turns: 0" every round.
+     */
+    static boolean skippedTurn(String line) {
+        return SKIPPED_TURN.matcher(line).find();
+    }
+
+    private static final java.util.regex.Pattern SKIPPED_TURN =
+            java.util.regex.Pattern.compile("^SYSTEM: .+ skipped turn \\d+");
 
     /** Number of robots in a battle of these contestants, with team members counted one by one. */
     public int robotCount(List<String> names) {
@@ -184,6 +224,9 @@ public final class BattleRunner implements AutoCloseable {
 
     private static final class Collector extends BattleAdaptor {
 
+        /** Per robot name: the turn times it reported, in µs. */
+        private final Map<String, long[]> turnTimes = new LinkedHashMap<>();
+        private final Map<String, Integer> turnCounts = new LinkedHashMap<>();
         private final List<ContestantResult> results = new ArrayList<>();
         private final Map<String, Integer> skippedTurns = new LinkedHashMap<>();
         private final List<String> problems = new ArrayList<>();
@@ -196,7 +239,26 @@ public final class BattleRunner implements AutoCloseable {
         /** The round in which one contestant was left, or -1. */
         private int decidedRound = -1;
 
+        Map<String, BattleOutcome.TurnTimes> turnTimes(long idleConstantMicros) {
+            Map<String, BattleOutcome.TurnTimes> result = new LinkedHashMap<>();
+            turnTimes.forEach((name, times) -> {
+                int n = turnCounts.get(name);
+                long max = 0;
+                int overHalf = 0;
+                int over = 0;
+                for (int i = 0; i < n; i++) {
+                    max = Math.max(max, times[i]);
+                    overHalf += times[i] > idleConstantMicros / 2 ? 1 : 0;
+                    over += times[i] > idleConstantMicros ? 1 : 0;
+                }
+                result.put(name, new BattleOutcome.TurnTimes(n, max, overHalf, over));
+            });
+            return result;
+        }
+
         void reset(List<BattleSetup.Start> expectedStarts) {
+            turnTimes.clear();
+            turnCounts.clear();
             results.clear();
             skippedTurns.clear();
             problems.clear();
@@ -237,12 +299,13 @@ public final class BattleRunner implements AutoCloseable {
             int turn = event.getTurnSnapshot().getTurn();
             countShots(round, event.getTurnSnapshot().getRobots(), event.getTurnSnapshot().getBullets());
             for (IRobotSnapshot robot : event.getTurnSnapshot().getRobots()) {
+                countTurnTime(robot);
                 String output = robot.getOutputStreamSnapshot();
                 if (output == null || output.isEmpty()) {
                     continue;
                 }
                 for (String line : output.split("\\R")) {
-                    if (line.contains("skipped turn")) {
+                    if (skippedTurn(line)) {
                         skippedTurns.merge(robot.getName(), 1, Integer::sum);
                     } else if (line.contains("Exception") || line.contains("Error")) {
                         addProblem(robot.getName() + " [round " + round + ", turn " + turn + "]: " + line.trim());
@@ -289,6 +352,31 @@ public final class BattleRunner implements AutoCloseable {
                             && (b.getState() == BulletState.FIRED || b.getState() == BulletState.MOVING)) {
                         shots.get(robots[owner].getTeamName())[0]--;
                     }
+                }
+            }
+        }
+
+        private void countTurnTime(IRobotSnapshot robot) {
+            IDebugProperty[] properties = robot.getDebugProperties();
+            if (properties == null) {
+                return;
+            }
+            for (IDebugProperty p : properties) {
+                if (TURN_TIME_PROPERTY.equals(p.getKey())) {
+                    long micros;
+                    try {
+                        micros = Long.parseLong(p.getValue());
+                    } catch (NumberFormatException e) {
+                        return;
+                    }
+                    String name = robot.getName();
+                    int n = turnCounts.merge(name, 1, Integer::sum);
+                    long[] times = turnTimes.computeIfAbsent(name, k -> new long[1024]);
+                    if (n > times.length) {
+                        times = java.util.Arrays.copyOf(times, 2 * times.length);
+                        turnTimes.put(name, times);
+                    }
+                    times[n - 1] = micros;
                 }
             }
         }

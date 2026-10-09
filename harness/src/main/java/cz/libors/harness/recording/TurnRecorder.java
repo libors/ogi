@@ -1,5 +1,6 @@
 package cz.libors.harness.recording;
 
+import cz.libors.harness.BattleRunner;
 import cz.libors.harness.BattleSetup;
 import robocode.BattleRules;
 import robocode.control.events.BattleAdaptor;
@@ -21,7 +22,6 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -62,11 +62,18 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
     public static final String MAGIC = "#ogi-recording";
     public static final int VERSION = 1;
 
+    /**
+     * Debug properties that measure time, e.g. our robots' own turn times (P-04): they differ between two runs of the
+     * same battle, so they are recorded but left out of the digest.
+     */
+    public static final Set<String> MEASUREMENTS = Set.of(BattleRunner.TURN_TIME_PROPERTY);
+
     private final BattleSetup setup;
     private final Set<String> debugKeys;
     private final MessageDigest digest;
     private final Writer out;
     private final StringBuilder line = new StringBuilder(256);
+    private boolean inDigest;
     private Exception failure;
     private String hexDigest;
 
@@ -98,8 +105,8 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
             throw new IllegalStateException(e);
         }
         Files.createDirectories(file.toAbsolutePath().getParent());
-        Writer out = new BufferedWriter(new OutputStreamWriter(new DigestOutputStream(
-                new GZIPOutputStream(new BufferedOutputStream(Files.newOutputStream(file)), 1 << 16), digest),
+        Writer out = new BufferedWriter(new OutputStreamWriter(
+                new GZIPOutputStream(new BufferedOutputStream(Files.newOutputStream(file)), 1 << 16),
                 StandardCharsets.UTF_8), 1 << 16);
         return new TurnRecorder(setup, debugKeys == null ? null : Set.copyOf(debugKeys), digest, out);
     }
@@ -156,8 +163,9 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
                 if (debugKeys != null && !debugKeys.contains(p.getKey())) {
                     continue;
                 }
-                start("d").field(round).field(turn).field(r.getRobotIndex()).field(p.getKey()).field(p.getValue())
-                        .end();
+                start("d").field(round).field(turn).field(r.getRobotIndex()).field(p.getKey()).field(p.getValue());
+                inDigest = !MEASUREMENTS.contains(p.getKey());
+                end();
             }
         }
     }
@@ -182,6 +190,7 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
     private TurnRecorder start(String type) {
         line.setLength(0);
         line.append(type);
+        inDigest = true;
         return this;
     }
 
@@ -213,6 +222,9 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
     private void end() throws IOException {
         line.append('\n');
         out.append(line);
+        if (inDigest) {
+            digest.update(line.toString().getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     private interface Action {
@@ -230,7 +242,7 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
         }
     }
 
-    /** SHA-256 of the uncompressed content; available after {@link #close()}. */
+    /** SHA-256 of the uncompressed content without the {@link #MEASUREMENTS}; available after {@link #close()}. */
     public String digest() {
         if (hexDigest == null) {
             throw new IllegalStateException("Recording not closed yet");

@@ -517,7 +517,7 @@ public final class Server {
                     QueueJob job = f.work.job();
                     boolean active = job.state().active();
                     job.completed(f.work, outcome, link.name());
-                    record(link, f, "ok", ((Number) outcome.get("elapsedMillis")).longValue());
+                    record(link, f, "ok" + turnTimes(outcome), ((Number) outcome.get("elapsedMillis")).longValue());
                     announceEnd(job, active);
                 }
                 dispatch(link);
@@ -670,6 +670,25 @@ public final class Server {
         if (wasActive && !job.state().active()) {
             log("job " + job.id() + " " + job.state().name().toLowerCase(Locale.ROOT) + ": " + job.reason());
         }
+    }
+
+    /** Our robots' own turn times in an outcome (P-04), for the dispatch log: the longest, and how many went over. */
+    private static String turnTimes(Map<String, Object> outcome) {
+        Object reported = outcome.get("turnTimes");
+        if (!(reported instanceof Map<?, ?> times) || times.isEmpty()) {
+            return "";
+        }
+        long max = 0;
+        long overHalf = 0;
+        long over = 0;
+        for (Object v : times.values()) {
+            List<?> t = (List<?>) v;
+            max = Math.max(max, ((Number) t.get(1)).longValue());
+            overHalf += ((Number) t.get(2)).longValue();
+            over += ((Number) t.get(3)).longValue();
+        }
+        return String.format(Locale.ROOT, "; own turns max %.2f ms, %d over half the idle constant, %d over it",
+                max / 1000.0, overHalf, over);
     }
 
     /** One line per battle in the job's {@code dispatch.tsv}: who ran it, when, how long, and how it ended. */

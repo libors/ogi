@@ -94,8 +94,18 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   the wave's reference and escape angle, the hitting headings), then `gunshot` with the turn's plan (the features,
   the direction, the reference, the escape angle, whether the guess-factor gun searched, the circular aim, the guess
   factor found and the chosen gun). That is everything `GunModel` needs to replay the battle.
+  - `OgiGunLog` also logs `gunshield` when an enemy bullet destroys one of its bullets (the plan's turn and the
+    shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
+    that shoot bullets down (DrussGT, Saguaro, Roborio) would otherwise look easy to hit on the bench.
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).
 - **Without the GUI:** `OverlayRenderTest` paints a simulated fight into `bot/build/overlay/gun.png`. The image is
   mirrored by hand, so its text is upside down.
+- **Own turn time (P-04, `TurnClock`):** the bot measures the wall time from its first event of a turn (`onStatus`,
+  which the engine delivers before every other event) to its `execute()`, and reports the previous turn's time in µs
+  as the debug property `cpu`. The engine gives that part of the turn the CPU constant (and up to a millisecond more,
+  engine-model G-45). The harness compares it with the constant of an idle machine
+  ([harness.md](harness.md#how-results-are-gathered)). Measured on the Mac (2026-10-09, lab opponents): median
+  6–13 µs, 99th percentile ~80 µs, the longest turns 0.7–1.7 ms at a battle's start (the JIT) and in garbage
+  collections.

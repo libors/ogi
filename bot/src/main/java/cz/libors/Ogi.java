@@ -13,8 +13,10 @@ import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.team.EnemySighting;
 import cz.libors.ogi.trace.Overlay;
 import cz.libors.ogi.trace.Trace;
+import cz.libors.ogi.trace.TurnClock;
 import cz.libors.ogi.world.EnemyState;
 import cz.libors.ogi.world.World;
+import robocode.Bullet;
 import robocode.BulletHitBulletEvent;
 import robocode.BulletHitEvent;
 import robocode.HitByBulletEvent;
@@ -23,6 +25,7 @@ import robocode.MessageEvent;
 import robocode.RobotDeathEvent;
 import robocode.Rules;
 import robocode.ScannedRobotEvent;
+import robocode.StatusEvent;
 import robocode.TeamRobot;
 
 import java.awt.Color;
@@ -55,6 +58,7 @@ public class Ogi extends TeamRobot {
     private GuessFactorGun gun;
     private WaveSurfer surfer;
     private final Trace trace = new Trace();
+    private final TurnClock clock = new TurnClock();
     /** Whether last turn's plan for this turn is a shot we can afford. */
     private boolean plannedShot;
 
@@ -71,7 +75,17 @@ public class Ogi extends TeamRobot {
         setColors(new Color(40, 44, 52), new Color(229, 192, 123), new Color(97, 175, 239));
         while (true) {
             act();
+            clock.ended(System.nanoTime());
             execute();
+        }
+    }
+
+    /** The first event of every turn: the turn's work starts, and the last turn's time is reported (P-04). */
+    @Override
+    public void onStatus(StatusEvent e) {
+        clock.started(System.nanoTime());
+        if (clock.lastMicros() >= 0) {
+            setDebugProperty(TurnClock.PROPERTY, Long.toString(clock.lastMicros()));
         }
     }
 
@@ -149,8 +163,12 @@ public class Ogi extends TeamRobot {
                 || teammateInLineOfFire(target.distanceTo(getX(), getY()), now)) {
             return false;
         }
-        setFire(plan.get().power());
+        fired(setFireBullet(plan.get().power()), plan.get());
         return true;
+    }
+
+    /** A hook for {@link OgiGunLog}: this bullet was just fired from this plan. */
+    protected void fired(Bullet bullet, GuessFactorGun.Plan plan) {
     }
 
     /**

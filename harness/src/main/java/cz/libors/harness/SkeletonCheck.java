@@ -20,6 +20,14 @@ public final class SkeletonCheck {
     private static final double MIN_DUEL_SHARE = 0.75;
     private static final double MIN_TEAM_SHARE = 0.70;
     private static final String SITTING_DUCK = "sample.SittingDuck";
+    /**
+     * Shares of our robots' own turns that may take longer than half the CPU constant, and than all of it (P-04).
+     * Ogi takes ~10 µs in a median turn; the few longer ones are the JIT at a battle's start and garbage collections,
+     * which reached 2.1 ms once against a 2.0 ms constant in a team battle (the engine allows up to a millisecond more,
+     * engine-model G-45, and skipped turns are checked on their own).
+     */
+    private static final double MAX_SHARE_OVER_HALF = 0.005;
+    private static final double MAX_SHARE_OVER_CONSTANT = 0.0005;
 
     private static final List<String> DUEL_OPPONENTS = List.of(
             "sample.Corners", "sample.Crazy", "sample.Fire", "sample.MyFirstJuniorRobot", "sample.MyFirstRobot",
@@ -36,7 +44,7 @@ public final class SkeletonCheck {
 
     /** One line of the report. */
     record Verdict(String label, boolean passed, double share, int rank, int firsts, int rounds,
-                   int skippedTurns, List<String> problems, BattleOutcome outcome) {
+                   int skippedTurns, List<String> problems, BattleOutcome.TurnTimes turnTimes, BattleOutcome outcome) {
     }
 
     private SkeletonCheck() {
@@ -91,17 +99,23 @@ public final class SkeletonCheck {
         // SittingDuck never fires, so any bullet counted for it is a counting error (e.g. its death explosion).
         boolean shotsCounted = !check.setup().robots().contains(SITTING_DUCK)
                 || outcome.shots(SITTING_DUCK).fired() == 0;
+        // Our robots report their own turn times: few may come near the idle CPU constant, fewer still exceed it.
+        BattleOutcome.TurnTimes times = outcome.turnTimes("cz.libors.");
+        boolean light = times.turns() > 0 && times.overIdleConstant() <= MAX_SHARE_OVER_CONSTANT * times.turns()
+                && times.overHalf() <= MAX_SHARE_OVER_HALF * times.turns();
         boolean passed = result != null && share >= check.minShare() && rank <= check.maxRank()
-                && skipped == 0 && problems.isEmpty() && shotsCounted;
+                && skipped == 0 && problems.isEmpty() && shotsCounted && light;
         return new Verdict(check.setup().label(), passed, share, rank, firsts, check.setup().rounds(), skipped,
-                problems, outcome);
+                problems, times, outcome);
     }
 
     private static String format(Verdict v) {
         int duckShots = v.outcome().shots(SITTING_DUCK).fired();
-        return String.format(Locale.ROOT, "%-4s %-34s share %5.1f %%  rank %d  firsts %2d/%-2d  skipped %d  problems %d  (%.1f s)%s",
+        BattleOutcome.TurnTimes t = v.turnTimes();
+        return String.format(Locale.ROOT, "%-4s %-34s share %5.1f %%  rank %d  firsts %2d/%-2d  skipped %d  problems %d  "
+                        + "own turns %5d, max %4.2f ms, over ½ %d  (%.1f s)%s",
                 v.passed() ? "OK" : "FAIL", v.label(), 100 * v.share(), v.rank(), v.firsts(), v.rounds(),
-                v.skippedTurns(), v.problems().size(), v.outcome().elapsedMillis() / 1000.0,
-                duckShots > 0 ? "  SittingDuck fired " + duckShots : "");
+                v.skippedTurns(), v.problems().size(), t.turns(), t.maxMicros() / 1000.0, t.overHalf(),
+                v.outcome().elapsedMillis() / 1000.0, duckShots > 0 ? "  SittingDuck fired " + duckShots : "");
     }
 }

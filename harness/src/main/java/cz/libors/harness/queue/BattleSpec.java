@@ -16,12 +16,24 @@ import java.util.Map;
  * @param seed       the battle's seed ({@link cz.libors.harness.BattleRunner#run})
  * @param startsSeed fixed starts drawn from this seed by {@link cz.libors.harness.Starts#random}, the same in every
  *                   round; {@code null} for the engine's random starts
+ * @param record     whether the slot records the battle turn by turn ({@link cz.libors.harness.recording.TurnRecorder})
+ *                   and sends the recording back
+ * @param recordKeys the debug properties the recording keeps; {@code null} for all
+ * @param debug      whether the battle needs the engine's debug mode, without a turn time limit (engine-model G-17):
+ *                   a robot that skips a turn can lose that turn's debug properties, and with them part of a log
  */
 public record BattleSpec(String label, int width, int height, int rounds, List<String> robots, long seed,
-                         Long startsSeed) {
+                         Long startsSeed, boolean record, List<String> recordKeys, boolean debug) {
 
     public BattleSpec {
         robots = List.copyOf(robots);
+        recordKeys = recordKeys == null ? null : List.copyOf(recordKeys);
+    }
+
+    /** A battle that is not recorded, under the turn time limit. */
+    public BattleSpec(String label, int width, int height, int rounds, List<String> robots, long seed,
+                      Long startsSeed) {
+        this(label, width, height, rounds, robots, seed, startsSeed, false, null, false);
     }
 
     /** The setup without fixed starts; the slot draws them, because it needs the engine to count team members. */
@@ -39,6 +51,9 @@ public record BattleSpec(String label, int width, int height, int rounds, List<S
         // As a string: a JSON number would lose a long's low bits in a reader that uses doubles.
         m.put("seed", Long.toString(seed));
         m.put("startsSeed", startsSeed == null ? null : Long.toString(startsSeed));
+        m.put("record", record);
+        m.put("recordKeys", recordKeys);
+        m.put("debug", debug);
         return m;
     }
 
@@ -48,8 +63,16 @@ public record BattleSpec(String label, int width, int height, int rounds, List<S
             robots.add((String) r);
         }
         Object starts = m.get("startsSeed");
+        List<String> keys = null;
+        if (m.get("recordKeys") instanceof List<?> list) {
+            keys = new ArrayList<>();
+            for (Object k : list) {
+                keys.add((String) k);
+            }
+        }
         return new BattleSpec((String) m.get("label"), number(m, "width"), number(m, "height"), number(m, "rounds"),
-                robots, Long.parseLong((String) m.get("seed")), starts == null ? null : Long.parseLong((String) starts));
+                robots, Long.parseLong((String) m.get("seed")), starts == null ? null : Long.parseLong((String) starts),
+                Boolean.TRUE.equals(m.get("record")), keys, Boolean.TRUE.equals(m.get("debug")));
     }
 
     /** A battle's outcome as a message field; the setup stays behind, the receiver has the spec. */
@@ -69,6 +92,10 @@ public record BattleSpec(String label, int width, int height, int rounds, List<S
         o.shots().forEach((name, s) -> shots.put(name, List.of(s.fired(), s.hits())));
         m.put("shots", shots);
         m.put("elapsedMillis", o.elapsedMillis());
+        Map<String, Object> times = new LinkedHashMap<>();
+        o.turnTimes().forEach((name, t) -> times.put(name, List.of(t.turns(), t.maxMicros(), t.overHalf(),
+                t.overIdleConstant())));
+        m.put("turnTimes", times);
         return m;
     }
 
@@ -91,8 +118,17 @@ public record BattleSpec(String label, int width, int height, int rounds, List<S
             List<?> s = (List<?>) v;
             shots.put((String) k, new BattleOutcome.Shots(integer(s.get(0)), integer(s.get(1))));
         });
+        Map<String, BattleOutcome.TurnTimes> times = new LinkedHashMap<>();
+        Object reported = m.get("turnTimes");
+        if (reported != null) {
+            ((Map<?, ?>) reported).forEach((k, v) -> {
+                List<?> t = (List<?>) v;
+                times.put((String) k, new BattleOutcome.TurnTimes(integer(t.get(0)), ((Number) t.get(1)).longValue(),
+                        integer(t.get(2)), integer(t.get(3))));
+            });
+        }
         return new BattleOutcome(setup(), Long.parseLong((String) m.get("seed")), results, skipped, problems,
-                integer(m.get("startMismatches")), shots, ((Number) m.get("elapsedMillis")).longValue());
+                integer(m.get("startMismatches")), shots, ((Number) m.get("elapsedMillis")).longValue(), times);
     }
 
     private static int number(Map<String, Object> m, String key) {

@@ -181,7 +181,7 @@ function activeRow(j, index, count, now) {
     <td class="title">${esc(j.title)}${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}</td>
     <td><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></td>
     <td>${times}</td>
-    <td class="num">${p.pairs ?? 0}${p.pendingPairs ? " (+" + p.pendingPairs + ")" : ""} pairs${total ? `<div class="progress"><div style="width:${share * 100}%"></div></div><div class="muted">of ~${Math.round(total)}</div>` : ""}</td>
+    <td class="num">${p.pairs ?? 0}${p.pendingPairs ? " (+" + p.pendingPairs + ")" : ""} ${p.unit || "pairs"}${total ? `<div class="progress"><div style="width:${share * 100}%"></div></div><div class="muted">of ~${Math.round(total)}</div>` : ""}</td>
     <td>${estimate(p)}</td>
     <td class="num">${p.llr != null ? fmt(p.llr) : "–"}${llrBar(p)}</td>
     <td class="num">${p.battlesPerSecond != null ? fmt(p.battlesPerSecond) + " /s" : "–"}<div class="muted">${p.etaSeconds != null ? "~" + dur(p.etaSeconds * 1000) : ""}</div></td>
@@ -194,7 +194,8 @@ function activeRow(j, index, count, now) {
 
 function doneRow(j) {
   const p = j.progress || {};
-  const health = `${p.skippedSubject ?? 0} / ${p.skippedOpponents ?? 0} skipped · ${p.problems ?? 0} problems · ${p.failures ?? 0} failed`;
+  const health = `${p.skippedSubject ?? 0} / ${p.skippedOpponents ?? 0} skipped · ${p.problems ?? 0} problems · ${p.failures ?? 0} failed`
+    + (p.ownTurns ? `<br>own turns max ${fmt(p.ownTurnMaxMicros / 1000)} ms · over idle b/c ${p.ownTurnsOverIdleBaseline ?? 0} / ${p.ownTurnsOverIdleCandidate ?? 0}` : "");
   return `<tr class="job ${j.id === selected ? "selected" : ""}" onclick="select('${esc(j.id)}')">
     <td class="num">${esc(j.id)}</td>
     <td class="title">${esc(j.title)}${j.note ? `<div class="note">${esc(j.note)}</div>` : ""}</td>
@@ -245,6 +246,7 @@ async function loadDetail(id) {
         <div>Pairs</div><div class="num">${d.pairs ?? "–"}${d.llr != null ? ` · LLR ${fmt(d.llr)} in [${fmt(d.llrLower)}, ${fmt(d.llrUpper)}]` : ""}</div>
         <div>Noise</div><div class="num">σ per pair ${fmt(n.sigmaPair)} · ρ ${fmt(n.pooledCorrelation)} · expected pairs ${fmt(n.expectedPairsAtBounds, 0)} at the bounds, ${fmt(n.expectedPairsMidway, 0)} midway</div>
         <div>Health</div><div class="num">skipped turns base ${h.skippedTurnsBaseline ?? "–"}, cand ${h.skippedTurnsCandidate ?? "–"}, opponents ${h.skippedTurnsOpponents ?? "–"} · problems ${h.problems ?? "–"} · ${h.battleSeconds ?? "–"} s in battles</div>
+        ${j.progress && j.progress.ownTurns ? `<div>Own turns (P-04)</div><div class="num">${j.progress.ownTurns} reported, max ${fmt(j.progress.ownTurnMaxMicros / 1000)} ms · over half the idle constant b/c ${j.progress.ownTurnsOverHalfBaseline} / ${j.progress.ownTurnsOverHalfCandidate} · over it ${j.progress.ownTurnsOverIdleBaseline} / ${j.progress.ownTurnsOverIdleCandidate}</div>` : ""}
         <div>Directory</div><div class="num">${esc(j.dir)}</div>
         ${env}
       </div>

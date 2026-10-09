@@ -118,8 +118,8 @@ public final class Executor {
     private record SlotExit(int slot, int generation, int code) implements Event {
     }
 
-    /** A battle from the server waiting for a slot. */
-    private record Battle(long id, Map<String, Object> spec, long timeoutMillis) {
+    /** A battle from the server waiting for a slot; {@code debug}: it needs a slot in the engine's debug mode. */
+    private record Battle(long id, Map<String, Object> spec, long timeoutMillis, boolean debug) {
     }
 
     private final class SlotProcess {
@@ -134,6 +134,11 @@ public final class Executor {
         Battle battle;
         long battleStart;
         int restarts;
+        /**
+         * Whether the slot's JVM runs the engine in debug mode ({@code -Ddebug=true}), which the engine reads once per
+         * JVM: no turn time limit, so no robot skips a turn (engine-model G-17).
+         */
+        boolean debug;
         /** The last lines the JVM printed outside the protocol, e.g. why it could not start. */
         final Deque<String> output = new ArrayDeque<>();
 
@@ -153,6 +158,8 @@ public final class Executor {
     private Path base;
     private List<Path> jars;
     private long cpuConstant;
+    /** The idle machine's constant, which the slots compare robots' own turn times with (P-04). */
+    private long idleConstant;
 
     private void serve(Options o) throws Exception {
         int count = Integer.parseInt(o.get("slots"));
@@ -169,6 +176,7 @@ public final class Executor {
             rejected.forEach(r -> log("foreign jar left out: " + r));
             Measurement m = cpuConstant(o.has("remeasure"));
             cpuConstant = Math.round(m.idle() * cpuFactor);
+            idleConstant = m.idle();
             for (int i = 0; i < count; i++) {
                 SlotProcess slot = new SlotProcess(i);
                 slots.add(slot);
@@ -238,7 +246,9 @@ public final class Executor {
                 Message m = l.message();
                 switch (m.type()) {
                     case "battle" -> {
-                        waiting.add(new Battle(m.longValue("id"), m.map("spec"), m.longValue("timeout") * 1000));
+                        Map<String, Object> spec = m.map("spec");
+                        waiting.add(new Battle(m.longValue("id"), spec, m.longValue("timeout") * 1000,
+                                Boolean.TRUE.equals(spec.get("debug"))));
                         dispatch();
                     }
                     case "deploy" -> deploy(m.string("file"), m.string("sha"));
@@ -304,19 +314,54 @@ public final class Executor {
         }
     }
 
+    /**
+     * Gives waiting battles, in order, to idle slots in the debug mode they need. When only slots in the other mode
+     * are idle, one of them restarts in the needed mode; a job's battles all need the same mode, so each slot
+     * switches once when such a job starts.
+     */
     private void dispatch() {
-        for (SlotProcess slot : slots) {
-            if (waiting.isEmpty()) {
+        while (!waiting.isEmpty()) {
+            Battle b = waiting.peek();
+            SlotProcess slot = idle(b.debug());
+            if (slot == null) {
+                SlotProcess other = idle(!b.debug());
+                if (other != null) {
+                    other.debug = b.debug();
+                    try {
+                        switchMode(other);
+                    } catch (IOException e) {
+                        log("slot " + other.index + " could not switch its debug mode: " + e);
+                    }
+                }
                 return;
             }
-            if (slot.ready && slot.battle == null) {
-                Battle b = waiting.poll();
-                slot.battle = b;
-                slot.battleStart = System.currentTimeMillis();
-                slot.input.send(Message.of("battle", "id", b.id(), "spec", b.spec()));
-                server.send(Message.of("started", "id", b.id(), "slot", slot.index));
+            waiting.poll();
+            slot.battle = b;
+            slot.battleStart = System.currentTimeMillis();
+            slot.input.send(Message.of("battle", "id", b.id(), "spec", b.spec()));
+            server.send(Message.of("started", "id", b.id(), "slot", slot.index));
+        }
+    }
+
+    private SlotProcess idle(boolean debug) {
+        for (SlotProcess slot : slots) {
+            if (slot.ready && slot.battle == null && slot.debug == debug) {
+                return slot;
             }
         }
+        return null;
+    }
+
+    /** Restarts an idle slot in its new debug mode; not a failure, so it does not count as a restart. */
+    private void switchMode(SlotProcess slot) throws IOException {
+        slot.ready = false;
+        slot.process.destroyForcibly();
+        try {
+            slot.process.waitFor(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        start(slot);
     }
 
     private void deploy(String file, String sha) {
@@ -371,7 +416,8 @@ public final class Executor {
         prepareHome(slot.home, all, cpuConstant);
         Files.createDirectories(slot.tmp);
         int generation = ++slot.generation;
-        List<String> command = slotCommand(slot.tmp, List.of(), Slot.class.getName(), List.of(slot.home.toString()));
+        List<String> command = slotCommand(slot.tmp, slot.debug ? List.of("-Ddebug=true") : List.of(),
+                Slot.class.getName(), List.of(slot.home.toString()));
         ProcessBuilder pb = new ProcessBuilder(command).directory(slot.home.toFile())
                 .redirectError(Redirect.appendTo(slot.log.toFile()));
         minimalEnvironment(pb, slot.tmp);
@@ -455,6 +501,7 @@ public final class Executor {
         rejected.forEach(r -> System.err.println("foreign jar left out: " + r));
         Measurement m = cpuConstant(o.has("remeasure"));
         long constant = Math.round(m.idle() * cpuFactor);
+        idleConstant = m.idle();
         System.err.printf(Locale.ROOT, "CPU constant %d ns (measured %d x %.2f; samples %s)%n", constant, m.idle(),
                 cpuFactor, m.samples());
         Path home = Path.of(o.get("home")).toAbsolutePath();
@@ -484,6 +531,7 @@ public final class Executor {
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
                 "-Duser.home=" + tmp,
                 "-Djava.io.tmpdir=" + tmp,
+                "-D" + cz.libors.harness.BattleRunner.IDLE_CONSTANT_PROPERTY + "=" + idleConstant,
                 "-cp", bundle.resolve("lib").resolve("harness.jar") + File.pathSeparator
                         + base.resolve("libs") + File.separator + "*",
                 main));

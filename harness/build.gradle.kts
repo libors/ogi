@@ -403,7 +403,7 @@ tasks.register<JavaExec>("recordGunLogs") {
     group = "verification"
     description = "Records the gun's log of comparison battles for the gun bench; see docs/harness.md."
     // OgiGunLog plays like Ogi and logs its gun; only the working tree has its jar (bot/build/robots).
-    recordsBattles("cz.libors.OgiGunLog", "harness/build/gun-logs", "gunshot,gunpass")
+    recordsBattles("cz.libors.OgiGunLog", "harness/build/gun-logs", "gunshot,gunpass,gunshield")
 }
 
 tasks.register<JavaExec>("gunBench") {
@@ -419,6 +419,22 @@ tasks.register<JavaExec>("gunBench") {
     val root = rootDir
     argumentProviders.add(CommandLineArgumentProvider {
         listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) + passed
+    })
+}
+
+tasks.register<JavaExec>("gunTrend") {
+    group = "verification"
+    description = "Compares the gun's hit rate early and late in battles, per opponent, from gun logs (D-022)."
+    mainClass = "cz.libors.harness.gunbench.GunTrend"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = gunBench.runtimeClasspath
+    jvmArgs("-Xmx4g")
+    val logs = providers.gradleProperty("logs").orElse("harness/build/gun-logs/$botVersion")
+    val rounds = providers.gradleProperty("rounds").orElse("10")
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath },
+            "rounds=" + rounds.get())
     })
 }
 
@@ -605,8 +621,8 @@ val remoteRecordArguments = recordArguments("cz.libors.Ogi", null, remoteLayout.
 remoteTask("remoteRecordBattles", "Runs recordBattles on the remote worker.", "battle-recordings",
     "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteRecordArguments() }
 
-val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", "gunshot,gunpass", remoteLayout.home("gun-logs"),
-    remoteLayout.file) { remoteLayout.out("gun-logs") }
+val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", "gunshot,gunpass,gunshield",
+    remoteLayout.home("gun-logs"), remoteLayout.file) { remoteLayout.out("gun-logs") }
 remoteTask("remoteRecordGunLogs", "Runs recordGunLogs on the remote worker.", "gun-logs",
     "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteGunLogArguments() }
 
@@ -740,6 +756,27 @@ tasks.register<JavaExec>("submit") {
             "baseline=$baselineVersion", "candidate=$candidateVersion", "opponents=" + localFile(opponents.get())) +
             (subjectJars(baselineVersion) + subjectJars(candidateVersion)).map { "jar=" + it.absolutePath } + passed +
             listOf("port=" + port.get())
+    })
+}
+
+tasks.register<JavaExec>("submitGunLogs") {
+    group = "queue"
+    description = "Queues the gun's logs (OgiGunLog) of the working tree against -Popponents; see docs/harness.md."
+    dependsOn(snapshotJars, installRobocode)
+    mainClass = "cz.libors.harness.queue.Submit"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
+    val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
+    val passed = listOf("pairs", "seed", "rounds", "starts", "note", "timeout")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val versionFile = snapshotVersionFile
+    val port = providers.gradleProperty("port").orElse("8765")
+    argumentProviders.add(CommandLineArgumentProvider {
+        val version = versionFile.get().asFile.readText().trim()
+        listOf("state=" + queueDir.absolutePath, "type=record", "robot=cz.libors.OgiGunLog", "version=$version",
+            "keys=gunshot,gunpass,gunshield", "opponents=" + localFile(opponents.get()),
+            "jar=" + snapshotsDir.file("cz.libors.OgiGunLog_$version.jar").asFile.absolutePath,
+            "port=" + port.get()) + passed
     })
 }
 
