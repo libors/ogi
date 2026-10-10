@@ -81,13 +81,19 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 - **A dead enemy's waves stay** until they pass us: its bullets keep flying (engine-model G-44).
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
   `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
-  400 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
-  until there is room, so near walls it drifts outwards and stays further than 400 px. `HitRange` gives the guess
-  factors that would hit us on each path; the way with the least of the wave's profile in that range wins, and its
-  first turn's commands are used.
-  Ties keep the last way.
+  325 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
+  until there is room, so near walls it drifts outwards and stays further than 325 px. `HitRange` gives the guess
+  factors that would hit us on each path.
+  - **Two waves:** the next wave's hit range observes the same path, and from where each way ends the next wave is
+    surfed the three ways too. A way's danger is its expected damage from the nearest wave (the share of the wave's
+    profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.
+  - **Close fights:** nearer than 250 px to the wave's shooter, each wave's danger is multiplied by
+    2.5^(d_now / d_end) / 2.5, d being the distance to the enemy now and where the way ends (Diamond's factor), and
+    every way carries a floor of 0.02 of the bullet's damage, so that ways that close in on a rammer cost more even
+    where the profile is empty.
+  - The way with the least danger wins, and its first turn's commands are used. Ties keep the last way.
 - **Without an enemy wave** the bot orbits the target and changes direction at random intervals, from its own seeded
-  generator. It also steers towards 400 px, but turns towards the target at walls, so it stays closer than the surfer.
+  generator. It also steers towards 325 px, but turns towards the target at walls, so it stays closer than the surfer.
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
   up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
 

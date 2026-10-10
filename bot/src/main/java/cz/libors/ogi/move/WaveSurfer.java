@@ -7,6 +7,7 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.RobotHistory;
 import cz.libors.ogi.gun.TargetingFeatures;
+import cz.libors.ogi.physics.BulletMotion;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.trace.Trace;
@@ -30,8 +31,9 @@ import java.util.Optional;
  *
  * <p>For the nearest wave the surfer predicts three ways to move until the wave has passed: orbiting its origin either
  * way, or stopping. The prediction runs the engine's own rules ({@link RobotMotion}), and {@link HitRange} gives the
- * guess factors that would hit us on each path. The way with the least danger in the wave's profile wins, and its
- * first turn's commands are returned.
+ * guess factors that would hit us on each path. From where each way leaves us, the next wave is surfed the same way,
+ * and its best way counts too. The way with the least expected damage (each wave's profile inside its hit range,
+ * times its bullet's damage) wins, and its first turn's commands are returned.
  *
  * <p>Danger models last for the battle (static, per robot, engine-model G-22); waves and detectors are per round.
  */
@@ -42,13 +44,19 @@ public final class WaveSurfer {
     static final int STOP = 0;
     private static final int[] OPTIONS = {ORBIT_LEFT, ORBIT_RIGHT, STOP};
 
-    static final double PREFERRED_DISTANCE = 400;
+    static final double PREFERRED_DISTANCE = 325;
     private static final double MAX_TILT = 0.5;
     private static final double WALL_STICK = 120;
     private static final double WALL_MARGIN = 25;
     private static final double SMOOTH_STEP = 0.05;
     private static final double DRIVE_DISTANCE = 100;
     private static final int MAX_PREDICTED_TURNS = 120;
+    private static final double CLOSING_BASE = 2.5;
+    private static final double MIN_CLOSING_DISTANCE = 36;
+    /** Closing in counts only in a close fight, nearer than this; further away the preferred distance rules. */
+    private static final double CLOSE_FIGHT = 250;
+    /** Danger every way carries, so that the distance to the enemy decides between ways the profile calls safe. */
+    private static final double DANGER_FLOOR = 0.02;
     /** How closely a bullet's power must match its wave's. */
     private static final double POWER_TOLERANCE = 0.01;
 
@@ -175,17 +183,18 @@ public final class WaveSurfer {
      * @param me our state at the end of this turn, in the engine's convention
      */
     public Optional<double[]> command(EngineRobot me, long now) {
-        EnemyWave nearest = nearest(me, now);
+        EnemyWave nearest = nearest(me, now, null);
         if (nearest == null) {
             return Optional.empty();
         }
+        EnemyWave second = nearest(me, now, nearest);
         int best = lastOption;
-        double bestDanger = danger(nearest, me, now, best);
+        double bestDanger = danger(nearest, second, me, now, best);
         for (int option : OPTIONS) {
             if (option == lastOption) {
                 continue;
             }
-            double d = danger(nearest, me, now, option);
+            double d = danger(nearest, second, me, now, option);
             if (d < bestDanger) {
                 best = option;
                 bestDanger = d;
@@ -195,11 +204,14 @@ public final class WaveSurfer {
         return Optional.of(orbit(me, nearest.wave, best));
     }
 
-    /** The wave that reaches us first and has not passed us yet. */
-    private EnemyWave nearest(EngineRobot me, long now) {
+    /** The wave that reaches us first and has not passed us yet, other than {@code except}. */
+    private EnemyWave nearest(EngineRobot me, long now, EnemyWave except) {
         EnemyWave best = null;
         double bestTime = Double.POSITIVE_INFINITY;
         for (EnemyWave w : waves) {
+            if (w == except) {
+                continue;
+            }
             double distance = Math.hypot(me.x - w.wave.x(), me.y - w.wave.y()) - w.wave.radius(now);
             double turns = distance / w.wave.speed();
             if (turns > -1 && turns < bestTime) {
@@ -210,23 +222,88 @@ public final class WaveSurfer {
         return best;
     }
 
-    /** The share of the enemy's aim that would hit us if we moved this way until the wave has passed. */
-    private double danger(EnemyWave w, EngineRobot start, long now, int option) {
+    /**
+     * The damage we expect from the nearest wave if we moved this way until it has passed, plus the least we expect
+     * from the next wave, surfed from there in its best way. Each wave counts the share of the enemy's aim that would
+     * hit us times its bullet's damage.
+     */
+    private double danger(EnemyWave w, EnemyWave next, EngineRobot start, long now, int option) {
         EngineRobot r = start.copy();
         HitRange range = w.range.copy();
-        for (long t = now + 1; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++) {
-            double[] cmd = orbit(r, w.wave, option);
-            r.distanceRemaining = cmd[0];
-            r.bodyTurnRemaining = cmd[1];
-            RobotMotion.move(r, (int) field.width(), (int) field.height(), coolingRate);
+        HitRange nextRange = next == null ? null : next.range.copy();
+        long t = now + 1;
+        for (; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++) {
+            step(r, w.wave, option);
             range.observe(t, r.x, r.y);
+            if (nextRange != null) {
+                nextRange.observe(t, r.x, r.y);
+            }
         }
+        double danger = damage(w, range) * closing(w, start, r, now);
+        if (next == null) {
+            return danger;
+        }
+        double least = Double.POSITIVE_INFINITY;
+        for (int o : OPTIONS) {
+            EngineRobot q = r.copy();
+            HitRange qr = nextRange.copy();
+            for (long u = t; u <= now + MAX_PREDICTED_TURNS && !qr.passed(); u++) {
+                step(q, next.wave, o);
+                qr.observe(u, q.x, q.y);
+            }
+            least = Math.min(least, damage(next, qr) * closing(next, start, q, now));
+        }
+        return danger + least;
+    }
+
+    /**
+     * How much more dangerous a way is for ending ({@code end}) closer to the wave's shooter than we are now
+     * ({@code start}), as Diamond weighs it: {@code 2.5^(now / then) / 2.5}, 1 at the same distance; only in a close
+     * fight. A rammer that drives at us makes every close option dangerous, and from close up any gun hits.
+     */
+    private double closing(EnemyWave w, EngineRobot start, EngineRobot end, long now) {
+        double[] enemy = enemyAt(w.wave.shooter(), now);
+        if (enemy == null) {
+            return 1;
+        }
+        double before = Math.hypot(start.x - enemy[0], start.y - enemy[1]);
+        if (before >= CLOSE_FIGHT) {
+            return 1;
+        }
+        double after = Math.max(MIN_CLOSING_DISTANCE, Math.hypot(end.x - enemy[0], end.y - enemy[1]));
+        return Math.pow(CLOSING_BASE, before / after) / CLOSING_BASE;
+    }
+
+    /** The enemy's last scanned position up to 8 turns old, or null. */
+    private double[] enemyAt(String name, long now) {
+        Map<Long, double[]> positions = enemyPositions.get(name);
+        if (positions == null) {
+            return null;
+        }
+        for (long t = now; t >= now - 8; t--) {
+            double[] p = positions.get(t);
+            if (p != null) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    private void step(EngineRobot r, Wave origin, int option) {
+        double[] cmd = orbit(r, origin, option);
+        r.distanceRemaining = cmd[0];
+        r.bodyTurnRemaining = cmd[1];
+        RobotMotion.move(r, (int) field.width(), (int) field.height(), coolingRate);
+    }
+
+    /** The share of the wave's predicted aim inside this hit range, times its bullet's damage. */
+    private static double damage(EnemyWave w, HitRange range) {
         if (!range.hits()) {
-            return 0;
+            return DANGER_FLOOR * BulletMotion.damage(w.wave.power());
         }
         double a = w.direction * range.minOffset() / w.escape;
         double b = w.direction * range.maxOffset() / w.escape;
-        return DangerModel.mass(w.prediction.profile(), a, b);
+        return (DangerModel.mass(w.prediction.profile(), a, b) + DANGER_FLOOR) * BulletMotion.damage(w.wave.power());
     }
 
     /**

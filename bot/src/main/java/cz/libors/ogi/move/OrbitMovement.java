@@ -13,7 +13,7 @@ import java.util.Random;
  */
 public final class OrbitMovement {
 
-    private static final double PREFERRED_DISTANCE = 400;
+    private static final double PREFERRED_DISTANCE = 325;
     private static final double MAX_DISTANCE_TILT = 0.5;
     private static final double WALL_MARGIN = 30;
     private static final double WALL_STICK = 120;
