@@ -803,22 +803,31 @@ tasks.register<JavaExec>("submitGunLogs") {
 
 tasks.register<JavaExec>("submitRecordings") {
     group = "queue"
-    description = "Queues turn-by-turn recordings of the working tree's Ogi against -Popponents; see docs/harness.md."
+    description = "Queues turn-by-turn recordings of the working tree's Ogi, or of -Psubject (a robot on the worker), " +
+        "against -Popponents; see docs/harness.md."
     dependsOn(snapshotJars, installRobocode)
     mainClass = "cz.libors.harness.queue.Submit"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val passed = listOf("pairs", "seed", "rounds", "starts", "keys", "note", "timeout")
+    val passed = listOf("pairs", "seed", "rounds", "starts", "keys", "note", "timeout", "debug")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    // A foreign robot as Robocode lists it ("kc.serpent.Hydra 0.21"): the worker's approved jar, nothing shipped.
+    val subject = providers.gradleProperty("subject")
     val versionFile = snapshotVersionFile
     val port = providers.gradleProperty("port").orElse("8765")
     argumentProviders.add(CommandLineArgumentProvider {
-        val version = versionFile.get().asFile.readText().trim()
-        listOf("state=" + queueDir.absolutePath, "type=record", "robot=cz.libors.Ogi", "version=$version",
-            "opponents=" + localFile(opponents.get()),
-            "jar=" + snapshotsDir.file("cz.libors.Ogi_$version.jar").asFile.absolutePath,
-            "port=" + port.get()) + passed
+        val foreign = subject.orNull?.trim()?.split(Regex("\\s+"))
+        val robot = if (foreign == null) {
+            val version = versionFile.get().asFile.readText().trim()
+            listOf("robot=cz.libors.Ogi", "version=$version",
+                "jar=" + snapshotsDir.file("cz.libors.Ogi_$version.jar").asFile.absolutePath)
+        } else {
+            require(foreign.size == 2) { "-Psubject wants a robot and its version, e.g. \"kc.serpent.Hydra 0.21\"" }
+            listOf("robot=" + foreign[0], "version=" + foreign[1])
+        }
+        listOf("state=" + queueDir.absolutePath, "type=record", "opponents=" + localFile(opponents.get()),
+            "port=" + port.get()) + robot + passed
     })
 }
 

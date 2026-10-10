@@ -588,18 +588,38 @@ configuration line, so its `battles.tsv` reads like a local one:
 property, about 2.3 MB per 1v1 battle; `-Pkeys` keeps only those debug properties and drops robots and bullets). The
 job type `record` takes any robot and keys (`queue.Submit`).
 
+```sh
+./gradlew submitRecordings -Popponents=.robocode/foreign/<set>.txt -Pdebug=false
+./gradlew submitRecordings -Psubject="kc.serpent.Hydra 0.21" -Popponents=.robocode/foreign/<set>.txt -Pdebug=false
+```
+
+- **The subject** is the working tree's `Ogi`, shipped with the job, or with `-Psubject="<robot> <version>"` a robot
+  the worker has: no jar is shipped, and the server checks that the worker lists the subject, as it checks the
+  opponents ("robots missing on …"). A foreign subject needs a worker that may run foreign robots and runs in the
+  sandbox like an opponent. `Submit` refuses a subject in our or the sample packages without its jar, and a subject
+  that is in the opponent set (both robots would get the same name).
 - Each battle runs on any free slot; the slot records it into a temporary file and sends it back in Base64 inside
-  its result, so the worker keeps nothing. The job writes `recordings/<version>/<opponent>_p<pair>.rec.gz` and a line
-  to `recordings/<version>/battles.tsv`: the columns of `recordBattles`, then the opponent's skipped turns and our
-  robot's own turn times.
+  its result, so the worker keeps nothing. The job writes `recordings/<dir>/<opponent>_p<pair>.rec.gz` and a line
+  to `recordings/<dir>/battles.tsv`; `<dir>` is the version for a shipped subject and `<robot>_<version>` for one
+  from the worker (`kc.serpent.Hydra_0.21`).
+- **Index columns** (`RecordJob.INDEX_COLUMNS`): the columns of `recordBattles` (file, opponent, pair, seed, the
+  subject's bullets fired and hits, skipped turns, problems), the opponent's skipped turns, our robot's own turn
+  times, whether the battle ran in debug mode, the subject's score components (score, survival, last survivor bonus,
+  bullet damage and bonus, ram damage and bonus, rounds won), the opponent's, the opponent's bullets fired and hits,
+  the battle's wall time and the turns of every round (comma-separated, from the recording's `end` records). Shots
+  count as in [Shots](#how-results-are-gathered).
 - Battles go out pair by pair over all opponents, so a job stopped early covers every opponent alike. A recording
   that exists is not played again: a restarted server goes on where it stopped.
-- **In debug mode**, like `recordBattles` (engine-model G-17): a battle can ask for it (`BattleSpec.debug`), and
-  the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag once per JVM. A job's
-  battles all want the same mode, so each slot switches once when such a job starts. Without debug mode a robot that
-  skips a turn can lose that turn's debug properties (its late commands are replaced, as in engine-model G-34): on
-  2026-10-09 the gun bench's parity failed against 4 of 125 opponents, each one where Ogi had skipped turns (141 of
-  2.4 million decisions, one wave without its plan).
+- **In debug mode by default**, like `recordBattles` (engine-model G-17): a battle can ask for it
+  (`BattleSpec.debug`), and the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag
+  once per JVM. A job's battles all want the same mode, so each slot switches once when such a job starts. Without
+  debug mode a robot that skips a turn can lose that turn's debug properties (its late commands are replaced, as in
+  engine-model G-34): on 2026-10-09 the gun bench's parity failed against 4 of 125 opponents, each one where Ogi had
+  skipped turns (141 of 2.4 million decisions, one wave without its plan).
+- **`-Pdebug=false`** records under the turn time limit instead (the slots' CPU constant, as in a comparison). Use it
+  to see how robots play as they would in a rumble: in debug mode the engine waits up to 600 s for each robot's turn
+  (`Battle.wakeupSerial`), so a heavy robot never skips a turn. Debug properties of skipped turns can be lost then,
+  so the gun's logs keep debug mode.
 
 ### Battle cache (`queue.BattleCache`)
 

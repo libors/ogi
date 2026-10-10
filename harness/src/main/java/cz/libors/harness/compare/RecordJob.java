@@ -5,7 +5,10 @@ import cz.libors.harness.compare.OpponentSet.Format;
 import cz.libors.harness.queue.BattleSpec;
 import cz.libors.harness.queue.QueueJob;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,20 +25,28 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.zip.GZIPInputStream;
 
 /**
  * Turn-by-turn recordings run by the queue: {@link RecordBattles} for one version of a robot against an opponent set,
  * on the seeds {@link Compare} uses, each battle on any free slot. Made for the gun's logs ({@code OgiGunLog}, keys
- * {@code gunshot,gunpass,gunshield}), which the gun bench then reads on this machine.
+ * {@code gunshot,gunpass,gunshield}), which the gun bench then reads on this machine, and for full recordings of Ogi
+ * or of a foreign robot, to see how a whole game goes.
  *
  * <ul>
+ *   <li>The subject is a robot of the job's jars, or, without a jar, a robot the worker has, like an opponent (an
+ *       approved foreign jar on a worker that may run foreign robots).</li>
  *   <li>The slot sends each recording back inside its result; the job writes it to
- *       {@code recordings/<version>/<opponent>_p<pair>.rec.gz} and a line to {@code recordings/<version>/battles.tsv}
- *       (RecordBattles' columns, then the robot's own turn times).</li>
+ *       {@code recordings/<dir>/<opponent>_p<pair>.rec.gz} and a line to {@code recordings/<dir>/battles.tsv}
+ *       (RecordBattles' columns, the robot's own turn times, then both sides' score components and shots and the
+ *       turns of every round). {@code <dir>} is the version for a subject of the job's jars, else the subject's
+ *       name and version.</li>
  *   <li>Battles go out pair by pair over all opponents, so a job stopped early covers every opponent alike.</li>
- *   <li>Like {@code recordBattles}, in the engine's debug mode: the executor runs these battles on slots it restarted
- *       with {@code -Ddebug=true}. Without it a robot that skips a turn can lose that turn's debug properties, which
- *       broke the gun bench's parity against 4 of 125 opponents (2026-10-09).</li>
+ *   <li>By default, like {@code recordBattles}, in the engine's debug mode: the executor runs these battles on slots it
+ *       restarted with {@code -Ddebug=true}. Without it a robot that skips a turn can lose that turn's debug
+ *       properties, which broke the gun bench's parity against 4 of 125 opponents (2026-10-09). With
+ *       {@code debug=false} they run under the turn time limit, so robots skip turns as they would in a rumble; debug
+ *       mode would wait up to 600 s for a heavy robot's turn instead.</li>
  *   <li>A recording that exists is not played again, so a restarted server goes on where it stopped. A failed battle
  *       is retried twice, then given up (the job's reason lists it); a lost one goes back to the queue. The default
  *       timeout is 300 s: in debug mode a robot that hangs holds its battle until then.</li>
@@ -44,6 +55,14 @@ import java.util.Properties;
 public final class RecordJob extends QueueJob {
 
     private static final int ATTEMPTS = 3;
+    /** The columns of {@code battles.tsv}: RecordBattles' first, so that readers of those keep working. */
+    static final List<String> INDEX_COLUMNS = List.of("file", "opponent", "pair", "seed", "fired", "hits",
+            "skippedTurns", "problems", "opponentSkippedTurns", "turns", "turnMaxMicros", "turnsOverHalf",
+            "turnsOverIdleConstant", "debug", "score", "survival", "lastSurvivorBonus", "bulletDamage",
+            "bulletDamageBonus", "ramDamage", "ramDamageBonus", "firsts", "opponentScore", "opponentSurvival",
+            "opponentLastSurvivorBonus", "opponentBulletDamage", "opponentBulletDamageBonus", "opponentRamDamage",
+            "opponentRamDamageBonus", "opponentFirsts", "opponentFired", "opponentHits", "elapsedMillis",
+            "roundTurns");
     private static final long RATE_WINDOW_MILLIS = 120_000;
 
     private final OpponentSet set;
@@ -55,6 +74,7 @@ public final class RecordJob extends QueueJob {
     private final boolean fixedStarts;
     private final long runSeed;
     private final List<String> keys;
+    private final boolean debug;
     private final long timeoutSeconds;
     private final Map<String, String> jars = new LinkedHashMap<>();
     private final Path out;
@@ -84,11 +104,13 @@ public final class RecordJob extends QueueJob {
         runSeed = Long.parseLong(spec.getProperty("seed", "1"));
         String keyList = spec.getProperty("keys", "");
         keys = keyList.isEmpty() ? null : Arrays.stream(keyList.split(",")).map(String::trim).toList();
+        debug = Boolean.parseBoolean(spec.getProperty("debug", "true"));
         // Debug mode has no turn time limit, so a robot that hangs holds the battle until this timeout.
         timeoutSeconds = Long.parseLong(spec.getProperty("timeout", "300"));
         spec.stringPropertyNames().stream().filter(k -> k.startsWith("jar.")).sorted()
                 .forEach(k -> jars.put(k.substring(4), spec.getProperty(k)));
-        out = dir.resolve("recordings").resolve(version);
+        out = dir.resolve("recordings").resolve(shipped(spec) ? version
+                : RecordBattles.fileName(robot + " " + version));
         int count = 0;
         for (int pair = 0; pair < pairs; pair++) {
             for (OpponentSet.Opponent o : set.opponents()) {
@@ -117,20 +139,39 @@ public final class RecordJob extends QueueJob {
                 Long.parseLong(spec.getProperty(key));
             }
         }
-        String jar = spec.getProperty("robot") + "_" + spec.getProperty("version") + ".jar";
-        if (spec.getProperty("jar." + jar) == null) {
-            throw new IllegalArgumentException("no jar " + jar + " in the job");
+        String subject = spec.getProperty("robot") + " " + spec.getProperty("version");
+        if (!shipped(spec) && cz.libors.harness.Sandbox.trusted(subject)) {
+            // Only foreign robots come from the worker; ours and the samples' always come with the job.
+            throw new IllegalArgumentException("no jar " + jarName(spec) + " in the job");
         }
-        return String.format(Locale.ROOT, "recordings of %s %s against %s (%d opponents × %s pairs, keys %s)",
-                spec.getProperty("robot"), spec.getProperty("version"), set.name(), set.opponents().size(),
-                spec.getProperty("pairs", "1"), spec.getProperty("keys", "all"));
+        if (set.opponents().stream().anyMatch(o -> o.name().equals(subject))) {
+            throw new IllegalArgumentException(subject + " is in the opponent set; a battle against itself would "
+                    + "name both robots alike");
+        }
+        String mode = spec.getProperty("debug", "true");
+        if (!mode.equals("true") && !mode.equals("false")) {
+            throw new IllegalArgumentException("debug must be true or false: " + mode);
+        }
+        return String.format(Locale.ROOT, "recordings of %s against %s (%d opponents × %s pairs, keys %s%s%s)",
+                subject, set.name(), set.opponents().size(), spec.getProperty("pairs", "1"),
+                spec.getProperty("keys", "all"), shipped(spec) ? "" : ", the worker's jar",
+                mode.equals("true") ? "" : ", no debug mode");
+    }
+
+    private static String jarName(Properties spec) {
+        return spec.getProperty("robot") + "_" + spec.getProperty("version") + ".jar";
+    }
+
+    /** Whether the subject comes with the job's jars, rather than from the worker's robots. */
+    private static boolean shipped(Properties spec) {
+        return spec.getProperty("jar." + jarName(spec)) != null;
     }
 
     private Work work(String opponent, int pair) {
         long seed = Compare.pairSeed(runSeed, opponent, pair);
         BattleSpec battle = new BattleSpec(format.label + " vs " + opponent, format.width, format.height, rounds,
                 List.of(robot + " " + version, opponent), seed, fixedStarts ? Compare.mix(seed) : null, true, keys,
-                true);
+                debug);
         return new Work(this, opponent + "\t" + pair, battle, timeoutSeconds);
     }
 
@@ -144,9 +185,15 @@ public final class RecordJob extends QueueJob {
         return jars;
     }
 
+    /** The opponents, and the subject unless it comes with the job's jars: the worker must have them all. */
     @Override
     public List<String> opponents() {
-        return set.opponents().stream().map(OpponentSet.Opponent::name).toList();
+        List<String> robots = new ArrayList<>(set.opponents().stream().map(OpponentSet.Opponent::name).toList());
+        String jar = robot + "_" + version + ".jar";
+        if (!jars.containsKey(jar)) {
+            robots.add(robot + " " + version);
+        }
+        return robots;
     }
 
     @Override
@@ -156,8 +203,8 @@ public final class RecordJob extends QueueJob {
 
     @Override
     public String title() {
-        return String.format(Locale.ROOT, "%s %s · recordings · %s · %d pairs%s", robot, version, set.name(), pairs,
-                keys == null ? "" : " · " + String.join(",", keys));
+        return String.format(Locale.ROOT, "%s %s · recordings · %s · %d pairs%s%s", robot, version, set.name(), pairs,
+                keys == null ? "" : " · " + String.join(",", keys), debug ? "" : " · no debug mode");
     }
 
     @Override
@@ -184,7 +231,8 @@ public final class RecordJob extends QueueJob {
         Files.createDirectories(out);
         Path file = out.resolve(fileName(opponent, pair));
         Path tmp = out.resolve(file.getFileName() + ".tmp");
-        Files.write(tmp, Base64.getDecoder().decode((String) recording));
+        byte[] bytes = Base64.getDecoder().decode((String) recording);
+        Files.write(tmp, bytes);
         Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         BattleOutcome outcome = work.spec().outcomeFromMap(outcomeMap);
         String subject = work.spec().robots().get(0);
@@ -193,16 +241,22 @@ public final class RecordJob extends QueueJob {
         int allSkipped = outcome.skippedTurns().values().stream().mapToInt(Integer::intValue).sum();
         BattleOutcome.TurnTimes times = outcome.turnTimes(subject);
         Path index = out.resolve("battles.tsv");
-        String header = Files.exists(index) ? "" : "file\topponent\tpair\tseed\tfired\thits\tskippedTurns\tproblems"
-                + "\topponentSkippedTurns\tturns\tturnMaxMicros\tturnsOverHalf\tturnsOverIdleConstant\n";
-        String line = String.join("\t", file.getFileName().toString(), opponent, Integer.toString(pair),
-                Long.toString(outcome.seed()), Integer.toString(shots.fired()), Integer.toString(shots.hits()),
-                Integer.toString(skipped), Integer.toString(outcome.problems(subject).size()),
-                Integer.toString(allSkipped - skipped), Integer.toString(times.turns()),
-                Long.toString(times.maxMicros()), Integer.toString(times.overHalf()),
-                Integer.toString(times.overIdleConstant())) + "\n";
-        Files.writeString(index, header + line, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND);
+        String header = Files.exists(index) ? "" : String.join("\t", INDEX_COLUMNS) + "\n";
+        List<String> fields = new ArrayList<>(List.of(file.getFileName().toString(), opponent,
+                Integer.toString(pair), Long.toString(outcome.seed()), Integer.toString(shots.fired()),
+                Integer.toString(shots.hits()), Integer.toString(skipped),
+                Integer.toString(outcome.problems(subject).size()), Integer.toString(allSkipped - skipped),
+                Integer.toString(times.turns()), Long.toString(times.maxMicros()), Integer.toString(times.overHalf()),
+                Integer.toString(times.overIdleConstant()), Boolean.toString(work.spec().debug())));
+        fields.addAll(components(outcome, subject));
+        fields.addAll(components(outcome, opponent));
+        BattleOutcome.Shots opponentShots = outcome.shots(opponent);
+        fields.add(Integer.toString(opponentShots.fired()));
+        fields.add(Integer.toString(opponentShots.hits()));
+        fields.add(Long.toString(outcome.elapsedMillis()));
+        fields.add(roundTurns(bytes));
+        Files.writeString(index, header + String.join("\t", fields) + "\n", StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         if (!outcome.problems().isEmpty()) {
             Files.write(dir.resolve("problems.log"), outcome.problems().stream()
                             .map(p -> opponent + " pair " + pair + " (" + worker + "): " + p).toList(),
@@ -222,6 +276,34 @@ public final class RecordJob extends QueueJob {
             finish(State.DONE, (done - givenUp.size()) + " recordings in " + out
                     + (givenUp.isEmpty() ? "" : "; given up after " + ATTEMPTS + " failures: " + givenUp), results());
         }
+    }
+
+    /** A contestant's score components, in the index's order; zeros if the results do not name it. */
+    private static List<String> components(BattleOutcome outcome, String name) {
+        return outcome.result(name).map(r -> List.of(r.score(), r.survival(), r.lastSurvivorBonus(),
+                        r.bulletDamage(), r.bulletDamageBonus(), r.ramDamage(), r.ramDamageBonus(), r.firsts()))
+                .orElse(List.of(0, 0, 0, 0, 0, 0, 0, 0)).stream().map(String::valueOf).toList();
+    }
+
+    /**
+     * The turns of every round, comma-separated, from the recording's {@code end} records; empty if the bytes are not
+     * gzip-compressed (tests send plain text).
+     */
+    static String roundTurns(byte[] recording) throws IOException {
+        if (recording.length < 2 || (recording[0] & 0xff) != 0x1f || (recording[1] & 0xff) != 0x8b) {
+            return "";
+        }
+        List<String> turns = new ArrayList<>();
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(
+                new GZIPInputStream(new ByteArrayInputStream(recording)), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (line.startsWith("end\t")) {
+                    turns.add(line.split("\t")[2]);
+                }
+            }
+        }
+        return String.join(",", turns);
     }
 
     @Override

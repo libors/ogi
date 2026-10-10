@@ -325,7 +325,7 @@ public final class Server {
             }
             List<String> missing = job.opponents().stream().filter(o -> !link.robots.contains(o)).toList();
             if (!missing.isEmpty()) {
-                fail(job, "opponents missing on " + link.name() + ": " + missing);
+                fail(job, "robots missing on " + link.name() + ": " + missing);
                 continue;
             }
             if (!link.deployed.containsAll(job.jars().keySet())) {
