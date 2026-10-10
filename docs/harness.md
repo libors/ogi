@@ -355,9 +355,9 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 - **Parity:** with the bot's parameters every replayed decision must equal the logged one, bit for bit; the task
   fails otherwise. `GunLogTest` checks the same on a simulated fight.
 - **Bullets shot down:** some robots shoot our bullets down with theirs (bullet shielding). The bench scores a wave
-  by the target's position, so before `gunshield` such bullets counted as hits: against DrussGT, Saguaro and
-  Roborio the bench showed 23–37 % fired against the harness's 6–12 % (2026-10-09). Left out, the bench shows 7.6,
-  13.3 and 12.0 %. The harness counts them as misses, so its rate stays a little lower against these robots.
+  by the target's position, so before `gunshield` such bullets counted as hits: against three such robots the bench
+  showed 23–37 % fired against the harness's 6–12 % (2026-10-09). Left out, the bench shows 7.6–13.3 %. The harness
+  counts them as misses, so its rate stays a little lower against these robots.
 - `./gradlew gunTrend -Plogs=<dir>` compares the fired hit rate in the first 10 rounds of each battle with the last 10
   (`-Prounds`), per opponent, sorted by the change over its standard error.
 - **`fired %` against `harness %`:** checked bullet by bullet on four lab battles (2026-10-09). Every bullet whose

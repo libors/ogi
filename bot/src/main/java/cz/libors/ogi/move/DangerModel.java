@@ -14,7 +14,7 @@ import java.util.Arrays;
  * how we move (linear targeting, guess-factor guns) becomes predictable. The nearest bullets get more of the profile
  * as data grows ({@link DangerParameters}).
  *
- * <p>The data can be one estimator in an ensemble, as in BeepBoop's danger model:
+ * <p>The data can be one estimator in an ensemble:
  * <ul>
  *   <li>the {@link SimpleAims}: each puts a narrow kernel where that simple gun would have aimed at this wave
  *       ({@link DangerParameters#simplePrior()} above 0);</li>

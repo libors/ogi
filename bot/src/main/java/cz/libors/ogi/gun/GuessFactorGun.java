@@ -17,17 +17,18 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Guess-factor targeting with nearest neighbours ("dynamic clustering"), chosen against circular targeting by how
- * often each would have hit.
+ * Guess-factor targeting with nearest neighbours ("dynamic clustering"), chosen against circular targeting and an
+ * anti-surfer gun by how often each would have hit.
  *
  * <p>Each turn has a wave: the shot that could have been fired in it. When the wave has passed the target, its
  * {@link HitRange} says which guess factors would have hit, and the shot's features and that range join the data.
  * A new shot looks up the past shots with the most similar features and aims at the guess factor most of them would
  * have hit with.
  *
- * <p>Virtual guns: a plan keeps each gun's aim, the guess-factor one only when it searched its data; a wave whose plan
- * has every aim tells for each whether it would have hit. Per enemy the gun with the better record fires; until the
- * guess-factor gun has {@link GunParameters#minTries() enough} weighted tries, circular targeting does.
+ * <p>Virtual guns: a plan keeps each gun's aim, the guess-factor one only when it searched its data; a passed wave
+ * tells for each gun that aimed whether it would have hit. Per enemy the gun with the better record fires; until the
+ * guess-factor gun has {@link GunParameters#minTries() enough} weighted tries, circular targeting does. The
+ * anti-surfer gun is chosen on its record over our bullets ({@link GunModel}).
  *
  * <p>Timing (engine-model G-01): the gun fires along the heading it reached in the turn of the fire command, so the
  * aim for a shot in turn t+1 is chosen in turn t, from our predicted position at the end of turn t+1 and the target's
@@ -41,7 +42,8 @@ public final class GuessFactorGun {
 
     public static final int GUESS_FACTOR = GunModel.GUESS_FACTOR;
     public static final int CIRCULAR = GunModel.CIRCULAR;
-    private static final String[] GUN_NAMES = {"gf", "circular"};
+    public static final int ANTI_SURFER = GunModel.ANTI_SURFER;
+    private static final String[] GUN_NAMES = {"gf", "circular", "anti-surfer"};
 
     private static final Map<String, GunModel> MODELS = new HashMap<>();
 
@@ -202,6 +204,33 @@ public final class GuessFactorGun {
         return t.plan.aim();
     }
 
+    /**
+     * Headings the turret could take instead of the plan of turn {@code time}, as {heading, share of the best}, when the
+     * anti-surfer gun chose it: its peaks ({@link GunModel#antiSurferPeaks}), its own aim first. Empty otherwise.
+     */
+    public double[][] alternatives(String name, long time, double minShare, int max, double spacing) {
+        Optional<Plan> plan = plan(name, time);
+        if (plan.isEmpty() || plan.get().decision().gun() != ANTI_SURFER) {
+            return new double[0][];
+        }
+        GunModel.Shot shot = plan.get().shot();
+        double[][] found = targets.get(name).model.antiSurferPeaks(shot, minShare, max, spacing);
+        for (double[] c : found) {
+            c[0] = shot.reference() + shot.direction() * c[0] * shot.escape();
+        }
+        return found;
+    }
+
+    /** Replaces the offset of the plan of turn {@code time}, so that the turret takes another heading. */
+    public void offsetPlan(String name, long time, double offset) {
+        Target t = targets.get(name);
+        if (t != null && t.plan != null && t.plan.time() == time) {
+            Plan p = t.plan;
+            t.plan = new Plan(p.shot(), p.decision(), p.power(), p.originX(), p.originY(), p.targetX(), p.targetY(),
+                    offset);
+        }
+    }
+
     /** Adds the waves in flight and the latest plans to the trace. */
     public void describe(long now, Trace trace) {
         for (Map.Entry<String, Target> e : targets.entrySet()) {
@@ -228,7 +257,7 @@ public final class GuessFactorGun {
 
     private Trace.GunView view(String name, Target t) {
         Plan p = t.plan;
-        double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR)};
+        double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR), hitRate(name, ANTI_SURFER)};
         return new Trace.GunView(name, p.time(), p.originX(), p.originY(), p.targetX(), p.targetY(),
                 p.shot().reference(), p.shot().escape(), p.power(), p.shot().direction(), p.decision().aims().clone(),
                 p.decision().gun(), GUN_NAMES, rates, t.model.dataSize());

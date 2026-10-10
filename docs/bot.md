@@ -52,6 +52,17 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   the guess-factor gun searched for its plan (at power 1.9, 5 waves in 14): would each aim have been inside the hit
   range? Per enemy, the gun with the better weighted record fires (a real bullet counts 1, a virtual wave 0.125);
   circular targeting until the guess-factor gun has a record.
+- **Anti-surfer gun:** a third gun with the same features and weights over the waves of our bullets only, in three
+  views: the latest 30 and 150 bullets and all of them. A search takes the 4 nearest shots of each view and aims at
+  the guess factor most of their summed kernel weight covers. A surfer dodges our bullets, not our waves, and keeps
+  going where they missed it until one hits it there; the short views follow that, the long ones keep the rest. It
+  replaces the chosen gun when the enemy is hard to hit (the guess-factor gun's record over our bullets below 20 %,
+  one standard error below its record), it has been scored on 30 bullets and its record over them is the better one.
+- **Shadow shots:** in a duel, in the turn before a shot of the anti-surfer gun, its peaks with at least 70 % of the
+  best one's weight compete with its aim (at most three, 0.15 guess factors apart): the turret takes the heading
+  whose bullet leaves the surfer the least danger, that bullet's shadows on the enemy waves counted
+  (`WaveSurfer.dangerWithShot`), and the gun's own aim on a tie. A turret-only change, like the aim spread; the guns
+  learn from their own aims.
 - **Aim spread:** the turret aims at the chosen gun's aim plus a random offset of up to ±4 px at the target's
   distance, drawn every turn from a seeded generator of its own (`Plan.offset`). The guns learn and are scored on
   their own aims. Against a robot that stands still the gun would otherwise aim exactly at its centre, which a bullet
@@ -92,10 +103,10 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   - **Two waves:** the next wave's hit range observes the same path, and from where each way ends the next wave is
     surfed the three ways too. A way's danger is its expected damage from the nearest wave (the share of the wave's
     profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.
-  - **Close fights:** nearer than 250 px to the wave's shooter, each wave's danger is multiplied by
-    2.5^(d_now / d_end) / 2.5, d being the distance to the enemy now and where the way ends (Diamond's factor), and
-    every way carries a floor of 0.02 of the bullet's damage, so that ways that close in on a rammer cost more even
-    where the profile is empty.
+  - **Close fights:** nearer than 250 px to the wave's shooter, each wave's danger is multiplied by d_now / d_end, d
+    being the distance to the enemy now and where the way ends (the angle we fill in the shooter's view grows with
+    nearness), and every way carries a floor of 0.02 of the bullet's damage, so that ways that close in on a rammer
+    cost more even where the profile is empty.
   - **Bullet shadows:** every bullet we fire is followed from the `Bullet` that `setFireBullet` returns until it
     leaves the field or hits a robot or a bullet. For each enemy wave and each of our bullets, in every turn both are
     in the air, the part of our bullet's move in that turn that lies between the wave's radii at the start and the
@@ -133,7 +144,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   factor found and the chosen gun). That is everything `GunModel` needs to replay the battle.
   - `OgiGunLog` also logs `gunshield` when an enemy bullet destroys one of its bullets (the plan's turn and the
     shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
-    that shoot bullets down (DrussGT, Saguaro, Roborio) would otherwise look easy to hit on the bench.
+    that shoot bullets down would otherwise look easy to hit on the bench.
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).

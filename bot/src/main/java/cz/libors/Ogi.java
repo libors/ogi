@@ -59,6 +59,14 @@ public class Ogi extends TeamRobot {
      * such bullets down; a few pixels off the centre still hit as often.
      */
     private static final double AIM_SPREAD = 4;
+    /**
+     * Shadow shots: in the turn before a shot of the anti-surfer gun, its other peaks with at least this share of its
+     * best one's weight (choosing among them at random cost no hits) compete by what their bullet's shadows would save
+     * us on the enemy waves in the air; at most this many, this far apart in guess factors (about a robot's width).
+     */
+    private static final double SHADOW_MIN_SHARE = 0.7;
+    private static final int SHADOW_CANDIDATES = 3;
+    private static final double SHADOW_SPACING = 0.15;
 
     private World world;
     private Field field;
@@ -199,9 +207,48 @@ public class Ogi extends TeamRobot {
         boolean soon = getGunHeat() <= AIM_LEAD_TURNS * getGunCoolingRate();
         double offset = (2 * aimSpread.nextDouble() - 1) * AIM_SPREAD / Math.max(distance, 1);
         double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset);
+        if (plannedShot && getOthers() == 1 && getGunHeat() <= getGunCoolingRate() + 1e-9 && !Double.isNaN(aim)) {
+            aim = shadowingAim(target.name(), now, nextX, nextY, planned, aim, offset);
+        }
         if (!Double.isNaN(aim)) {
             setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
         }
+    }
+
+    /**
+     * The heading for the shot of the next turn: among the anti-surfer gun's aim and its nearly as good peaks, the one
+     * whose bullet leaves us the least danger to surf, its shadows on the enemy waves counted; the gun's own aim on a
+     * tie. A turret-only change: the guns learn from their own aims.
+     */
+    private double shadowingAim(String name, long now, double nextX, double nextY, double power, double aim,
+                                double spread) {
+        double[][] candidates = gun.alternatives(name, now, SHADOW_MIN_SHARE, SHADOW_CANDIDATES, SHADOW_SPACING);
+        if (candidates.length < 2) {
+            return aim;
+        }
+        EngineRobot me = ourEngineState();
+        double gunHeading = Angles.fromRobocode(getGunHeadingRadians());
+        double best = aim;
+        double bestDanger = surfer.dangerWithShot(me, now, now + 1, nextX, nextY, aim, power);
+        if (Double.isNaN(bestDanger)) {
+            return aim;
+        }
+        for (double[] c : candidates) {
+            double heading = c[0] + spread;
+            if (Math.abs(Angles.normalizeRelative(heading - aim)) < 1e-9
+                    || Math.abs(Angles.normalizeRelative(heading - gunHeading)) > Rules.GUN_TURN_RATE_RADIANS) {
+                continue;
+            }
+            double danger = surfer.dangerWithShot(me, now, now + 1, nextX, nextY, heading, power);
+            if (danger < bestDanger) {
+                bestDanger = danger;
+                best = heading;
+            }
+        }
+        if (best != aim) {
+            gun.offsetPlan(name, now, best - (aim - spread));
+        }
+        return best;
     }
 
     /**

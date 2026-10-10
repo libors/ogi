@@ -47,6 +47,61 @@ class GunTest {
     }
 
     @Test
+    void aSizeLimitKeepsTheLatestShots() {
+        GunData data = new GunData(GunParameters.ANTI_SURFER, 5);
+        double[] f = new double[TargetingFeatures.COUNT];
+        for (int i = 0; i < 20; i++) {
+            double centre = i < 15 ? -0.5 : 0.5;
+            data.add(f, centre - 0.1, centre + 0.1, 1);
+        }
+        assertEquals(5, data.size());
+        assertEquals(0.5, data.bestGuessFactor(f), 1e-9);
+    }
+
+    @Test
+    void peaksAreTheLocalMaximaNearlyAsHighAsTheBest() {
+        // Weight 3 around 0.6, 2 around -0.3, 0.5 around -0.9.
+        double[] at = {0.5, 0.7, -0.4, -0.2, -1.0, -0.8};
+        double[] w = {3, -3, 2, -2, 0.5, -0.5};
+        double[][] peaks = GunData.peaks(at.clone(), w.clone(), 6, 0.5, 5, 0.1);
+        assertEquals(2, peaks.length, Arrays.deepToString(peaks));
+        assertEquals(0.6, peaks[0][0], 1e-9);
+        assertEquals(1, peaks[0][1], 1e-9);
+        assertEquals(-0.3, peaks[1][0], 1e-9);
+        assertEquals(2.0 / 3, peaks[1][1], 1e-9);
+        assertEquals(1, GunData.peaks(at.clone(), w.clone(), 6, 0.7, 5, 0.1).length);
+        assertEquals(1, GunData.peaks(at.clone(), w.clone(), 6, 0.5, 1, 0.1).length);
+    }
+
+    @Test
+    void theAntiSurferGunFollowsTheLatestBullets() {
+        // A surfer that went to guess factor -0.5 for 300 bullets and then to +0.5 for 100.
+        GunModel model = new GunModel(GunParameters.DEFAULT);
+        double escape = 0.6;
+        Random random = new Random(1);
+        for (int i = 0; i < 400; i++) {
+            double gf = i < 300 ? -0.5 : 0.5;
+            GunModel.Shot shot = shot(i, random, escape);
+            GunModel.Aim aim = model.aim(shot);
+            model.learn(shot, aim,
+                    new GunModel.Pass("t", i, true, 0, escape, true, (gf - 0.05) * escape, (gf + 0.05) * escape));
+        }
+        GunModel.Aim aim = model.aim(shot(400, random, escape));
+        assertEquals(-0.5 * escape, aim.aims()[GunModel.GUESS_FACTOR], 0.05 * escape);
+        assertEquals(0.5 * escape, aim.aims()[GunModel.ANTI_SURFER], 0.05 * escape);
+        // The main gun hit most of the 400 bullets: the target is not hard to hit, so the main gun aims.
+        assertEquals(GunModel.GUESS_FACTOR, aim.gun());
+    }
+
+    private static GunModel.Shot shot(long time, Random random, double escape) {
+        double[] f = new double[TargetingFeatures.COUNT];
+        for (int j = 0; j < f.length; j++) {
+            f[j] = random.nextDouble();
+        }
+        return new GunModel.Shot("t", time, f, 1, 0, escape, true, Double.NaN);
+    }
+
+    @Test
     void wallRoomShrinksTowardsAWall() {
         // Target 200 px east of the origin, orbiting counter-clockwise (north) towards the top wall.
         double escape = Math.asin(8 / 14.0);

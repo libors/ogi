@@ -24,6 +24,12 @@ public record GunParameters(double[] weights, double neighbourScale, int maxNeig
     public static final GunParameters DEFAULT =
             new GunParameters(new double[] {12, 3, 4.2, 1.75, 0.17, 2.1, 2.1, 0, 2.1, 0}, 1, 100, 0.125, 0);
 
+    /**
+     * The anti-surfer gun's: the main gun's weights over its own data, the latest bullets only (see {@link GunModel}).
+     */
+    public static final GunParameters ANTI_SURFER =
+            new GunParameters(new double[] {12, 3, 4.2, 1.75, 0.17, 2.1, 2.1, 0, 2.1, 0}, 1, 100, 1, 0);
+
     public GunParameters {
         if (weights.length != TargetingFeatures.COUNT) {
             throw new IllegalArgumentException(
