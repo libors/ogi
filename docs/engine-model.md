@@ -96,7 +96,11 @@ to-test.
     that hit another stops at the start of the crossing segment: at its position of this turn's start if it had
     moved, or of the previous turn's start if it had not.
   - **Bites when:** predicting shield intercepts or bullet shadows: whether two bullets meet can depend on the
-    processing order.
+    processing order. The order is a fresh shuffle every turn (`Battle.updateBullets` iterates
+    `getBulletsAtRandom()`, a `Collections.shuffle` with `RandomFactory`'s generator; each bullet moves and then
+    tests the others' current segments), so for two bullets a crossing of one's move with the other's move of the
+    turn before happens in about half the turns it could. The surfer's shadows count such crossings at weight ½
+    (docs/bot.md, "Bullet shadows").
   - **Source:** BeepBoop's author (RoboWiki); `BulletPeer.checkBulletCollision`, `intersect`. · **Status:** tested:
     `BulletMotionReplayTest` (the stop position in both cases; which pair collides is taken from the recording).
 - **G-05 Gun heat at round start.**

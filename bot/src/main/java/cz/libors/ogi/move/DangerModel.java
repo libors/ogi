@@ -201,6 +201,22 @@ public final class DangerModel {
         return sum;
     }
 
+    /**
+     * The share of a profile between two guess factors, each bin counted by the part of its width inside: bin i covers
+     * guess factors ((i − 23 − ½) / 23, (i − 23 + ½) / 23).
+     */
+    public static double share(double[] profile, double low, double high) {
+        double sum = 0;
+        for (int i = bin(low); i <= bin(high); i++) {
+            double from = Math.max(low, (i - MIDDLE - 0.5) / MIDDLE);
+            double to = Math.min(high, (i - MIDDLE + 0.5) / MIDDLE);
+            if (to > from) {
+                sum += profile[i] * (to - from) * MIDDLE;
+            }
+        }
+        return sum;
+    }
+
     public static int bin(double guessFactor) {
         double clamped = Math.max(-1, Math.min(1, guessFactor));
         return (int) Math.round(clamped * MIDDLE) + MIDDLE;

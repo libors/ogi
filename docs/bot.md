@@ -17,9 +17,10 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
    none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
    a bullet kill 20 % ([engine-model.md](engine-model.md) G-46). From these commands `RobotMotion` predicts our position at the end of the next turn, exactly
    unless we ram someone.
-5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading.
+5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading; the surfer follows
+   the bullet for its shadows on the enemy waves (from the next turn's move on).
 6. **Gun waves** advance; last turn's plan becomes this turn's wave.
-7. **Aim:** the plan for the next turn's shot, from the predicted position.
+7. **Aim:** the plan for the next turn's shot, from the predicted position, with the turret's random spread.
 
 ## Waves and hit ranges (`cz.libors.ogi.wave`)
 
@@ -51,6 +52,10 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   the guess-factor gun searched for its plan (at power 1.9, 5 waves in 14): would each aim have been inside the hit
   range? Per enemy, the gun with the better weighted record fires (a real bullet counts 1, a virtual wave 0.125);
   circular targeting until the guess-factor gun has a record.
+- **Aim spread:** the turret aims at the chosen gun's aim plus a random offset of up to ±4 px at the target's
+  distance, drawn every turn from a seeded generator of its own (`Plan.offset`). The guns learn and are scored on
+  their own aims. Against a robot that stands still the gun would otherwise aim exactly at its centre, which a bullet
+  shielder predicts to a fraction of a pixel and shoots down; a few pixels off the centre hit as often.
 - **One model for the bot and the bench:** what the gun knows about an enemy and how it decides (the data, the
   virtual scores, the choice of gun, learning a passed wave) is `GunModel`. The tunable numbers (feature weights,
   the neighbour count, the virtual weight, the tries before switching) are `GunParameters`; the bot plays with
@@ -91,6 +96,14 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     2.5^(d_now / d_end) / 2.5, d being the distance to the enemy now and where the way ends (Diamond's factor), and
     every way carries a floor of 0.02 of the bullet's damage, so that ways that close in on a rammer cost more even
     where the profile is empty.
+  - **Bullet shadows:** every bullet we fire is followed from the `Bullet` that `setFireBullet` returns until it
+    leaves the field or hits a robot or a bullet. For each enemy wave and each of our bullets, in every turn both are
+    in the air, the part of our bullet's move in that turn that lies between the wave's radii at the start and the
+    end of the turn gives the bearings whose enemy bullets cross it; segments of the same turn that cross always
+    collide (engine-model G-04). Crossings of one bullet's move with the other's move of the turn before collide only
+    if the engine moves that bullet first, which is a fresh coin each turn, so they shadow at weight ½. A way's
+    expected damage from a wave counts only the unshadowed share of its hit range, each guess factor weighted by the
+    wave's profile and by the largest shadow weight on it.
   - The way with the least danger wins, and its first turn's commands are used. Ties keep the last way.
 - **Without an enemy wave** the bot orbits the target and changes direction at random intervals, from its own seeded
   generator. It also steers towards 325 px, but turns towards the target at walls, so it stays closer than the surfer.

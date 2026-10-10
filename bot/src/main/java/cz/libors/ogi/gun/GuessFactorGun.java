@@ -52,9 +52,10 @@ public final class GuessFactorGun {
      *                 {@code time}
      * @param decision each gun's mathematical aim and the gun whose aim the turret follows
      * @param originX  our predicted position at the end of turn {@code time + 1}, the bullet's origin
+     * @param offset   added to the chosen gun's aim where the turret goes, not where the guns learn from
      */
     public record Plan(GunModel.Shot shot, GunModel.Aim decision, double power, double originX, double originY,
-                       double targetX, double targetY) {
+                       double targetX, double targetY, double offset) {
 
         public long time() {
             return shot.time();
@@ -62,7 +63,7 @@ public final class GuessFactorGun {
 
         /** The heading the gun should reach by the end of the next turn. */
         public double aim() {
-            return decision.aim();
+            return decision.aim() + offset;
         }
     }
 
@@ -175,6 +176,15 @@ public final class GuessFactorGun {
      */
     public double aim(String name, long now, double nextX, double nextY, double power, boolean searchNeighbours,
                       double circularAim) {
+        return aim(name, now, nextX, nextY, power, searchNeighbours, circularAim, 0);
+    }
+
+    /**
+     * As {@link #aim(String, long, double, double, double, boolean, double)}, with {@code offset} radians added to
+     * the turret's aim only (see {@link Plan}).
+     */
+    public double aim(String name, long now, double nextX, double nextY, double power, boolean searchNeighbours,
+                      double circularAim, double offset) {
         Target t = target(name);
         if (t.history.isEmpty()) {
             t.plan = null;
@@ -188,7 +198,7 @@ public final class GuessFactorGun {
         double escape = Math.asin(RobotMotion.MAX_VELOCITY / speed);
         GunModel.Shot shot = new GunModel.Shot(name, now, features, direction, reference, escape, searchNeighbours,
                 circularAim);
-        t.plan = new Plan(shot, t.model.aim(shot), power, nextX, nextY, t.history.x(), t.history.y());
+        t.plan = new Plan(shot, t.model.aim(shot), power, nextX, nextY, t.history.x(), t.history.y(), offset);
         return t.plan.aim();
     }
 

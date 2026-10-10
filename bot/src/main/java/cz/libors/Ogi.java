@@ -53,12 +53,19 @@ public class Ogi extends TeamRobot {
     private static final int AIM_LEAD_TURNS = 4;
     /** How far past a disabled enemy we drive when ramming it, so that we do not stop short. */
     private static final double RAM_OVERSHOOT = 50;
+    /**
+     * The turret aims up to this many pixels (at the target's distance) to either side of the gun's aim, at random.
+     * A bullet aimed exactly at a robot's centre is predictable to a fraction of a pixel, and bullet shielders shoot
+     * such bullets down; a few pixels off the centre still hit as often.
+     */
+    private static final double AIM_SPREAD = 4;
 
     private World world;
     private Field field;
     private OrbitMovement movement;
     private GuessFactorGun gun;
     private WaveSurfer surfer;
+    private Random aimSpread;
     private final Trace trace = new Trace();
     private final TurnClock clock = new TurnClock();
     /** Whether last turn's plan for this turn is a shot we can afford. */
@@ -70,6 +77,7 @@ public class Ogi extends TeamRobot {
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
         movement = new OrbitMovement(field, new Random(roundSeed()));
         gun = new GuessFactorGun(field);
+        aimSpread = new Random(~roundSeed());
         surfer = new WaveSurfer(field, getGunCoolingRate());
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
@@ -165,7 +173,12 @@ public class Ogi extends TeamRobot {
                 || teammateInLineOfFire(target.distanceTo(getX(), getY()), now)) {
             return false;
         }
-        fired(setFireBullet(plan.get().power()), plan.get());
+        Bullet bullet = setFireBullet(plan.get().power());
+        if (bullet != null) {
+            surfer.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
+                    Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
+        }
+        fired(bullet, plan.get());
         return true;
     }
 
@@ -184,7 +197,8 @@ public class Ogi extends TeamRobot {
         double planned = power > 0 ? power : DEFAULT_POWER;
         double circular = CircularAim.aim(nextX, nextY, target, Rules.getBulletSpeed(planned), now + 1, field);
         boolean soon = getGunHeat() <= AIM_LEAD_TURNS * getGunCoolingRate();
-        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular);
+        double offset = (2 * aimSpread.nextDouble() - 1) * AIM_SPREAD / Math.max(distance, 1);
+        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset);
         if (!Double.isNaN(aim)) {
             setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
         }
@@ -301,6 +315,7 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletHit(BulletHitEvent e) {
+        surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
             surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
         }
@@ -316,6 +331,7 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletHitBullet(BulletHitBulletEvent e) {
+        surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getHitBullet().getName())) {
             surfer.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),
                     e.getHitBullet().getY(), Angles.fromRobocode(e.getHitBullet().getHeadingRadians()),

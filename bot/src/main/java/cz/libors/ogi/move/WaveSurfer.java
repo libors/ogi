@@ -15,6 +15,7 @@ import cz.libors.ogi.wave.HitRange;
 import cz.libors.ogi.wave.Wave;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -34,6 +35,11 @@ import java.util.Optional;
  * guess factors that would hit us on each path. From where each way leaves us, the next wave is surfed the same way,
  * and its best way counts too. The way with the least expected damage (each wave's profile inside its hit range,
  * times its bullet's damage) wins, and its first turn's commands are returned.
+ *
+ * <p>Bullet shadows: where one of our bullets in the air will cross an enemy wave, the enemy's bullets at those angles
+ * would hit ours (engine-model G-04: segments of the same turn that cross always collide; a segment and the other
+ * bullet's segment of the turn before collide if the engine happens to move that bullet first), so that part of a hit
+ * range is safe, or half safe, and a way's danger counts only its unshadowed share.
  *
  * <p>Danger models last for the battle (static, per robot, engine-model G-22); waves and detectors are per round.
  */
@@ -57,6 +63,10 @@ public final class WaveSurfer {
     private static final double CLOSE_FIGHT = 250;
     /** Danger every way carries, so that the distance to the enemy decides between ways the profile calls safe. */
     private static final double DANGER_FLOOR = 0.02;
+    /** The chance of a collision that needs the engine to move one of the two bullets first. */
+    private static final double MIXED_ORDER = 0.5;
+    /** How long our bullets are followed for shadows, at most. */
+    private static final int MAX_SHADOW_TURNS = 150;
     /** How closely a bullet's power must match its wave's. */
     private static final double POWER_TOLERANCE = 0.01;
 
@@ -72,6 +82,8 @@ public final class WaveSurfer {
         final double[] features;
         /** Where the enemy is likely to have aimed, as its {@link DangerModel} saw it when the wave appeared. */
         final DangerModel.Prediction prediction;
+        /** Guess-factor intervals {low, high, chance of a collision} that our bullets shadow, by bullet. */
+        final Map<Object, List<double[]>> shadows = new HashMap<>();
 
         EnemyWave(Wave wave, HitRange range, int direction, double[] features, DangerModel.Prediction prediction) {
             this.wave = wave;
@@ -87,11 +99,28 @@ public final class WaveSurfer {
         }
     }
 
+    /**
+     * One of our bullets in the air: fired in turn {@code fireTime} from ({@code x}, {@code y}), our position at the
+     * end of that turn, it is {@code (t − fireTime) × speed} further along its heading at the end of turn t (as a
+     * {@link Wave}), until it leaves the field in turn {@code endTime} at the latest.
+     */
+    record OurBullet(Object id, long fireTime, double x, double y, double dx, double dy, double speed, long endTime) {
+
+        double x(long t) {
+            return x + (t - fireTime) * speed * dx;
+        }
+
+        double y(long t) {
+            return y + (t - fireTime) * speed * dy;
+        }
+    }
+
     private final Field field;
     private final double coolingRate;
     private final Map<String, FireDetector> detectors = new HashMap<>();
     private final Neighbours neighbours = new Neighbours();
     private final List<EnemyWave> waves = new ArrayList<>();
+    private final List<OurBullet> ourBullets = new ArrayList<>();
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
     private final RobotHistory ours = new RobotHistory();
@@ -149,6 +178,41 @@ public final class WaveSurfer {
         learn(shooter, time, x, y, heading, power);
     }
 
+    /**
+     * We fired a bullet in turn {@code time} from our position at the end of that turn; heading mathematical. It
+     * shadows the enemy waves it will cross until {@link #ourBulletEnded} or until it leaves the field.
+     */
+    public void ourBulletFired(Object id, long time, double x, double y, double heading, double power) {
+        double dx = Math.cos(heading);
+        double dy = Math.sin(heading);
+        double speed = BulletMotion.speed(power);
+        double toWall = Double.POSITIVE_INFINITY;
+        if (dx > 1e-9) {
+            toWall = Math.min(toWall, (field.width() - x) / dx);
+        } else if (dx < -1e-9) {
+            toWall = Math.min(toWall, -x / dx);
+        }
+        if (dy > 1e-9) {
+            toWall = Math.min(toWall, (field.height() - y) / dy);
+        } else if (dy < -1e-9) {
+            toWall = Math.min(toWall, -y / dy);
+        }
+        long end = time + Math.min(MAX_SHADOW_TURNS, (long) Math.ceil(toWall / speed));
+        OurBullet b = new OurBullet(id, time, x, y, dx, dy, speed, end);
+        ourBullets.add(b);
+        for (EnemyWave w : waves) {
+            addShadows(w, b);
+        }
+    }
+
+    /** Our bullet hit a robot or a bullet: it shadows nothing more. */
+    public void ourBulletEnded(Object id) {
+        ourBullets.removeIf(b -> b.id().equals(id));
+        for (EnemyWave w : waves) {
+            w.shadows.remove(id);
+        }
+    }
+
     /** A dead robot fires no more, but its bullets in the air still fly and hit, so its waves stay. */
     public void robotDied(String name) {
         detectors.remove(name);
@@ -159,6 +223,7 @@ public final class WaveSurfer {
      * were in each of them goes to its shooter's flattener.
      */
     public void update(long now) {
+        ourBullets.removeIf(b -> b.endTime() < now);
         double[] us = ourStates.get(now);
         if (us == null) {
             return;
@@ -303,7 +368,145 @@ public final class WaveSurfer {
         }
         double a = w.direction * range.minOffset() / w.escape;
         double b = w.direction * range.maxOffset() / w.escape;
-        return (DangerModel.mass(w.prediction.profile(), a, b) + DANGER_FLOOR) * BulletMotion.damage(w.wave.power());
+        double unshadowed = 1 - shadowedShare(w, Math.min(a, b), Math.max(a, b));
+        return (DangerModel.mass(w.prediction.profile(), a, b) + DANGER_FLOOR) * unshadowed
+                * BulletMotion.damage(w.wave.power());
+    }
+
+    /**
+     * The share of the wave's predicted aim between guess factors {@code low} and {@code high} that is shadowed, each
+     * guess factor counted by the likeliest collision there.
+     */
+    private static double shadowedShare(EnemyWave w, double low, double high) {
+        if (w.shadows.isEmpty() || high <= low) {
+            return 0;
+        }
+        List<double[]> parts = new ArrayList<>();
+        for (List<double[]> list : w.shadows.values()) {
+            for (double[] s : list) {
+                double from = Math.max(low, s[0]);
+                double to = Math.min(high, s[1]);
+                if (to > from) {
+                    parts.add(new double[] {from, to, s[2]});
+                }
+            }
+        }
+        if (parts.isEmpty()) {
+            return 0;
+        }
+        double[] cuts = new double[2 * parts.size()];
+        for (int i = 0; i < parts.size(); i++) {
+            cuts[2 * i] = parts.get(i)[0];
+            cuts[2 * i + 1] = parts.get(i)[1];
+        }
+        Arrays.sort(cuts);
+        double[] profile = w.prediction.profile();
+        double shadowed = 0;
+        for (int i = 1; i < cuts.length; i++) {
+            if (cuts[i] <= cuts[i - 1]) {
+                continue;
+            }
+            double middle = (cuts[i - 1] + cuts[i]) / 2;
+            double weight = 0;
+            for (double[] part : parts) {
+                if (part[0] <= middle && middle <= part[1]) {
+                    weight = Math.max(weight, part[2]);
+                }
+            }
+            if (weight > 0) {
+                shadowed += weight * DangerModel.share(profile, cuts[i - 1], cuts[i]);
+            }
+        }
+        double total = DangerModel.share(profile, low, high);
+        return total > 0 ? Math.min(1, shadowed / total) : 0;
+    }
+
+    /** Adds the guess factors of {@code w} that bullet {@code b} shadows, with the chance of a collision there. */
+    private void addShadows(EnemyWave w, OurBullet b) {
+        List<double[]> found = new ArrayList<>();
+        for (double[] angles : shadowAngles(w.wave, b)) {
+            double g1 = w.guessFactor(angles[0]);
+            double g2 = w.guessFactor(angles[1]);
+            found.add(new double[] {Math.min(g1, g2), Math.max(g1, g2), angles[2]});
+        }
+        if (!found.isEmpty()) {
+            w.shadows.put(b.id(), found);
+        }
+    }
+
+    /**
+     * The bearings from the wave's origin, as {from, to, chance} along the bullet's move, of the wave's bullets that
+     * bullet {@code b} would hit (engine-model G-04). In every turn both are in the air: the part of the bullet's move
+     * in that turn that lies between the wave's radii at the start and the end of the turn crosses those bullets'
+     * moves of the same turn, a collision whatever order the engine moves them in (chance 1). The crossings of one
+     * bullet's move with the other's move of the turn before happen only if the engine moves that bullet first, which
+     * is random (chance ½).
+     */
+    static List<double[]> shadowAngles(Wave wave, OurBullet b) {
+        List<double[]> found = new ArrayList<>();
+        for (long t = Math.max(b.fireTime(), wave.fireTime()) + 1; t <= b.endTime(); t++) {
+            crossings(found, wave, b, t, wave.radius(t - 1), wave.radius(t), 1);
+            if (t - 1 > wave.fireTime()) {
+                // We move first and hit the enemy's bullet through its move of the turn before.
+                crossings(found, wave, b, t, wave.radius(t - 2), wave.radius(t - 1), MIXED_ORDER);
+            }
+            if (t - 1 > b.fireTime()) {
+                // The enemy's bullet moves first and hits ours through our move of the turn before.
+                crossings(found, wave, b, t - 1, wave.radius(t - 1), wave.radius(t), MIXED_ORDER);
+            }
+        }
+        return found;
+    }
+
+    /** Adds the bearings of the part of our bullet's move in turn {@code t} between radii {@code r1} and {@code r2}. */
+    private static void crossings(List<double[]> found, Wave wave, OurBullet b, long t, double r1, double r2,
+                                  double chance) {
+        double ax = b.x(t - 1);
+        double ay = b.y(t - 1);
+        double fx = ax - wave.x();
+        double fy = ay - wave.y();
+        double ddx = b.x(t) - ax;
+        double ddy = b.y(t) - ay;
+        double c2 = ddx * ddx + ddy * ddy;
+        double c1 = 2 * (fx * ddx + fy * ddy);
+        double c0 = fx * fx + fy * fy;
+        double[] outer = within(c2, c1, c0, r2);
+        if (outer == null) {
+            return;
+        }
+        double lo = Math.max(0, outer[0]);
+        double hi = Math.min(1, outer[1]);
+        if (hi < lo) {
+            return;
+        }
+        double[] inner = within(c2, c1, c0, r1);
+        if (inner == null || inner[1] <= lo || inner[0] >= hi) {
+            found.add(bearings(wave, ax, ay, ddx, ddy, lo, hi, chance));
+        } else {
+            if (inner[0] > lo) {
+                found.add(bearings(wave, ax, ay, ddx, ddy, lo, inner[0], chance));
+            }
+            if (inner[1] < hi) {
+                found.add(bearings(wave, ax, ay, ddx, ddy, inner[1], hi, chance));
+            }
+        }
+    }
+
+    /** The interval of λ where |f + λ·d| ≤ r for the quadratic c2·λ² + c1·λ + c0 = |f + λ·d|², or null. */
+    private static double[] within(double c2, double c1, double c0, double r) {
+        double disc = c1 * c1 - 4 * c2 * (c0 - r * r);
+        if (disc < 0 || c2 == 0) {
+            return null;
+        }
+        double root = Math.sqrt(disc);
+        return new double[] {(-c1 - root) / (2 * c2), (-c1 + root) / (2 * c2)};
+    }
+
+    /** {bearing from the wave's origin of a + λ·d at λ = {@code from}, the same at {@code to}, {@code chance}}. */
+    private static double[] bearings(Wave wave, double ax, double ay, double dx, double dy, double from, double to,
+                                     double chance) {
+        return new double[] {Angles.bearing(wave.x(), wave.y(), ax + from * dx, ay + from * dy),
+                Angles.bearing(wave.x(), wave.y(), ax + to * dx, ay + to * dy), chance};
     }
 
     /**
@@ -362,7 +565,11 @@ public final class WaveSurfer {
                 range.observe(t, s[0], s[1]);
             }
         }
-        waves.add(new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple)));
+        EnemyWave w = new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple));
+        for (OurBullet b : ourBullets) {
+            addShadows(w, b);
+        }
+        waves.add(w);
     }
 
     /** Matches a bullet of {@code shooter} to its wave by power and travelled distance, and learns its guess factor. */
