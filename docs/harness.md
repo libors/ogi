@@ -228,7 +228,8 @@ A text file per set in `harness/opponents/`: an optional `title` line that says 
 dashboard shows it), a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10 rounds), then one robot or
 team per line as Robocode lists it, including its version. A line `[name]` starts a group: opponents under
 `[strong]` form the second scoreboard, every other group but `[other]` a scoreboard of its own (e.g. rumble tiers);
-a group may start again further down. Only trusted robots are in the repository: `sample-1v1.txt` and
+a group may start again further down. Lines `weight [name] n` say how many robots of the rumble each group stands
+for (e.g. a tier's size); with them every group needs a weight, and the report adds a rumble estimate (below). Only trusted robots are in the repository: `sample-1v1.txt` and
 `sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes, whose version
 follows `botVersion`), for gun and movement work. Sets of rumble bots belong next to their jars on the machine that
 runs them.
@@ -241,6 +242,9 @@ runs them.
 - **Estimate:** every opponent weighs the same, as in the rumble's APS. The difference is the mean of the per-opponent
   mean differences, with variance `(1/H²)·Σ s_h²/n_h`. While an opponent has fewer than 5 pairs, its variance is the
   one pooled over all opponents.
+- **Rumble estimate** (only with `weight` lines): every opponent weighs the same within its group, and the groups
+  weigh as their robots in the rumble; the variance adds the groups' variances times their squared weights. It is
+  shown, not tested: the test decides on the equal-weight estimate.
 - **Allocation:** 2 pairs per opponent first; then the next pair goes to the opponent furthest below its Neyman
   share (`n_h ∝ s_h`), so opponents where the versions differ little get few pairs.
 - **Stopping rule:** fishtest's normal approximation of the generalized SPRT, `LLR = (δ1 − δ0)(2Δ̂ − δ0 − δ1)/(2V)`,
@@ -308,6 +312,7 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 ./gradlew recordGunLogs -Pversions=0.1 -Ppairs=2      # the working tree's version, lab set by default
 ./gradlew gunBench                                      # replays harness/build/gun-logs/<botVersion>
 ./gradlew gunBench -Pweights=3,3,1.5,2.5,2,1.5,3,1,1.5,2 -PneighbourScale=0.7
+./gradlew gunBench -Plogs=.robocode/queue/jobs/<id>/recordings/<version> -Pselection=<tsv> -Ptune=8
 ```
 
 - **`recordGunLogs`** is `recordBattles` (same options, same seeds) for `cz.libors.OgiGunLog`, which plays like Ogi
@@ -321,6 +326,21 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   and the bullet power stay as recorded.
 - **Parameters:** `weights` (10, in the order of `TargetingFeatures`), `neighbourScale`, `maxNeighbours`,
   `virtualWeight`, `minTries`; the rest come from `GunParameters.DEFAULT`.
+- **`-Pselection=<tsv>`** (columns `stratum` and `name`) adds the mean `fired %` per stratum.
+- **`-Ptune=<passes>`:** a coordinate search from the given parameters that maximises the mean over opponents of
+  `fired %` on half of the opponents, and reports both halves with the start and the tuned parameters: per stratum
+  the means, the mean per-opponent change with its 95 % interval, and how many opponents went up and down. It ends
+  with the tuned parameters as `-P` options.
+  - **Left out:** opponents that shoot down more than `-PmaxShielded` (default 0.15) of our bullets, because they aim
+    at our aim and the replay cannot answer for a new one; and opponents that never get a bullet. Accidental bullet
+    collisions stay below ~14 %; bullet shielders are well above.
+  - **Split:** the rest is shuffled per stratum (`-PsplitSeed`, default 1) and every other opponent goes to the
+    training half, with all its battles. The other half tests whether the numbers carry over to robots the search
+    never saw; a split by battles of the same robots would not show that.
+  - **Search:** each parameter in turn tries 0.5, 0.7, 1.4 and 2 times its value (weights, `virtualWeight` and
+    `minTries` also 0, `virtualWeight` also 1) and keeps the best that raises the objective by more than 0.01; after a
+    pass without a gain it tries 0.85 and 1.18 times, and stops after such a pass gains nothing. One evaluation
+    replays the training half: about 9 s for 110 opponents on the Mac.
 
 | Column | Meaning |
 |---|---|
@@ -351,9 +371,16 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   Against the lab set the bench's `fired %` is therefore 1–4 points lower.
 - **Limits:**
   - Against a target that reacts to our aim the replay is optimistic: the recorded movement dodged the logged
-    gun, not the replayed one.
+    gun, not the replayed one. So any change looks better than it is. Measured on 2026-10-10 with logs of both
+    versions of a tuned gun: +2.32 points of `fired %` on the old version's logs, −0.54 on the new one's, about +0.9
+    real and 1.4 bias; the battles agreed with the +0.9. The bias is largest against wave surfers and smallest
+    against simple movers. Against robots that move without regard to our bullets the bench is about right. To size a change, replay
+    the logs of both versions and take half the sum of the two changes.
   - A replayed aim the turret could not have reached in time would not have been fired that turn; the replay fires
     it anyway.
+  - A recording can lose a turn's debug properties, and with them a plan: after a skipped turn, and rarely without
+    one (2026-10-10, 1 battle in 450: the snapshot of a turn repeated the previous turn's properties). The replay
+    then reports an orphan wave and a few `differ` after it.
 
 ## Danger bench
 
@@ -607,9 +634,9 @@ refreshes every 2 s and keeps open the sections the viewer opened.
   marker between the test's two answers (the LLR between its bounds), its progress and the time left; a finished one
   how the test ended. Buttons move a waiting job up or down or cancel it.
 - **The job on the right:** the clicked one (kept in the URL), else the running one. The result and the test in
-  words, the scoreboards (all, strong, every other named group of the set: old and new score share, the change with
-  its interval, how often they hit us, how often we hit them, wins), each opponent (worst change first) and the
-  technical details (job id, the job as submitted, the decision, LLR, noise, health, own turns, the directory, the
+  words, the scoreboards (all, the rumble estimate if the set has weights, strong, every other named group of the
+  set: old and new score share, the change with its interval, how often they hit us, how often we hit them, wins),
+  each opponent (worst change first) and the technical details (job id, the job as submitted, the decision, LLR, noise, health, own turns, the directory, the
   workers' environment, problems, the last battles).
 - `./gradlew queueStatus` prints the same in a terminal; actions are POSTs that need the header
   `X-Requested-With: ogi`, so another web page cannot trigger them.

@@ -354,7 +354,8 @@ async function loadDetail(id) {
   const boards = (d.scoreboards || []).map(b => {
     const diff = b.difference, h = b.halfWidth;
     const cls = diff - h > 0 ? "pos" : diff + h < 0 ? "neg" : "";
-    return `<tr><td>${esc(boardName(b.name))} <span class="muted">(${b.opponents})</span></td>
+    const help = b.name === "rumble" ? ` title="${esc(RUMBLE_HELP)}"` : "";
+    return `<tr><td${help}>${esc(boardName(b.name))} <span class="muted">(${b.opponents})</span></td>
       <td class="r num">${fmt(b.baseline, 1)}</td><td class="r num">${fmt(b.candidate, 1)}</td>
       <td class="r num ${cls}">${fmt(diff, 2, true)} ± ${fmt(h)}</td>
       <td class="r num">${fmt(b.hitByBaseline, 1)} → ${fmt(b.hitByCandidate, 1)}</td>
@@ -371,7 +372,8 @@ async function loadDetail(id) {
       <th class="r" title="Battles won, in %, old → new.">Wins %</th></tr></thead>
     <tbody>${boards || '<tr><td colspan="7" class="empty">no pairs yet</td></tr>'}</tbody></table></div>` : "";
 
-  const rows = (d.opponents || []).slice().sort((a, b) => (a.difference ?? 0) - (b.difference ?? 0)).map(o => {
+  // A compare job lists its opponents; a recording job gives only their number.
+  const rows = (Array.isArray(d.opponents) ? d.opponents : []).slice().sort((a, b) => (a.difference ?? 0) - (b.difference ?? 0)).map(o => {
     const cls = o.difference > 0 ? "pos" : o.difference < 0 ? "neg" : "";
     return `<tr><td>${esc(o.opponent)}${o.strong ? ' <span class="muted" title="one of the strong opponents">★</span>' : ""}</td>
       <td class="r num">${o.pairs}</td><td class="r num">${fmt(o.baseline, 1)}</td><td class="r num">${fmt(o.candidate, 1)}</td>
@@ -413,8 +415,12 @@ async function loadDetail(id) {
   document.getElementById("detail").innerHTML = head + boardTable + opponentTable + tech;
 }
 
+const RUMBLE_HELP = "An estimate for the rumble: every opponent weighs the same within its group, and the groups "
+  + "weigh as many robots as they stand for in the rumble (the set's weight lines). The test decides on All.";
+
 function boardName(name) {
   if (name === "all") return "All";
+  if (name === "rumble") return "Rumble estimate";
   if (name === "strong") return "Strong";
   return name.charAt(0).toUpperCase() + name.slice(1);
 }

@@ -245,7 +245,7 @@ public final class Compare {
         environment.put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"));
         environment.put("cpuConstant", cpuConstant(home));
         environment.put("lastRunSeconds", Long.toString((System.nanoTime() - start) / 1_000_000_000));
-        Summary summary = summarize(config, environment, options.get("metric"), bounds, strata, log);
+        Summary summary = summarize(config, environment, options.get("metric"), bounds, strata, set.weights(), log);
         Path summaryFile = dir.resolve("summary.json");
         Files.writeString(summaryFile, Json.write(summary));
         printReport(summary, System.out);
@@ -387,17 +387,22 @@ public final class Compare {
     }
 
     /**
-     * The scoreboards (all, strong, then one per other named group), the per-opponent rows, noise and health of a
-     * comparison, from its strata and its log.
+     * The scoreboards (all; the rumble estimate if the set weighs its groups; strong; then one per other named group),
+     * the per-opponent rows, noise and health of a comparison, from its strata and its log.
+     *
+     * @param weights per group, the robots of the rumble it stands for ({@link OpponentSet#weights()}); may be empty
      */
     static Summary summarize(Map<String, String> config, Map<String, String> environment, String metric,
-                             Bounds bounds, List<Stratum> strata, CompareLog log) {
+                             Bounds bounds, List<Stratum> strata, Map<String, Double> weights, CompareLog log) {
         Map<String, List<Battle[]>> pairsByOpponent = log.completePairs();
         List<OpponentRow> rows = strata.stream()
                 .map(s -> row(s, pairsByOpponent.getOrDefault(s.opponent(), List.of())))
                 .toList();
         List<Scoreboard> boards = new ArrayList<>();
         boards.add(scoreboard("all", strata, rows, x -> true));
+        if (!weights.isEmpty()) {
+            boards.add(weighted("rumble", strata, rows, weights));
+        }
         if (strata.stream().anyMatch(Stratum::strong)) {
             boards.add(scoreboard("strong", strata, rows, Stratum::strong));
         }
@@ -480,6 +485,30 @@ public final class Compare {
                 mean(selected, OpponentRow::pwinBaseline), mean(selected, OpponentRow::pwinCandidate),
                 mean(selected, OpponentRow::hitRateBaseline), mean(selected, OpponentRow::hitRateCandidate),
                 mean(selected, OpponentRow::hitByBaseline), mean(selected, OpponentRow::hitByCandidate));
+    }
+
+    /**
+     * The groups weighted by the robots of the rumble each stands for, each opponent weighing the same within its
+     * group: an estimate of the rumble's average, not what the test decides on. The variance adds the groups'
+     * variances times their squared weights.
+     */
+    static Scoreboard weighted(String name, List<Stratum> strata, List<OpponentRow> rows, Map<String, Double> weights) {
+        List<String> groups = strata.stream().map(Stratum::group).distinct().toList();
+        double total = groups.stream().mapToDouble(weights::get).sum();
+        double[] v = new double[12];
+        for (String g : groups) {
+            double w = weights.get(g) / total;
+            Scoreboard b = scoreboard(g, strata, rows, s -> s.group().equals(g));
+            double[] gv = {b.baseline(), b.candidate(), b.difference(), b.halfWidth() / 1.96, b.apsBaseline(),
+                    b.apsCandidate(), b.pwinBaseline(), b.pwinCandidate(), b.hitRateBaseline(), b.hitRateCandidate(),
+                    b.hitByBaseline(), b.hitByCandidate()};
+            for (int i = 0; i < v.length; i++) {
+                // The standard error (index 3) adds up as a variance.
+                v[i] += i == 3 ? w * w * gv[i] * gv[i] : w * gv[i];
+            }
+        }
+        return new Scoreboard(name, strata.size(), v[0], v[1], v[2], 1.96 * Math.sqrt(v[3]), v[4], v[5], v[6], v[7],
+                v[8], v[9], v[10], v[11]);
     }
 
     /** Mean over the rows that have the value; NaN if none has. */

@@ -4,7 +4,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A fixed set of opponents and the battle format to meet them in, read from a text file:
@@ -13,6 +15,8 @@ import java.util.List;
  * # comment
  * title The sample bots
  * format 1v1
+ * weight [strong] 30
+ * weight [other] 916
  * [strong]
  * sample.RamFire
  * [other]
@@ -23,9 +27,14 @@ import java.util.List;
  * starts a group: opponents under {@code [strong]} make up the second scoreboard, every other group but
  * {@code [other]} a scoreboard of its own. The optional {@code title} says in words what the set is.
  *
- * @param title the set's {@code title} line, or empty
+ * <p>A line {@code weight [name] n} says how many robots of the rumble the group stands for, e.g. a rumble tier's
+ * size. With weights, every group needs one, and the report adds a rumble estimate: each opponent weighs the same
+ * within its group, and the groups weigh as their robots in the rumble.
+ *
+ * @param title   the set's {@code title} line, or empty
+ * @param weights per group, the robots of the rumble it stands for; empty without {@code weight} lines
  */
-record OpponentSet(String name, String title, Format format, List<Opponent> opponents) {
+record OpponentSet(String name, String title, Format format, List<Opponent> opponents, Map<String, Double> weights) {
 
     /** @param group the section the opponent is listed under, empty before the first */
     record Opponent(String name, boolean strong, String group) {
@@ -69,6 +78,7 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
         String title = "";
         String group = "";
         List<Opponent> opponents = new ArrayList<>();
+        Map<String, Double> weights = new LinkedHashMap<>();
         for (String raw : lines) {
             int comment = raw.indexOf('#');
             String line = (comment >= 0 ? raw.substring(0, comment) : raw).trim();
@@ -79,6 +89,20 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
                 format = Format.of(line.substring("format ".length()).trim());
             } else if (line.startsWith("title ")) {
                 title = line.substring("title ".length()).trim();
+            } else if (line.startsWith("weight ")) {
+                String rest = line.substring("weight ".length()).trim();
+                int close = rest.indexOf(']');
+                double weight;
+                try {
+                    weight = rest.startsWith("[") && close > 1 ? Double.parseDouble(rest.substring(close + 1).trim())
+                            : Double.NaN;
+                } catch (NumberFormatException e) {
+                    weight = Double.NaN;
+                }
+                if (!(weight > 0)) {
+                    throw new IllegalArgumentException(name + ": expected weight [group] <positive number>: " + line);
+                }
+                weights.put(rest.substring(1, close).trim(), weight);
             } else if (line.startsWith("[") && line.endsWith("]")) {
                 group = line.substring(1, line.length() - 1).trim();
             } else if (opponents.stream().anyMatch(o -> o.name().equals(line))) {
@@ -90,6 +114,13 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
         if (format == null || opponents.isEmpty()) {
             throw new IllegalArgumentException(name + ": needs a format line and at least one opponent");
         }
-        return new OpponentSet(name, title, format, List.copyOf(opponents));
+        if (!weights.isEmpty()) {
+            for (Opponent o : opponents) {
+                if (!weights.containsKey(o.group())) {
+                    throw new IllegalArgumentException(name + ": " + o.name() + " is in a group without a weight");
+                }
+            }
+        }
+        return new OpponentSet(name, title, format, List.copyOf(opponents), Map.copyOf(weights));
     }
 }

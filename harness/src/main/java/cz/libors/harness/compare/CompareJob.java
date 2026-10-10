@@ -461,7 +461,7 @@ public final class CompareJob extends QueueJob {
         if (startedAt() > 0) {
             env.put("lastRunSeconds", Long.toString((System.currentTimeMillis() - startedAt()) / 1000));
         }
-        return Compare.summarize(config, env, metric, bounds, strata, log);
+        return Compare.summarize(config, env, metric, bounds, strata, set.weights(), log);
     }
 
     @Override

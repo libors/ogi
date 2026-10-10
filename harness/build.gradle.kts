@@ -412,13 +412,15 @@ tasks.register<JavaExec>("gunBench") {
     mainClass = "cz.libors.harness.gunbench.GunBench"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = gunBench.runtimeClasspath
-    jvmArgs("-Xmx4g")
+    jvmArgs("-Xmx6g")
     val logs = providers.gradleProperty("logs").orElse("harness/build/gun-logs/$botVersion")
-    val passed = listOf("weights", "neighbourScale", "maxNeighbours", "virtualWeight", "minTries")
+    val passed = listOf("robot", "selection", "weights", "neighbourScale", "maxNeighbours", "virtualWeight",
+        "minTries", "tune", "maxShielded", "splitSeed")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val root = rootDir
     argumentProviders.add(CommandLineArgumentProvider {
-        listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) + passed
+        listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) +
+            passed.map { if (it.startsWith("selection=")) "selection=" + root.resolve(it.substringAfter('=')).absolutePath else it }
     })
 }
 

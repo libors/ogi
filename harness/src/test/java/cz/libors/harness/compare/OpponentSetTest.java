@@ -3,6 +3,7 @@ package cz.libors.harness.compare;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -38,6 +39,25 @@ class OpponentSetTest {
         OpponentSet set = OpponentSet.parse("plain", List.of("format team", "sampleteam.MyFirstTeam"));
         assertTrue(set.title().isEmpty());
         assertFalse(set.opponents().get(0).strong());
+    }
+
+    @Test
+    void readsHowManyRumbleRobotsEachGroupStandsFor() {
+        OpponentSet set = OpponentSet.parse("tiers", List.of(
+                "format 1v1", "weight [strong] 30", "weight [ranks 31-300] 270", "[strong]", "sample.RamFire",
+                "[ranks 31-300]", "sample.Walls"));
+        assertEquals(Map.of("strong", 30.0, "ranks 31-300", 270.0), set.weights());
+        assertTrue(OpponentSet.parse("plain", List.of("format 1v1", "sample.Fire")).weights().isEmpty());
+    }
+
+    @Test
+    void withWeightsEveryGroupNeedsOne() {
+        assertThrows(IllegalArgumentException.class, () -> OpponentSet.parse("partial", List.of(
+                "format 1v1", "weight [strong] 30", "[strong]", "sample.RamFire", "[weak]", "sample.Walls")));
+        assertThrows(IllegalArgumentException.class, () -> OpponentSet.parse("malformed", List.of(
+                "format 1v1", "weight strong 30", "[strong]", "sample.RamFire")));
+        assertThrows(IllegalArgumentException.class, () -> OpponentSet.parse("zero", List.of(
+                "format 1v1", "weight [strong] 0", "[strong]", "sample.RamFire")));
     }
 
     @Test
