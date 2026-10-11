@@ -20,11 +20,13 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -111,12 +113,20 @@ public final class RecordJob extends QueueJob {
                 .forEach(k -> jars.put(k.substring(4), spec.getProperty(k)));
         out = dir.resolve("recordings").resolve(shipped(spec) ? version
                 : RecordBattles.fileName(robot + " " + version));
+        // A recording counts once its index line is written: a crash between the two leaves a file to play again.
+        Set<String> indexed = new HashSet<>();
+        Path index = out.resolve("battles.tsv");
+        if (Files.exists(index)) {
+            for (String line : Files.readAllLines(index, StandardCharsets.UTF_8)) {
+                indexed.add(line.split("\t", 2)[0]);
+            }
+        }
         int count = 0;
         for (int pair = 0; pair < pairs; pair++) {
             for (OpponentSet.Opponent o : set.opponents()) {
                 count++;
                 Path file = out.resolve(fileName(o.name(), pair));
-                if (Files.exists(file)) {
+                if (Files.exists(file) && indexed.contains(file.getFileName().toString())) {
                     done++;
                 } else if (state().active()) {
                     todo.add(work(o.name(), pair));
@@ -133,16 +143,25 @@ public final class RecordJob extends QueueJob {
     /** Checks a recording job before it is queued and describes it. */
     public static String check(Properties spec, List<String> opponentLines) {
         OpponentSet set = OpponentSet.parse(spec.getProperty("opponentSet"), opponentLines);
-        Compare.fixedStarts(spec.getProperty("starts", "random"));
-        for (String key : List.of("seed", "rounds", "pairs", "timeout")) {
-            if (spec.getProperty(key) != null) {
-                Long.parseLong(spec.getProperty(key));
-            }
+        if (set.format() != Format.DUEL) {
+            throw new IllegalArgumentException("recordings are of 1v1 battles; " + set.name() + " is a "
+                    + set.format().label + " set");
         }
+        Compare.fixedStarts(spec.getProperty("starts", "random"));
+        Long.parseLong(spec.getProperty("seed", "1"));
+        Compare.intOption(spec, "rounds", 0, 0);
+        Compare.intOption(spec, "pairs", 1, 1);
+        Compare.intOption(spec, "timeout", 300, 1);
         String subject = spec.getProperty("robot") + " " + spec.getProperty("version");
-        if (!shipped(spec) && cz.libors.harness.Sandbox.trusted(subject)) {
+        boolean trusted = cz.libors.harness.Sandbox.trusted(subject);
+        if (!shipped(spec) && trusted) {
             // Only foreign robots come from the worker; ours and the samples' always come with the job.
             throw new IllegalArgumentException("no jar " + jarName(spec) + " in the job");
+        }
+        if (shipped(spec) && !trusted) {
+            // A foreign robot runs only from the worker's approved jars, which passed the jar check.
+            throw new IllegalArgumentException(subject + " is foreign: it comes from the worker's approved jars, "
+                    + "not with the job");
         }
         if (set.opponents().stream().anyMatch(o -> o.name().equals(subject))) {
             throw new IllegalArgumentException(subject + " is in the opponent set; a battle against itself would "
@@ -197,6 +216,11 @@ public final class RecordJob extends QueueJob {
     }
 
     @Override
+    public boolean debug() {
+        return debug;
+    }
+
+    @Override
     public boolean needsForeign() {
         return !cz.libors.harness.Sandbox.foreign(opponents()).isEmpty();
     }
@@ -208,7 +232,11 @@ public final class RecordJob extends QueueJob {
     }
 
     @Override
-    public List<Work> next(String worker) {
+    public List<Work> next(String worker) throws IOException {
+        if (state().active() && todo.isEmpty() && outstanding == 0 && done >= total) {
+            // Everything was recorded before this server run: the job ends now.
+            finish(State.DONE, (done - givenUp.size()) + " recordings in " + out, results());
+        }
         if (!state().active() || todo.isEmpty()) {
             return List.of();
         }

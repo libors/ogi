@@ -4,6 +4,7 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.TargetingFeatures;
 import cz.libors.ogi.physics.EngineRobot;
+import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.wave.Wave;
 import org.junit.jupiter.api.Test;
 
@@ -70,13 +71,13 @@ class WaveSurferTest {
     @Test
     void movesAwayFromAHeadOnShot() {
         WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
-        String enemy = "enemy";
+        String enemy = "head-on";
         double ex = 650;
         double ey = 300;
         for (long t = 0; t <= 40; t++) {
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
             // Guns start hot (engine-model G-05); the enemy fires 2.0 in turn 32, the scan of turn 33 shows the drop.
-            surfer.scanned(enemy, t, ex, ey, 0, t <= 32 ? 100 : 98);
+            surfer.scanned(enemy, t, ex, ey, 0, 0, t <= 32 ? 100 : 98);
+            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
             surfer.update(t);
         }
         EngineRobot me = new EngineRobot();
@@ -93,11 +94,11 @@ class WaveSurferTest {
     void keepsTheWavesOfAShooterThatDied() {
         WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
         for (long t = 0; t <= 40; t++) {
+            surfer.scanned("died", t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
             surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.scanned("enemy", t, 650, 300, 0, t <= 32 ? 100 : 98);
             surfer.update(t);
         }
-        surfer.robotDied("enemy");
+        surfer.robotDied("died");
         assertTrue(surfer.command(us(250, 300), 40).isPresent(), "its bullet is still in the air");
     }
 
@@ -107,16 +108,91 @@ class WaveSurferTest {
         for (boolean otherNear : new boolean[] {true, false}) {
             WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
             for (long t = 0; t <= 40; t++) {
-                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
                 if (otherNear) {
                     surfer.teammateSeen("teammate", t, 700, 330);
                 }
-                surfer.scanned("enemy", t, 650, 300, 0, t <= 32 ? 100 : 99.4);
+                surfer.scanned("rams-" + otherNear, t, 650, 300, 0, 0, t <= 32 ? 100 : 99.4);
+                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
                 surfer.update(t);
             }
             assertEquals(!otherNear, surfer.command(us(250, 300), 40).isPresent(),
                     otherNear ? "a ram is no wave" : "alone, the same drop is a shot");
         }
+    }
+
+    /**
+     * An enemy 150 px east of us drives at us at full speed, long enough to be taken for a rammer, and fires. The
+     * surfer does not stand in its way and leans away from it more steeply than from an enemy that stands there.
+     */
+    @Test
+    void movesAwayFromAnEnemyThatDrivesAtUs() {
+        double[] away = new double[2];
+        for (int driving = 0; driving <= 1; driving++) {
+            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            String name = driving == 1 ? "rammer" : "standing";
+            long fire = 300;
+            for (long t = 0; t <= fire + 8; t++) {
+                surfer.scanned(name, t, 400, 300, Math.PI, 8 * driving, t <= fire ? 100 : 98);
+                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+                surfer.update(t);
+            }
+            double[] command = surfer.command(us(250, 300), fire + 8).orElseThrow();
+            assertTrue(command[0] != 0, "stood in the way of " + name);
+            double heading = Angles.fromRobocode(us(250, 300).bodyHeading + command[1]);
+            double drive = command[0] < 0 ? heading + Math.PI : heading;
+            assertTrue(-Math.cos(drive) > 0, name + ": drives towards the enemy: " + drive);
+            away[driving] = -Math.cos(drive);
+        }
+        assertTrue(away[1] > away[0], "the rammer's way leads away more: " + away[1] + " vs " + away[0]);
+    }
+
+    /**
+     * The engine reports a bullet our bullet hit one or two moves short of its wave's radius (engine-model G-04);
+     * either way its wave is learned and goes.
+     */
+    @Test
+    void aBulletOursShotDownIsLearnedWhereTheEngineReportsIt() {
+        for (int back = 1; back <= 2; back++) {
+            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            String enemy = "shot-down-" + back;
+            for (long t = 0; t <= 40; t++) {
+                surfer.scanned(enemy, t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
+                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+                surfer.update(t);
+            }
+            Trace trace = new Trace();
+            surfer.describe(40, trace);
+            Trace.WaveView wave = trace.waves().get(0);
+            double reported = wave.radius() - back * (20 - 3 * 2.0);
+            surfer.bulletHitBullet(enemy, 40, wave.x() - reported, wave.y(), Math.PI, 2.0);
+            assertTrue(surfer.command(us(250, 300), 40).isEmpty(),
+                    "the wave of the bullet shot down " + back + " moves back is still there");
+        }
+    }
+
+    @Test
+    void aShadowAcrossTheOppositeBearingStaysNarrow() {
+        double[] across = WaveSurfer.shadowRange(0, 1, 0.5, Math.PI - 0.01, -Math.PI + 0.01);
+        assertEquals(0.04, across[1] - across[0], 1e-9, "0.02 rad of shadow at an escape angle of 0.5");
+        double[] ahead = WaveSurfer.shadowRange(0, -1, 0.5, 0.1, 0.2);
+        assertEquals(-0.4, ahead[0], 1e-12);
+        assertEquals(-0.2, ahead[1], 1e-12);
+    }
+
+    @Test
+    void ramDetectorTakesOnlyRobotsThatCloseInForRammers() {
+        RamDetector charger = new RamDetector();
+        RamDetector far = new RamDetector();
+        RamDetector visitor = new RamDetector();
+        for (int i = 0; i < 300; i++) {
+            charger.observe(120, 6);
+            far.observe(300, 8);
+            // Comes close at full speed one scan in five, otherwise keeps its distance.
+            visitor.observe(i % 5 == 0 ? 150 : 350, i % 5 == 0 ? 8 : 0);
+        }
+        assertTrue(charger.drivesAtUs());
+        assertTrue(!far.drivesAtUs(), "approaching from far away is no ram");
+        assertTrue(!visitor.drivesAtUs(), "a short visit is no ram");
     }
 
     private static EngineRobot us(double x, double y) {
@@ -136,14 +212,14 @@ class WaveSurferTest {
         me.y = 300;
         me.bodyHeading = Angles.toRobocode(Math.PI / 2);
         // At the preferred distance, orbiting left (counter-clockwise around the origin) is heading south.
-        double[] left = surfer.orbit(me, wave, WaveSurfer.ORBIT_LEFT);
+        double[] left = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_LEFT);
         assertEquals(-100, left[0], 1e-12, "drives backwards instead of turning around");
         assertEquals(0, left[1], 1e-9);
-        double[] stop = surfer.orbit(me, wave, WaveSurfer.STOP);
+        double[] stop = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.STOP);
         assertEquals(0, stop[0]);
         me.y = 560;
-        double[] nearTop = surfer.orbit(me, wave, WaveSurfer.ORBIT_RIGHT);
-        double heading = Angles.fromRobocode(me.bodyHeading - nearTop[1]);
+        double[] nearTop = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
+        double heading = Angles.fromRobocode(me.bodyHeading + nearTop[1]);
         double driveHeading = nearTop[0] < 0 ? heading + Math.PI : heading;
         assertTrue(Math.sin(driveHeading) < 0.5, "turned away from the top wall: " + driveHeading);
     }

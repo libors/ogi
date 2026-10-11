@@ -18,7 +18,7 @@ import java.util.Map;
  */
 public class OgiGunLog extends Ogi {
 
-    /** The plan's turn of each bullet in the air; Robocode makes a new robot every round. */
+    /** The plan's turn of each bullet fired this round, until one is shot down; a new robot every round. */
     private final Map<Bullet, Long> planOf = new HashMap<>();
 
     @Override

@@ -40,8 +40,9 @@ import java.util.zip.ZipInputStream;
 
 /**
  * The worker side of the queue: runs battles in slots, each a JVM of its own ({@link Slot}) with a Robocode home of
- * its own, and keeps no state between runs. The server starts it (over ssh, or as a local process) and talks to it
- * through standard input and output ({@link Protocol}); everything about jobs stays with the server.
+ * its own, and keeps no job state between runs (only the CPU constant it measured). The server starts it (over ssh,
+ * or as a local process) and talks to it through standard input and output ({@link Protocol}); everything about jobs
+ * stays with the server.
  *
  * <p>{@code serve}: prepares the slots and runs the battles the server sends, at most one per slot. It ends, with its
  * slots, at the end of input, on {@code shutdown}, or when the server has been silent for {@code idleTimeout} seconds
@@ -134,6 +135,10 @@ public final class Executor {
         Battle battle;
         long battleStart;
         int restarts;
+        /** It said it ends after its battle's result ({@code leaving}). */
+        boolean leaving;
+        /** When its JVM was started; one that does not say ready within {@link #SLOT_START_MILLIS} is restarted. */
+        long startedAt;
         /**
          * Whether the slot's JVM runs the engine in debug mode ({@code -Ddebug=true}), which the engine reads once per
          * JVM: no turn time limit, so no robot skips a turn (engine-model G-17).
@@ -158,7 +163,7 @@ public final class Executor {
     private Path base;
     private List<Path> jars;
     private long cpuConstant;
-    /** The idle machine's constant, which the slots compare robots' own turn times with (P-04). */
+    /** The idle machine's constant, which the slots compare robots' own turn times with. */
     private long idleConstant;
 
     private void serve(Options o) throws Exception {
@@ -174,7 +179,7 @@ public final class Executor {
             List<String> rejected = new ArrayList<>();
             jars = robotJars(rejected);
             rejected.forEach(r -> log("foreign jar left out: " + r));
-            Measurement m = cpuConstant(o.has("remeasure"));
+            Measurement m = cpuConstant(Boolean.parseBoolean(o.get("remeasure", "false")));
             cpuConstant = Math.round(m.idle() * cpuFactor);
             idleConstant = m.idle();
             for (int i = 0; i < count; i++) {
@@ -188,6 +193,8 @@ public final class Executor {
                     "java", first.string("java"), "robocode", first.string("robocode"), "os", first.string("os"),
                     "sandbox", first.bool("sandbox"), "robots", first.list("robots"), "robotJars",
                     first.map("robotJars"), "rejected", rejected));
+            // The server pings only once it hears "ready"; a start longer than the timeout is no silence.
+            lastServerMessage = System.currentTimeMillis();
             loop(idleTimeout);
         } catch (Exception e) {
             server.send(Message.of("fatal", "message", e.toString()));
@@ -239,40 +246,20 @@ public final class Executor {
 
     private void loop(long idleTimeout) throws InterruptedException, IOException {
         while (true) {
-            Event e = events.poll(1, TimeUnit.SECONDS);
-            if (e instanceof ServerEnd) {
-                return;
-            }
-            if (e instanceof ServerLine l) {
-                Message m = l.message();
-                switch (m.type()) {
-                    case "battle" -> {
-                        Map<String, Object> spec = m.map("spec");
-                        waiting.add(new Battle(m.longValue("id"), spec, m.longValue("timeout") * 1000,
-                                Boolean.TRUE.equals(spec.get("debug"))));
-                        dispatch();
-                    }
-                    case "deploy" -> deploy(m.string("file"), m.string("sha"));
-                    case "ping" -> server.send(Message.of("pong", "busy",
-                            slots.stream().filter(s -> s.battle != null).count(), "waiting", waiting.size()));
-                    case "shutdown" -> {
-                        return;
-                    }
-                    default -> log("unknown message " + m.type());
+            // Every event already queued first: a result that came in time is not lost to the timeouts below.
+            for (Event e = events.poll(1, TimeUnit.SECONDS); e != null; e = events.poll()) {
+                if (!handle(e)) {
+                    return;
                 }
-            } else if (e instanceof SlotLine l && current(l.slot(), l.generation())) {
-                slotMessage(slots.get(l.slot()), l.message());
-            } else if (e instanceof SlotExit x && current(x.slot(), x.generation())) {
-                SlotProcess slot = slots.get(x.slot());
-                String reason = "slot " + slot.index + " ended with " + x.code() + ": " + output(slot);
-                failCurrent(slot, reason);
-                restart(slot, reason);
             }
             long now = System.currentTimeMillis();
             for (SlotProcess slot : slots) {
                 if (slot.battle != null && now - slot.battleStart > slot.battle.timeoutMillis()) {
                     failCurrent(slot, "timeout after " + slot.battle.timeoutMillis() / 1000 + " s");
                     restart(slot, "timeout");
+                } else if (!slot.ready && !slot.leaving && slot.battle == null && slot.process != null
+                        && now - slot.startedAt > SLOT_START_MILLIS) {
+                    restart(slot, "did not start within " + SLOT_START_MILLIS / 1000 + " s");
                 }
             }
             if (now - lastServerMessage > idleTimeout) {
@@ -280,6 +267,39 @@ public final class Executor {
                 return;
             }
         }
+    }
+
+    /** One event of the loop; false when the executor should stop. */
+    private boolean handle(Event e) throws IOException {
+        if (e instanceof ServerEnd) {
+            return false;
+        }
+        if (e instanceof ServerLine l) {
+            Message m = l.message();
+            switch (m.type()) {
+                case "battle" -> {
+                    Map<String, Object> spec = m.map("spec");
+                    waiting.add(new Battle(m.longValue("id"), spec, m.longValue("timeout") * 1000,
+                            Boolean.TRUE.equals(spec.get("debug"))));
+                    dispatch();
+                }
+                case "deploy" -> deploy(m.string("file"), m.string("sha"));
+                case "ping" -> server.send(Message.of("pong", "busy",
+                        slots.stream().filter(s -> s.battle != null).count(), "waiting", waiting.size()));
+                case "shutdown" -> {
+                    return false;
+                }
+                default -> log("unknown message " + m.type());
+            }
+        } else if (e instanceof SlotLine l && current(l.slot(), l.generation())) {
+            slotMessage(slots.get(l.slot()), l.message());
+        } else if (e instanceof SlotExit x && current(x.slot(), x.generation())) {
+            SlotProcess slot = slots.get(x.slot());
+            String reason = "slot " + slot.index + " ended with " + x.code() + ": " + output(slot);
+            failCurrent(slot, reason);
+            restart(slot, reason);
+        }
+        return true;
     }
 
     private boolean current(int slot, int generation) {
@@ -303,6 +323,11 @@ public final class Executor {
             case "error" -> {
                 failCurrent(slot, m.string("message"));
                 dispatch();
+            }
+            case "leaving" -> {
+                // Its battle's result follows, then the slot ends (Slot, exit code 4); no new battle meanwhile.
+                slot.ready = false;
+                slot.leaving = true;
             }
             default -> log("slot " + slot.index + ": unknown message " + m.type());
         }
@@ -375,18 +400,22 @@ public final class Executor {
             if (!actual.equals(sha)) {
                 throw new IOException(file + " has SHA-256 " + actual + ", not " + sha);
             }
-            if (!deployed.contains(jar)) {
-                deployed.add(jar);
-            }
             for (SlotProcess slot : slots) {
                 // The engine rescans its robots directory before every battle (BattleRunner.repository). A jar that
                 // is there already (from the bundle) stays: Windows does not let us replace a jar the engine has open.
+                // A new one is copied under another name first and then moved, so a scan never reads half a jar.
                 Path target = slot.home.resolve("robots").resolve(file);
                 if (!Files.exists(target)) {
-                    Files.copy(jar, target);
+                    Path part = target.resolveSibling(file + ".part");
+                    Files.copy(jar, part, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(part, target, StandardCopyOption.ATOMIC_MOVE);
                 } else if (!sha256(target).equals(sha)) {
                     throw new IOException(file + " is in slot " + slot.index + " with other content");
                 }
+            }
+            // Only now: a slot started later copies every deployed jar, and one that failed here must not be among them.
+            if (!deployed.contains(jar)) {
+                deployed.add(jar);
             }
             server.send(Message.of("deployed", "file", file));
         } catch (IOException | RuntimeException e) {
@@ -403,9 +432,12 @@ public final class Executor {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        if (++slot.restarts > MAX_RESTARTS_PER_SLOT) {
-            log("slot " + slot.index + " restarted too often; left stopped (" + reason + ")");
-            return;
+        // A slot that left on its own after a battle (a robot's threads outlived it) is healthy: not counted. One
+        // that keeps failing ends the executor, so that the server sees it and starts a fresh one later, instead of
+        // a slot that quietly plays no more.
+        if (!slot.leaving && ++slot.restarts > MAX_RESTARTS_PER_SLOT) {
+            throw new IOException("slot " + slot.index + " restarted more than " + MAX_RESTARTS_PER_SLOT
+                    + " times; the last: " + reason);
         }
         server.send(Message.of("restart", "slot", slot.index, "reason", reason));
         start(slot);
@@ -417,6 +449,8 @@ public final class Executor {
         prepareHome(slot.home, all, cpuConstant);
         Files.createDirectories(slot.tmp);
         int generation = ++slot.generation;
+        slot.leaving = false;
+        slot.startedAt = System.currentTimeMillis();
         List<String> command = slotCommand(slot.tmp, slot.debug ? List.of("-Ddebug=true") : List.of(),
                 Slot.class.getName(), List.of(slot.home.toString()));
         ProcessBuilder pb = new ProcessBuilder(command).directory(slot.home.toFile())
@@ -430,7 +464,13 @@ public final class Executor {
                     StandardCharsets.US_ASCII))) {
                 String line;
                 while ((line = r.readLine()) != null) {
-                    Optional<Message> m = Protocol.parse(line);
+                    Optional<Message> m;
+                    try {
+                        m = Protocol.parse(line);
+                    } catch (RuntimeException e) {
+                        // A line the slot did not write whole (e.g. a JVM warning inside it): keep reading.
+                        m = Optional.empty();
+                    }
                     if (m.isPresent()) {
                         events.add(new SlotLine(slot.index, generation, m.get()));
                     } else {
@@ -500,7 +540,7 @@ public final class Executor {
         List<String> rejected = new ArrayList<>();
         jars = robotJars(rejected);
         rejected.forEach(r -> System.err.println("foreign jar left out: " + r));
-        Measurement m = cpuConstant(o.has("remeasure"));
+        Measurement m = cpuConstant(Boolean.parseBoolean(o.get("remeasure", "false")));
         long constant = Math.round(m.idle() * cpuFactor);
         idleConstant = m.idle();
         System.err.printf(Locale.ROOT, "CPU constant %d ns (measured %d x %.2f; samples %s)%n", constant, m.idle(),

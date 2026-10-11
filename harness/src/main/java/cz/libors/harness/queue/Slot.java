@@ -27,7 +27,11 @@ import java.util.Set;
  * <p>Reads {@code battle} messages ({@link BattleSpec}) from standard input and answers each with {@code result} (the
  * outcome, with the recording in Base64 if the spec asks for one) or {@code error}. {@code measure} runs one short
  * battle in a home without a CPU constant, so that the engine measures it, and answers {@code measured}. Ends on
- * {@code quit} or at the end of input. Everything else the process prints goes to standard error.
+ * {@code quit} or at the end of input (exit code 0). After a battle whose robots left threads running
+ * ({@link #STOP_GRACE_MILLIS}) it ends with exit code 4, and with 3 when that battle's robot data cannot be cleared
+ * ({@link BattleRunner.RobotDataNotCleared}); it says {@code leaving} before that battle's result, and the executor
+ * restarts the slot. A slot that fails ends with exit code 1 and its stack trace. Everything else the process prints
+ * goes to standard error.
  *
  * <p>Usage: {@code Slot <robocodeHome>}.
  */
@@ -36,7 +40,20 @@ public final class Slot {
     private Slot() {
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
+        int exit = 0;
+        try {
+            serve(args);
+        } catch (Throwable t) {
+            t.printStackTrace();
+            exit = 1;
+        } finally {
+            // The engine leaves non-daemon threads behind.
+            System.exit(exit);
+        }
+    }
+
+    private static void serve(String[] args) throws IOException {
         Channel out = Protocol.takeStandardOutput();
         Path home = Path.of(args[0]);
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.US_ASCII));
@@ -55,7 +72,22 @@ public final class Slot {
                 }
                 Message m = parsed.get();
                 switch (m.type()) {
-                    case "battle" -> out.send(battle(runner, m));
+                    case "battle" -> {
+                        Message result = battle(runner, m);
+                        List<String> alive = threadsLeft(runner);
+                        int exit = alive.isEmpty() ? (dataCleared(runner) ? 0 : 3) : 4;
+                        if (exit == 0) {
+                            out.send(result);
+                        } else {
+                            // "leaving" first, so that the executor gives this slot no other battle.
+                            String reason = exit == 4 ? "robot threads still running after the battle: " + alive
+                                    : "the robots' data of the battle cannot be cleared";
+                            System.err.println(reason);
+                            out.send(Message.of("leaving", "reason", reason));
+                            out.send(result);
+                            System.exit(exit);
+                        }
+                    }
                     case "measure" -> {
                         runner.run(new BattleSetup("cpu constant", 800, 600, 1,
                                 List.of("sample.TrackFire", "sample.SittingDuck"), 1L));
@@ -67,9 +99,43 @@ public final class Slot {
                     default -> System.err.println("slot: unknown message " + m.type());
                 }
             }
-        } finally {
-            // The engine leaves non-daemon threads behind.
-            System.exit(0);
+        }
+    }
+
+    /**
+     * How long a robot's thread may outlive its battle. The engine gives up on a thread that ignores its interrupt
+     * and leaves it running (engine-model G-48); one that loops never ends and would take a core from every later
+     * battle on the machine, so the slot ends and a new JVM takes its place.
+     */
+    static final long STOP_GRACE_MILLIS = 3000;
+
+    /** The last battle's robot threads still alive after {@link #STOP_GRACE_MILLIS}; empty at once if none are. */
+    private static List<String> threadsLeft(BattleRunner runner) {
+        long deadline = System.currentTimeMillis() + STOP_GRACE_MILLIS;
+        List<String> alive = runner.robotThreadsAlive();
+        while (!alive.isEmpty() && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            alive = runner.robotThreadsAlive();
+        }
+        return alive;
+    }
+
+    /**
+     * Clears the robots' data right after the battle, while its result is still here: a file a robot left open then
+     * restarts this slot (exit code 3) without costing the next battle anything.
+     */
+    private static boolean dataCleared(BattleRunner runner) {
+        try {
+            runner.clearRobotData();
+            return true;
+        } catch (BattleRunner.RobotDataNotCleared e) {
+            e.printStackTrace();
+            return false;
         }
     }
 
@@ -99,6 +165,12 @@ public final class Slot {
             } finally {
                 Files.deleteIfExists(file);
             }
+        } catch (BattleRunner.RobotDataNotCleared e) {
+            // Rare since the data is cleared after every battle too: a new JVM in a fresh home frees the file. The
+            // executor restarts the slot and reports this battle failed, so its job tries it again.
+            e.printStackTrace();
+            System.exit(3);
+            throw e;
         } catch (IOException | RuntimeException e) {
             e.printStackTrace();
             return Message.of("error", "id", id, "message", e.toString());

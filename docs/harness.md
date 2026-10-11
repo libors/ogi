@@ -8,12 +8,13 @@ results. Every score claim about the bot must come from here.
 | Class | Role |
 |---|---|
 | `BattleSetup` | A battle: label, field size, rounds, contestants (`sample.Walls`, `cz.libors.Ogi 0.1`, teams by name), seed, optional fixed starts |
-| `BattleRunner` | Owns one `RobocodeEngine`; resolves contestants from the local repository, seeds the battle and runs it synchronously, optionally with extra listeners |
-| `BattleOutcome` | Results sorted by score, the seed used, skipped turns per robot, problems (engine errors, exceptions in robot output), robot rounds that missed their fixed start, bullets fired and hits per contestant, elapsed time |
+| `BattleRunner` | Owns one `RobocodeEngine`; resolves contestants from the local repository, clears the robots' data, seeds the battle and runs it synchronously, optionally with extra listeners; lists the robot threads still alive after a battle |
+| `BattleOutcome` | Results sorted by score, the seed used, skipped turns per robot, problems (engine errors, exceptions in robot output), robot rounds that missed their fixed start, bullets fired and hits per contestant, our robots' own turn times, elapsed time |
 | `Starts` | Fixed starts drawn from a seed, and their engine string |
 | `ContestantResult` | Score components per contestant: total, survival, last survivor bonus, bullet damage and bonus, ram damage and bonus, firsts |
 | `SkeletonCheck` | Runs a fixed set of checks and writes `harness/build/skeleton-check.json` |
 | `ProbeRecordings` | Records probe battles and checks their integrity, coverage and determinism; see [Recordings](#recordings) |
+| `StrandedThreadCheck` | Part of `recordProbes`, in a JVM of its own without debug mode: a robot thread that stops calling the API outlives its battle (engine-model G-48) |
 | `recording.TurnRecorder` | Battle listener that writes a recording: every robot and bullet in every turn, plus debug properties |
 | `recording.Recording` | Reads a recording back into memory; no Robocode classes, so tests can use it without an engine |
 | `Json` | Minimal JSON writer and reader for records, lists and maps; one-line ASCII form for the queue's protocol |
@@ -21,7 +22,7 @@ results. Every score claim about the bot must come from here.
 | `compare.Sprt`, `compare.Stratum` | The stratified sequential test and the per-opponent paired statistics |
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
 | `compare.RecordBattles` | Records the battles of a comparison turn by turn; see [Recording comparison battles](#recording-comparison-battles) |
-| `gunbench.GunBench`, `gunbench.GunBattle`, `gunbench.GunReplay` | The offline gun bench (source set `gunBench`): replays the gun's logs with other gun parameters; see [Gun bench](#gun-bench) |
+| `gunbench.GunBench`, `gunbench.GunBattle`, `gunbench.GunReplay`, `gunbench.GunTrend` | The offline gun bench (source set `gunBench`): replays the gun's logs with other gun parameters, and the hit rate early against late in battles; see [Gun bench](#gun-bench) |
 | `dangerbench.DangerBench`, `dangerbench.DangerBattle`, `dangerbench.DangerReplay` | The offline danger bench (source set `gunBench` too): replays the enemy bullets of full recordings through the surfer's danger model; see [Danger bench](#danger-bench) |
 | `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
 | `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
@@ -29,7 +30,8 @@ results. Every score claim about the bot must come from here.
 | `queue.Server`, `queue.Dashboard` | The queue's server on this machine: jobs, workers, the web page; see [Queue](#queue) |
 | `queue.Executor`, `queue.Slot` | The worker side: slots, each a JVM with a Robocode home of its own, driven over standard input and output |
 | `queue.Submit`, `queue.QueueClient`, `queue.Remote` | Queue a job; the queue from a terminal; run one main class on a Windows worker |
-| `queue.QueueJob`, `compare.CompareJob` | A job in the queue; a comparison run as one, with pairs on many slots at once |
+| `queue.QueueJob`, `compare.CompareJob`, `compare.RecordJob` | A job in the queue; a comparison run as one, with pairs on many slots at once; recordings as one |
+| `queue.BattleCache` | Battles already played or being played, shared between jobs; see [Battle cache](#battle-cache-queuebattlecache) |
 | `queue.Protocol`, `queue.BattleSpec`, `queue.Ssh`, `queue.WorkerConfig` | Line protocol, a battle and its outcome on the wire, ssh and scp to Windows, where things are on a worker |
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
@@ -60,19 +62,62 @@ The probe robots live in their own module, `probe/` (package `cz.libors.probe`).
     because more of its bullets are in flight at the kill (5–16 % of Ogi's bullets against the lab set).
   - Hit rates are therefore "hits per bullet that could still hit". A stationary target that is hit every time
     shows 100 %.
-- **Own turn times (P-04):** our robots report the wall time of their previous turn in the debug property `cpu`
+- **Own turn times:** our robots report the wall time of their previous turn in the debug property `cpu`
   ([bot.md](bot.md#debug-overlay-czliborsogitrace)). `BattleOutcome.turnTimes` keeps per robot the number of turns
   reported, the longest, and how many took longer than half the CPU constant of an idle machine and than all of it:
   the home's constant locally, the executor's measured idle constant on a queue worker, whose slots run with a raised
   one. The engine would skip a turn only later than the constant (engine-model G-45), so these counts see a robot
   growing heavy before skipped turns do.
   - On a loaded worker the wall time includes the other battles' load and the garbage collections of the slot's JVM,
-    which the opponent's allocations trigger too. With 12 battles at once on the desktop (2026-10-09) Ogi's longest
+    which the opponent's allocations trigger too. With 12 battles at once on the Windows worker (2026-10-09) Ogi's longest
     turns were 23 ms (lab set) and 70 ms (against BeepBoop and Diamond), and 10–37 turns per job went over the idle
     constant. So the gate for Ogi's own weight is the skeleton check on an idle machine; the queue shows the counts
     as health.
 - **Matching:** a contestant is matched by name prefix. Team results are named after the team plus an index, e.g.
   `cz.libors.OgiTeam 0.1 (1)`.
+
+## Robot data
+
+Every battle starts with empty robot data, apart from what the exceptions below keep: `BattleRunner` deletes the
+home's `robots/.data/` before each battle, and a queue slot again right after each battle.
+
+- **Why:** the engine gives every robot from a jar a data directory, `robots/.data/<package>/<Class>.data/`, and
+  keeps it across battles. Some opponents save what they learned about an enemy there and read it in their next
+  battle against it, some under a key without our version. Without the clearing, a battle would depend on the
+  battles its home played before, e.g. a baseline's battle on the candidate's, and the battles of one executor run
+  would not be independent.
+- **What it means:** the harness measures every pairing as a first meeting. A rumble client keeps its robots' data,
+  so in the rumble such robots meet us with what they saved before.
+- Data a robot ships inside its jar stays: the engine copies it from the jar again when the robot starts
+  (engine-model G-47).
+- Robocode's samples are loaded from class directories and keep their data next to their classes; only
+  `sample.SittingDuck` writes any, a battle count it prints.
+- **If a file cannot be deleted** (on Windows, one a robot left open: the engine does not close robots' streams;
+  seen on the Windows worker on 2026-10-11), `BattleRunner` runs a garbage collection, which closes streams nothing
+  references any more, and tries again, three times in all. If the file still cannot be deleted, it throws
+  `BattleRunner.RobotDataNotCleared`. A queue slot, which clears right after the battle, then sends that battle's
+  result with `leaving` before it and exits with code 3, and the executor restarts it in a fresh home: no other
+  battle is charged. Should the clearing before a battle fail anyway, that battle fails and its job tries it again.
+  A local `compare` stops with the exception; run it again and it resumes.
+- **Checked by** `recordProbes` ("Robot data is kept from round to round and cleared before every battle").
+- Logs of `compare` carry `robotData=cleared` in their configuration, so a log from before the clearing is not
+  resumed; the battle cache's key has version 2 for the same reason.
+
+## Robot threads that outlive their battle
+
+The engine stops a robot only by interrupting its thread and waiting for it; a robot stuck in a loop that never
+calls the robot API keeps its thread, which runs on after the battle and takes a core until its JVM ends
+(engine-model G-48). On the queue's worker one such robot slowed all 12 slots: its four battles left 18 threads
+computing, and Ogi skipped tens of thousands of turns in the battles of the next 25 minutes (2026-10-11).
+
+- After every battle a queue slot looks for threads of the battle's robots that are still alive
+  (`BattleRunner.robotThreadsAlive`: robot threads run in a thread group named after their robot as the battle
+  names it, or in a group inside that one). If any is left after 3 s, the slot says `leaving`, sends the result and
+  exits with code 4; the executor restarts it in a fresh JVM without counting it against the slot's restart limit.
+  The battle itself counts: the stuck robot slowed it as it would slow a rumble client.
+- A battle in the harness's own JVM (`compare` on this machine, the checks) leaves such a thread running until the
+  JVM ends.
+- **Checked by** `recordProbes` ("A robot thread that stops calling the API outlives its battle").
 
 ## Seeds and determinism
 
@@ -112,7 +157,9 @@ no rule of the game; the digests are identical with and without it.
 | `MathRandomProbe` | `Math.random()` | shows that a seed does not control `Math.random()` |
 | `UtilsRandomProbe` | `Utils.getRandom()`, none once dead (engine-model G-34) | shows that a seed controls `Utils.getRandom()` |
 | `UtilsDrawProbe` | like `RandomProbe`, plus one discarded `Utils.getRandom()` draw per number used | shows that robots share the engine's generator |
+| `DataProbe` | like `RandomProbe`; counts the rounds it started in a file in its data directory and reports what the file held (`data`) | shows that robot data persists within a battle and is cleared before the next |
 | `SandboxProbe` | none | tries what the sandbox must block; used by `sandboxCheck`, not recorded ([Foreign robots](#foreign-robots)) |
+| `SpinProbe` | none | computes for 20 s without calling the robot API after three turns; used by the stranded-thread check, not recorded ([Robot threads](#robot-threads-that-outlive-their-battle)) |
 
 - **Commands:** every turn each command channel gets a new random command with a per-round probability: ahead,
   body, gun and radar turns, max velocity, max turn rate, the three adjust flags, fire.
@@ -163,6 +210,8 @@ end     round  turns
 | Shared generator | `RandomProbe` and `UtilsDrawProbe` with one seed start round 1 at the same positions and round 2 elsewhere |
 | Fixed starts | 8 probes on 400×400 with a start each, one on top of another and one with an exponent in its heading: every robot round starts exactly there unless a robot is in the way (engine-model G-41), and each case occurs |
 | Own jar | the repository lists `cz.libors.Ogi <v>` from the robot jar and the team jar; `BattleRunner` picks the robot jar (G-42) |
+| Robot data | two battles in a row of `DataProbe` against `RandomProbe`: in both, the file is empty in round 1 (`getDataFile` creates it, G-47) and holds 1 in round 2 ([Robot data](#robot-data)) |
+| Stranded thread | `SpinProbe` stops calling the API and computes for 20 s, `sample.TrackFire` kills it, in a JVM of its own without debug mode (in debug mode the engine waits for the stuck turn instead, G-17): its thread is alive after the battle, takes most of a core and is gone once the probe stops by itself (G-48, [Robot threads](#robot-threads-that-outlive-their-battle)) |
 
 Scenarios, each with seeds 1, 2 and 3: `duel` (2 probes, 800×600, 3 rounds), `crowd` (6 probes, 400×400, 3 rounds,
 many collisions), `melee` (10 probes, 1000×1000, 2 rounds), `inactive` (2 passive probes, 800×600, 1 round),
@@ -179,7 +228,7 @@ and writes everything to `harness/build/recordings/summary.json`.
 | `cz.libors.OgiTeam` vs `sampleteam.MyFirstTeam` | 1200×1200 | 10 | score share ≥ 70 % |
 
 All checks also require zero skipped turns and no problems, and in the battle against `sample.SittingDuck`, which
-never fires, no bullet counted for it. Of our robots' own turns (P-04) at most 0.5 % may take longer than half the
+never fires, no bullet counted for it. Of our robots' own turns at most 0.5 % may take longer than half the
 CPU constant and at most 0.05 % longer than all of it; Ogi has 0–5 over half per battle (2026-10-09), once a single
 turn of 2.1 ms against a 2.0 ms constant (a garbage collection or the JIT), and an Ogi that spends 1.2 ms per turn
 fails every battle without a single skipped turn. The process exits non-zero on any failure.
@@ -227,12 +276,14 @@ compares uncommitted changes with `HEAD`:
 A text file per set in `harness/opponents/`: an optional `title` line that says in words what the set is (the
 dashboard shows it), a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10 rounds), then one robot or
 team per line as Robocode lists it, including its version. A line `[name]` starts a group: opponents under
-`[strong]` form the second scoreboard, every other group but `[other]` a scoreboard of its own (e.g. rumble tiers);
+`[strong]` form a scoreboard after the overall one (and after the rumble estimate, if there are weights), every other
+group but `[other]` a scoreboard of its own (e.g. rumble tiers); `[all]` and `[rumble]` are reserved;
 a group may start again further down. Lines `weight [name] n` say how many robots of the rumble each group stands
 for (e.g. a tier's size); with them every group needs a weight, and the report adds a rumble estimate (below). Only trusted robots are in the repository: `sample-1v1.txt` and
-`sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes, whose version
-follows `botVersion`), for gun and movement work. Sets of rumble bots belong next to their jars on the machine that
-runs them.
+`sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes; their lines
+carry `botVersion` and must be edited when it changes), for gun and movement work. Sets of rumble bots stay out of
+git, in `.robocode/foreign/` on this machine (`-Popponents=.robocode/foreign/<set>.txt`); the jars they name must be
+on the machine that plays the battles (for the queue, the worker's `C:\ogi\rumble`).
 
 ### Method
 
@@ -250,7 +301,12 @@ runs them.
 - **Stopping rule:** fishtest's normal approximation of the generalized SPRT, `LLR = (δ1 − δ0)(2Δ̂ − δ0 − δ1)/(2V)`,
   with α = β = 0.05: H1 at LLR ≥ 2.94, H0 at LLR ≤ −2.94. No decision before the burn-in and before the pooled
   variance has 20 degrees of freedom; with fewer, a variance underestimated by chance ends the test after a few
-  pairs. Unit tests simulate the test at both hypotheses: error rates and lengths match the theory.
+  pairs. Unit tests simulate the test at both hypotheses: error rates and lengths match the theory for one
+  opponent; with 10–30 opponents a simulation gave 7.5–9 % errors at the bounds instead of 5 % (2026-10-11).
+- **The interval after a stop** is the fixed-sample one, ±1.96 standard errors at the pairs the test stopped at. A
+  sequential stop makes it too narrow (in simulations it covered the true difference 81–92 % of the time instead of
+  95 %), so a "Better by" or "Worse by" of a stopped test is weaker evidence than it reads; fixed mode is not
+  affected.
 - **Scoreboards:** the test measure of both versions over all opponents and over the strong ones, with the
   difference and its 95 % interval; beside it APS (mean score share), PWIN (share of battles won), the version's hit
   rate and the opponents' hit rate on it, each opponent weighing the same. Hit rates pool the bullets of all pairs.
@@ -325,12 +381,15 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   in each turn the waves that passed teach the model, then the turn's plan asks it. The movement, the fire timing
   and the bullet power stay as recorded.
 - **Parameters:** `weights` (10, in the order of `TargetingFeatures`), `neighbourScale`, `maxNeighbours`,
-  `virtualWeight`, `minTries`; the rest come from `GunParameters.DEFAULT`.
+  `virtualWeight`, `minTries`; the rest come from `GunParameters.DEFAULT`. They are the main gun's: the anti-surfer
+  gun keeps its own fixed copy (`GunParameters.ANTI_SURFER`). `-Probot=<prefix>` picks the logged robot by name
+  prefix (default `cz.libors.Ogi`).
 - **`-Pselection=<tsv>`** (columns `stratum` and `name`) adds the mean `fired %` per stratum.
 - **`-Ptune=<passes>`:** a coordinate search from the given parameters that maximises the mean over opponents of
   `fired %` on half of the opponents, and reports both halves with the start and the tuned parameters: per stratum
-  the means, the mean per-opponent change with its 95 % interval, and how many opponents went up and down. It ends
-  with the tuned parameters as `-P` options.
+  the means, the mean per-opponent change with its 95 % interval, and how many opponents went up and down. Each
+  parameter in turn takes the best of its candidates if that beats the current value by more than 0.01 points; a
+  value of 0 tries 0.05 to 2. It ends with the tuned parameters as `-P` options, every digit printed.
   - **Left out:** opponents that shoot down more than `-PmaxShielded` (default 0.15) of our bullets, because they aim
     at our aim and the replay cannot answer for a new one; and opponents that never get a bullet. Accidental bullet
     collisions stay below ~14 %; bullet shielders are well above.
@@ -360,9 +419,11 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   counts them as misses, so its rate stays a little lower against these robots.
 - `./gradlew gunTrend -Plogs=<dir>` compares the fired hit rate in the first 10 rounds of each battle with the last 10
   (`-Prounds`), per opponent, sorted by the change over its standard error.
-- **`fired %` against `harness %`:** checked bullet by bullet on four lab battles (2026-10-09). Every bullet whose
-  wave passed the target got the verdict the engine gave it, except bullets destroyed by an enemy bullet, which the
-  bench now leaves out (`shielded`). The two counts differ only in which bullets they include:
+- **`fired %` against `harness %`:** checked bullet by bullet on four lab battles (2026-10-09), before the aim spread
+  and the shadow shots: every bullet whose wave passed the target got the verdict the engine gave it, except bullets
+  destroyed by an enemy bullet, which the bench leaves out (`shielded`). Since then the turret fires a few pixels off
+  the gun's aim (aim spread), or at another peak (shadow shots), and the log keeps only the gun's aim: `fired %` scores
+  the guns' aims, as they learn them, not the bullets that flew. The two counts differ only in which bullets they include:
   - the bullet that kills the target counts for the harness, but its wave never passes (a dead target is not
     scanned), so the bench and the bot never see it: one hit per round won;
   - a bullet that has passed the target but is still flying when the round is decided counts for the bench, not for
@@ -395,16 +456,18 @@ never sees. The bench replays each battle through the bot's own `DangerModel`, `
 ./gradlew dangerBench -Precordings=<dir> -PknnShare=0.8 -PknnRamp=20 -Ptune=4
 ```
 
-- **Input:** full recordings (`recordBattles`, `submitRecordings`) of `cz.libors.Ogi` (`-Probot`) in 1v1. Gun logs
-  have no robots or bullets.
+- **Input:** full recordings (`recordBattles`, `submitRecordings`) of `cz.libors.Ogi` (`-Probot`) in 1v1; without
+  `-Precordings` it reads `harness/build/battle-recordings/<botVersion>`, the default `recordBattles` output. Gun
+  logs have no robots or bullets.
 - **Replay** (`DangerBattle`, `DangerReplay`): every enemy bullet becomes a wave as the surfer sees one with radar
   lock ([fire-detection.md](fire-detection.md)): detected in its first recorded turn f, fired in f − 1 from the
   enemy's position then, aimed from our state of f − 2. In each turn the model first learns the bullets that ended
   on us or on one of our bullets after their wave appeared, then gives each new wave its profile. One model per
   battle, as the bot keeps one per enemy for the battle.
 - **Score per bullet:** the profile's share over the bullet's guess factor ± half our width seen from the origin
-  (`DangerModel.mass`, the sum the surfer takes over a hit range). The report gives per opponent the mean
-  logarithm of that share (`mean ln`, higher is better; a uniform profile scores about −2.75), its mean (`mass %`)
+  (`DangerModel.mass`, the sum the surfer takes over a hit range; the surfer's hit ranges are about 1.3 times as wide
+  as this window). The report gives per opponent the mean logarithm of that share (`mean ln`, higher is better; a
+  uniform profile scores about −2.3 to −2.4 on real recordings), its mean (`mass %`)
   and its mean over the bullets that hit us (`hits %`); then the mean over opponents, per stratum with
   `-Pselection=<tsv>` (columns `stratum` and `name`).
 - **Parameters:** `-Ppreset=default|histogram` (`DangerParameters.DEFAULT` or the single histogram the surfer had
@@ -416,7 +479,10 @@ never sees. The bench replays each battle through the bot's own `DangerModel`, `
   advances it) teaches the flattener where we were, unless the surfer had dropped it on learning its bullet.
 - **`-Ptune=<passes>`:** a coordinate search from the given parameters that maximises the mean over opponents of
   `mean ln` on the recordings of pair 0, and reports the start, the result and the histogram on pair 0 and on the
-  other pairs (other seeds).
+  other pairs (other seeds of the same opponents). An opponent whose bullets score NaN with some parameters makes the
+  objective NaN, so such parameters never win.
+- **Our lateral velocity** goes into the pattern and averaged guns' history only in the turns our radar saw the enemy
+  and while we live, as online (the bench replays the engine's scan, `RadarScan`).
 - **Limits:**
   - The recorded movement came from the recorded bot's surfer. Another model moves us elsewhere, and a learning gun
     then learns other things; the bench shows how well a model predicts, not the score. `compare` decides.
@@ -469,8 +535,8 @@ jar with anything in those packages, and `deployBots` runs the jar check.
     constant pool names, lambdas and bootstrap methods included.
   - **What it cannot see:** where a robot reads and writes files at run time; that stays with the sandbox.
   - The rules are in `foreign.ApiRules`. Checked as our own (`JarCheck.check(jar, true)`, without the package
-    rule), Ogi's jars, the probes (except `SandboxProbe`) and the sample robots pass; `sample.SittingDuck` is
-    flagged for reading its data file.
+    rule), Ogi's jars, the probes (except `SandboxProbe`) and the sample robots pass; `sample.SittingDuck` and
+    `cz.libors.probe.DataProbe` are flagged for reading their data files.
 - **Reading the code:** `./gradlew decompileJar -Pjar=<jar>` decompiles a jar with Vineflower into
   `harness/build/decompiled/<jar name>/`. Source files shipped in the jar are left out, so what you read is what
   runs.
@@ -502,10 +568,16 @@ is waiting.
   log, runs the test and serves the dashboard on the loopback interface only. It stops a worker's executor after five
   idle minutes. Everything a job knows is on disk, so a restarted server resumes its jobs.
 - **Executor** (`queue.Executor`, on the worker): started by the server, over ssh for a Windows worker, as a local
-  process for `local`. It keeps no state between runs and knows nothing about jobs. It prepares one Robocode home per
-  slot, starts the slots, runs each battle the server sends on a free slot and sends the outcome back. It ends, with
-  its slots, at the end of its input, on `shutdown`, or after 90 s without word from the server (which pings every
-  20 s): Windows does not end a process when its ssh session drops.
+  process for `local`. It keeps no job state between runs (only the CPU constant it measured). It prepares one
+  Robocode home per slot, starts the slots, runs each battle the server sends on a free slot and sends the outcome
+  back. A slot that ends is restarted in a fresh home; one that has to be restarted more than 10 times (its own
+  `leaving` exits not counted), or that does not start within 3 minutes 10 times, ends the executor, so that the
+  server starts a fresh one later. The executor ends, with its slots, at the end of its input, on `shutdown`, or
+  after 90 s without word from the server (which pings every 20 s): Windows does not end a process when its ssh
+  session drops.
+- **Slot exit codes:** 0 at the end of its input, 1 when it fails (with the stack trace in its log), 3 and 4 after a
+  battle whose robot data cannot be cleared or whose robot threads outlive it ([Robot data](#robot-data),
+  [Robot threads](#robot-threads-that-outlive-their-battle)).
 - **Slot** (`queue.Slot`): one JVM with one engine, one battle at a time. Robocode keeps static state in the JVM, so
   battles at once need JVMs of their own.
 - The server pushes work to the workers, because it can reach them over ssh while they cannot reach it (the worker's
@@ -517,7 +589,7 @@ is waiting.
 
 | Name | Where | Foreign robots |
 |---|---|---|
-| `local` | this machine, as a local process, in `.robocode/queue/workers/local/` | no (D-020: statistics against foreign robots run on the desktop) |
+| `local` | this machine, as a local process, in `.robocode/queue/workers/local/` | no: statistics against foreign robots run on the Windows worker |
 | any other | an ssh host with the native Windows layout: Java 17 in `C:\ogi\jdk`, the executor's files under `C:\ogi`, approved foreign jars in `C:\ogi\rumble` | yes |
 
 - **Bundle:** at each connection the server makes the worker's `C:\ogi\bundle` equal to `harness/build/worker-bundle`
@@ -549,7 +621,10 @@ is waiting.
   the server picks a job up within seconds. Its jars are copied into `.robocode/queue/jars/`, where a name stands for
   one content.
 - Options: those of `compare` (`opponents`, default the lab set; `bounds`, `maxPairs`, `pairsPerOpponent`, `starts`,
-  `seed`, `rounds`, `metric`), `note` (shown on the dashboard) and `timeout` (seconds per battle, default 900).
+  `seed`, `rounds`, `metric`), `note` (shown on the dashboard) and `timeout` (seconds per battle; default 900 for a
+  comparison, 300 for a recording, where a hung robot in debug mode holds its slot until then). Options are checked
+  before a job is queued: whole numbers in range, `maxPairs` at least the test's burn-in of 2 pairs per opponent, our
+  own robots as subjects.
 - **Order:** jobs run in queue order, the first job that has work for a free slot gets it. Moving a job up on the
   dashboard lets it take the slots as they free up; the job it passed keeps its state. A job waits while its jars
   are being copied, and later jobs use the slots meanwhile.
@@ -571,7 +646,7 @@ configuration line, so its `battles.tsv` reads like a local one:
 - `dispatch.tsv`: one line per battle: when it ended, the worker and slot, the battle, how long it waited for a slot,
   how long it took, and how it ended (`ok`, with our robots' longest own turn and the turns over half the idle
   constant and over it; `failed: …`; `lost: …`). `problems.log` as in `compare`.
-- The job's health on the dashboard adds the versions' own turn times (P-04) from the battles of the current server
+- The job's health on the dashboard adds the versions' own turn times from the battles of the current server
   run; they are not in the log, so a restarted server starts counting anew.
 - Checked on 2026-10-09: a job of 2 pairs per opponent on four local slots gave, battle for battle, the same seeds,
   score shares and shots as the sequential `compare`. On the Windows worker the same job differs in some battles
@@ -612,7 +687,8 @@ job type `record` takes any robot and keys (`queue.Submit`).
   that exists is not played again: a restarted server goes on where it stopped.
 - **In debug mode by default**, like `recordBattles` (engine-model G-17): a battle can ask for it
   (`BattleSpec.debug`), and the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag
-  once per JVM. A job's battles all want the same mode, so each slot switches once when such a job starts. Without
+  once per JVM. A job's battles all want the same mode, and a worker plays one mode at a time: while battles of one
+  mode are under way on it, jobs of the other mode wait (mixing them made the slots switch back and forth). Without
   debug mode a robot that skips a turn can lose that turn's debug properties (its late commands are replaced, as in
   engine-model G-34): on 2026-10-09 the gun bench's parity failed against 4 of 125 opponents, each one where Ogi had
   skipped turns (141 of 2.4 million decisions, one wave without its plan).
@@ -627,14 +703,21 @@ The server keeps every battle a comparison played in `<state>/battle-cache.jsonl
 from there instead of playing it again. After A vs B, a comparison of B with C plays only C's battles: a pair's seed
 comes from the run seed, the opponent and the pair's number, so B meets the same opponents on the same seeds.
 
-- **The same battle:** the field, the rounds, the seed, the start positions, each participant's name and the SHA-256
-  of its jar (ours from the job, the opponents' as each slot resolves them, `BattleRunner.repositoryJars`; "builtin"
+- **The same battle:** the key's version (2 since every battle starts with empty robot data, see
+  [Robot data](#robot-data); battles of version 1 stay in the file and are no longer used), the field, the rounds,
+  the seed, the start positions, each participant's name and the SHA-256 of its jar (ours from the job, the opponents' as each slot resolves them, `BattleRunner.repositoryJars`; "builtin"
   for Robocode's own robots), and the worker with its operating system, Java, Robocode, JVM options, CPU factor and
-  sandbox. The CPU constant is left out: the worker measures it anew at every start (a few per cent of jitter).
+  sandbox. The CPU constant is left out: the executor measures it once and keeps it (`state/cpu-constant.properties`),
+  so it is the same for every battle; after measuring it again, raise `BattleCache.VERSION`. A harness change that
+  alters battles raises it too (version 2: robot data cleared before every battle).
+- **Jobs that run at once** share battles: a job claims a battle before it plays it, and another job that needs the
+  same battle waits for that outcome (counted as reused); if it does not come back, the waiting job plays it. Claims
+  live in memory only.
 - **Never cached:** a battle against an opponent whose jar the worker did not report, recorded battles and battles in
   debug mode.
 - A cached outcome is one sample of its battle, not a replay of it (robots that skip turns do not repeat bit for bit),
-  so it serves as well as a new one. `-Preuse=false` plays every battle anew; another `-Pseed` gives other battles.
+  so it serves as well as a new one. `-Preuse=false` plays every battle anew and neither reads nor writes the cache;
+  another `-Pseed` gives other battles.
 - The job counts reused battles (`reusedBattles`, shown on the dashboard); its rate and ETA count only battles played.
 
 ### Dashboard
@@ -646,13 +729,15 @@ It is written for a human watching the queue: words first, numbers in tooltips a
 refreshes every 2 s and keeps open the sections the viewer opened.
 
 - **Workers:** state (offline, connecting, starting, ready, backoff, stopping), the slots (blue: playing a battle),
-  battles and battles per second, failures and slot restarts; under "more" the CPU constant, Java and JVM options and
-  the battles running.
+  battles and battles per second, failures and slot restarts, the last error with its time (grey once the worker has
+  brought a battle back, run or stopped normally since); under "more" the CPU constant, Java and JVM options and the
+  battles running.
 - **Jobs, on the left:** running and waiting, then finished. Each shows its note (`-Pnote`) as its title, the test
   and the opponents in words (the set's `title`), and the result in words: "Better by" or "Worse by" only when the
-  whole 95 % interval of the estimate says so, otherwise "No clear difference". A running job shows the evidence as a
-  marker between the test's two answers (the LLR between its bounds), its progress and the time left; a finished one
-  how the test ended. Buttons move a waiting job up or down or cancel it.
+  whole 95 % interval of the estimate says so, otherwise "No clear difference"; the card is tinted green, red or grey
+  to match. A running job shows the evidence as a marker between the test's two answers (the LLR between its bounds),
+  its progress and the time left; a finished one how the test ended. Buttons move a waiting job up or down or cancel
+  it.
 - **The job on the right:** the clicked one (kept in the URL), else the running one. The result and the test in
   words, the scoreboards (all, the rumble estimate if the set has weights, strong, every other named group of the
   set: old and new score share, the change with its interval, how often they hit us, how often we hit them, wins),
@@ -680,7 +765,7 @@ a slot's environment (`queue.Remote`, the executor's `run`): the bundle is synce
 - `BattleResults.getRank()` in melee does not always follow the score order (engine-model G-31). Do not rely on it
   in new checks; rank by score.
 - The output-based skipped-turn detection depends on the engine's message text (`BattleRunner.skippedTurn`). Our
-  robots now report their own turn times (P-04), but skipped turns, of every robot, still come from the text.
+  robots now report their own turn times, but skipped turns, of every robot, still come from the text.
 - The engine swallows exceptions thrown by battle listeners. `TurnRecorder` keeps the first failure and rethrows it
   from `close()`.
 

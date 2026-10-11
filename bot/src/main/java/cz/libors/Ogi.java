@@ -19,6 +19,7 @@ import cz.libors.ogi.world.World;
 import robocode.Bullet;
 import robocode.BulletHitBulletEvent;
 import robocode.BulletHitEvent;
+import robocode.BulletMissedEvent;
 import robocode.HitByBulletEvent;
 import robocode.HitRobotEvent;
 import robocode.MessageEvent;
@@ -31,6 +32,8 @@ import robocode.TeamRobot;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
@@ -98,7 +101,7 @@ public class Ogi extends TeamRobot {
         }
     }
 
-    /** The first event of every turn: the turn's work starts, and the last turn's time is reported (P-04). */
+    /** The first event of every turn: the turn's work starts, and the last turn's time is reported. */
     @Override
     public void onStatus(StatusEvent e) {
         clock.started(System.nanoTime());
@@ -185,10 +188,18 @@ public class Ogi extends TeamRobot {
         if (bullet != null) {
             surfer.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
                     Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
+            inFlight.put(bullet, new FiredShot(target.name(), plan.get().time()));
         }
         fired(bullet, plan.get());
         return true;
     }
+
+    /** A bullet of ours in the air: at whom, from the plan of which turn. */
+    private record FiredShot(String target, long planTime) {
+    }
+
+    /** Our bullets in the air, until they hit, miss or are shot down. */
+    private final Map<Bullet, FiredShot> inFlight = new HashMap<>();
 
     /** A hook for {@link OgiGunLog}: this bullet was just fired from this plan. */
     protected void fired(Bullet bullet, GuessFactorGun.Plan plan) {
@@ -298,16 +309,17 @@ public class Ogi extends TeamRobot {
         double heading = ram ? Angles.bearing(getX(), getY(), target.x(), target.y())
                 : movement.desiredHeading(getX(), getY(), target.x(), target.y(), now,
                 world.recentTeammates(now, MAX_TEAMMATE_AGE));
-        double turn = Angles.normalizeRelative(heading - Angles.fromRobocode(getHeadingRadians()));
+        double body = Angles.fromRobocode(getHeadingRadians());
+        double right = Angles.robocodeTurn(body, heading);
         double distance = ram ? target.distanceTo(getX(), getY()) + RAM_OVERSHOOT : 100;
-        if (Math.abs(turn) > Math.PI / 2) {
+        if (Math.abs(right) > Math.PI / 2) {
             // Drive backwards instead of turning around.
-            turn = Angles.normalizeRelative(turn + Math.PI);
+            right = Angles.robocodeTurn(body, heading + Math.PI);
             distance = -distance;
         }
-        setTurnRightRadians(-turn);
+        setTurnRightRadians(right);
         setAhead(distance);
-        return predictNext(distance, -turn);
+        return predictNext(distance, right);
     }
 
     /**
@@ -350,7 +362,7 @@ public class Ogi extends TeamRobot {
                 e.getVelocity(), e.getEnergy(), e.getTime(), getRoundNum());
         world.observeEnemy(sighting);
         gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
-        surfer.scanned(e.getName(), e.getTime(), x, y, e.getVelocity(), e.getEnergy());
+        surfer.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
         if (getTeammates() != null) {
             try {
                 broadcastMessage(sighting);
@@ -362,6 +374,7 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletHit(BulletHitEvent e) {
+        inFlight.remove(e.getBullet());
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
             surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
@@ -377,7 +390,16 @@ public class Ogi extends TeamRobot {
     }
 
     @Override
+    public void onBulletMissed(BulletMissedEvent e) {
+        inFlight.remove(e.getBullet());
+    }
+
+    @Override
     public void onBulletHitBullet(BulletHitBulletEvent e) {
+        FiredShot shot = inFlight.remove(e.getBullet());
+        if (shot != null) {
+            gun.shotDown(shot.target(), shot.planTime());
+        }
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getHitBullet().getName())) {
             surfer.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),

@@ -157,7 +157,11 @@ final class Dashboard {
                     info.isEmpty() ? w.get("detail") : "CPU constant " + info.get("cpuConstant") + " ns  "
                             + w.get("detail")));
             if (!String.valueOf(w.get("lastError")).isEmpty()) {
-                sb.append("             last error: ").append(w.get("lastError")).append('\n');
+                long at = ((Number) w.get("lastErrorAt")).longValue();
+                sb.append("             last error")
+                        .append(at > 0 ? " at " + Instant.ofEpochMilli(at).atZone(ZoneId.systemDefault())
+                                .toLocalTime().withNano(0) : "")
+                        .append(": ").append(w.get("lastError")).append('\n');
             }
         }
         sb.append("\nJobs\n");

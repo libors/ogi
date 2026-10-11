@@ -7,6 +7,7 @@ import cz.libors.harness.recording.Recording.RobotTick;
 import cz.libors.harness.recording.TurnRecorder;
 
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -30,7 +31,10 @@ import java.util.stream.Collectors;
  *   <li><b>coverage:</b> how often the edge cases occurred (wall hits, robot collisions, velocity reversals, bullet
  *       outcomes);</li>
  *   <li><b>determinism</b> (engine-model G-26, G-33): a seeded battle replays exactly, different seeds differ, and
- *       which sources of randomness a seed controls.</li>
+ *       which sources of randomness a seed controls;</li>
+ *   <li><b>engine facts the harness relies on:</b> fixed starts (G-41), the robot's own jar (G-42), robot data
+ *       cleared before every battle (G-47) and, in a JVM of its own without debug mode ({@link
+ *       StrandedThreadCheck}), a robot thread that outlives its battle (G-48).</li>
  * </ul>
  *
  * <p>Usage: {@code ProbeRecordings <robocodeHome> <probeVersion> <outputDir>}
@@ -92,7 +96,7 @@ public final class ProbeRecordings {
     private ProbeRecordings() {
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         if (args.length != 3) {
             System.err.println("Usage: ProbeRecordings <robocodeHome> <probeVersion> <outputDir>");
             System.exit(2);
@@ -140,8 +144,11 @@ public final class ProbeRecordings {
                     "Ogi draws only from its own seeded generator: replay is identical", summaries));
             checks.add(sharedGeneratorExperiment(runner, version, out, summaries));
             checks.add(fixedStartsExperiment(runner, version, out, summaries));
+            checks.add(robotDataExperiment(runner, version, out, summaries));
             checks.add(ownJarCheck(runner, version));
         }
+        // Once this JVM's engine is closed, as the check starts one of its own on the same home.
+        checks.add(strandedThreadExperiment(args[0], version));
 
         Files.createDirectories(out);
         Map<String, Object> report = new LinkedHashMap<>();
@@ -274,6 +281,45 @@ public final class ProbeRecordings {
     }
 
     /**
+     * Two battles in a row of {@code DataProbe}, which counts the rounds it started in its data file, against {@code
+     * RandomProbe}. Within a battle the file must persist from round to round (so the probe really writes it), and
+     * the second battle must start without it: {@link BattleRunner} clears the robots' data before every battle.
+     */
+    private static Check robotDataExperiment(BattleRunner runner, String version, Path out, List<Summary> summaries)
+            throws IOException {
+        BattleSetup setup = new BattleSetup("robot-data", 800, 600, EXPERIMENT_ROUNDS,
+                List.of("cz.libors.probe.DataProbe " + version, "cz.libors.probe.RandomProbe " + version),
+                EXPERIMENT_SEED);
+        List<List<String>> counts = new ArrayList<>();
+        boolean intact = true;
+        for (int battle = 1; battle <= 2; battle++) {
+            Summary s = record(runner, setup, out.resolve("determinism").resolve("robot-data-" + battle + ".rec.gz"));
+            summaries.add(s);
+            intact &= s.intact();
+            List<String> perRound = new ArrayList<>(Collections.nCopies(setup.rounds(), "none"));
+            List<String> errors = new ArrayList<>();
+            for (DebugEntry d : Recording.read(Path.of(s.file())).debug()) {
+                if (d.robot() == 0 && d.key().equals("data")) {
+                    perRound.set(d.round(), d.value());
+                } else if (d.robot() == 0 && d.key().equals("dataError")) {
+                    errors.add("round " + d.round() + ": " + d.value());
+                }
+            }
+            if (!errors.isEmpty()) {
+                // The probe could not read or write its file; the counts alone would hide why.
+                perRound.add("errors " + errors);
+            }
+            counts.add(perRound);
+        }
+        // "missing" would mean getDataFile no longer creates the file (G-47); without the clearing, "2" and "3".
+        List<String> expected = List.of("empty", "1");
+        return new Check("Robot data is kept from round to round and cleared before every battle; getDataFile "
+                + "creates the file (G-47)", intact
+                && counts.get(0).equals(expected) && counts.get(1).equals(expected),
+                "the file before each round: first battle " + counts.get(0) + ", second " + counts.get(1));
+    }
+
+    /**
      * The team jar lists the robot under the same name and version as the robot's own jar (engine-model G-42);
      * {@link BattleRunner} must pick the robot's own jar.
      */
@@ -286,6 +332,42 @@ public final class ProbeRecordings {
         return new Check(name + " is listed by the robot jar and the team jar; the runner uses the robot jar (G-42)",
                 listed.equals(Set.of(own, "cz.libors.OgiTeam_" + version + ".jar")) && picked.equals(own),
                 "listed " + listed + ", picked " + picked);
+    }
+
+    /**
+     * The stranded-thread check ({@link StrandedThreadCheck}) in a JVM of its own without the engine's debug mode: in
+     * debug mode the engine waits for a stuck robot's turn instead of skipping it (G-17), and the probe's thread
+     * would also keep computing in this JVM until it ends.
+     */
+    /** How long the stranded-thread check's JVM may take: its battle, the 20 s spin and the JVM's start and end. */
+    private static final int CHILD_SECONDS = 90;
+
+    private static Check strandedThreadExperiment(String home, String version) throws IOException,
+            InterruptedException {
+        List<String> command = new ArrayList<>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        // The parent's options, but not debug mode, agents or a debugger (a second JVM cannot share its port).
+        ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
+                .filter(a -> !a.startsWith("-Ddebug=") && !a.startsWith("-javaagent") && !a.startsWith("-agentlib")
+                        && !a.startsWith("-Xrunjdwp") && !a.equals("-Xdebug"))
+                .forEach(command::add);
+        command.addAll(List.of("-cp", System.getProperty("java.class.path"), StrandedThreadCheck.class.getName(),
+                home, version));
+        Path output = Files.createTempFile("stranded-thread", ".txt");
+        Process p = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        if (!p.waitFor(CHILD_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+            p.destroyForcibly();
+            p.waitFor();
+        }
+        List<String> lines = Files.readAllLines(output, java.nio.charset.StandardCharsets.UTF_8);
+        Files.deleteIfExists(output);
+        String last = lines.stream().filter(l -> l.startsWith("RESULT\t")).reduce((a, b) -> b).orElse("");
+        String[] f = last.split("\t", 3);
+        boolean passed = f.length == 3 && f[1].equals("OK") && p.exitValue() == 0;
+        return new Check("A robot thread that stops calling the API outlives its battle and keeps computing; the "
+                + "runner sees it until it ends (G-48)", passed,
+                f.length == 3 ? f[2] : "no result (exit " + p.exitValue() + "): " + String.join(" | ",
+                        lines.subList(Math.max(0, lines.size() - 3), lines.size())));
     }
 
     private static List<List<Double>> startPositions(Recording rec, int round) {

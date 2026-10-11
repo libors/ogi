@@ -86,6 +86,8 @@ public final class GunReplay {
         long firedHits = 0;
         long shieldedCount = 0;
         Set<Long> shielded = new HashSet<>();
+        // A turn snapshot the recording repeats carries its passes again: each wave is learned once, as online.
+        Set<String> learned = new HashSet<>();
         for (Object event : battle.events()) {
             if (event instanceof GunBattle.RoundStart start) {
                 byRound.merge(round, new Tally(shotCount, searched, differing, orphans, gfTries, gfHits, realGfTries,
@@ -96,12 +98,16 @@ public final class GunReplay {
                 shots.clear();
                 aims.clear();
                 shielded.clear();
+                learned.clear();
             } else if (event instanceof GunBattle.Shielded s) {
                 shielded.add(s.time());
             } else if (event instanceof GunModel.Pass pass) {
                 GunLog.LoggedShot logged = shots.get(pass.time());
                 if (logged == null) {
                     orphans++;
+                    continue;
+                }
+                if (!learned.add(pass.target() + "@" + pass.time())) {
                     continue;
                 }
                 GunModel.Aim aim = aims.get(pass.time());

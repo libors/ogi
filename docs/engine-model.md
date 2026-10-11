@@ -94,7 +94,9 @@ to-test.
   - **What:** bullets collide when their last-move segments cross; bullets of the same robot never collide. Bullets
     are updated in random order, so a bullet may be hit through its previous-turn segment before it moves. A bullet
     that hit another stops at the start of the crossing segment: at its position of this turn's start if it had
-    moved, or of the previous turn's start if it had not.
+    moved, or of the previous turn's start if it had not. The `BulletHitBulletEvent` of both robots reports both
+    bullets at that stop position, one or two bullet moves short of where the bullet's wave is at the end of the turn
+    (`checkBulletCollision` sets x, y to lastX, lastY before it creates the events).
   - **Bites when:** predicting shield intercepts or bullet shadows: whether two bullets meet can depend on the
     processing order. The order is a fresh shuffle every turn (`Battle.updateBullets` iterates
     `getBulletsAtRandom()`, a `Collections.shuffle` with `RandomFactory`'s generator; each bullet moves and then
@@ -102,7 +104,9 @@ to-test.
     turn before happens in about half the turns it could. The surfer's shadows count such crossings at weight ½
     (docs/bot.md, "Bullet shadows").
   - **Source:** BeepBoop's author (RoboWiki); `BulletPeer.checkBulletCollision`, `intersect`. · **Status:** tested:
-    `BulletMotionReplayTest` (the stop position in both cases; which pair collides is taken from the recording).
+    `BulletMotionReplayTest` (the stop position in both cases; which pair collides is taken from the recording) and
+    `EventReplayTest` (the events' bullet positions equal the stop positions). The shuffle and its weight ½: verified
+    in the bytecode, not tested.
 - **G-05 Gun heat at round start.**
   - **What:** all guns start with heat 3.0. Heat after firing is 1 + p/5; it cools at 0.1 per tick by default (a
     battle setting), before the robot's turns and moves (tick order step 4). A robot whose gun reads 0 fires in the
@@ -248,10 +252,10 @@ to-test.
   - **What:** the engine splits the constant into whole milliseconds and the rest, then waits `wait(0, 999999)` once
     per millisecond and `wait(0, rest)` once more. Java 17 rounds every such wait up to a whole millisecond, so the
     robot has about `floor(constant in ms) + 1` ms, plus the timer's slack, before its turn is skipped: 2 ms for a
-    constant of 1.73 ms or 2.00 ms, 3 ms for 2.71 ms.
+    constant of 1.73 ms, 3 ms for 2.00 ms or 2.71 ms.
   - **Bites when:** a robot's own time is compared with the constant: it can exceed it without a skipped turn, so
     the engine's skipped turns notice a robot growing heavy late. The harness counts the turns Ogi reports above half
-    the idle constant and above all of it (P-04, `TurnClock`, `BattleOutcome.TurnTimes`).
+    the idle constant and above all of it (`TurnClock`, `BattleOutcome.TurnTimes`).
   - **Source:** `RobotPeer.waitSleeping` (bytecode of 1.11.1), `Object.wait(long, int)` in Java 17. · **Status:**
     verified in the bytecode; observed 2026-10-09: an Ogi variant that spun 1.2 ms per turn took up to 2.09 ms with a
     constant of 1.73 ms and skipped no turn. No dedicated test yet.
@@ -323,6 +327,38 @@ to-test.
     is not seeded"); cross-JVM observed.
 - **G-27 Quotas:** robot file system 200,000 bytes; console 8192 characters.
   - **Source:** `SettingsManager`. · **Status:** verified.
+- **G-47 Robot data persists across battles, and `getDataFile` creates the file it names.**
+  - **What:** a robot from a jar gets the data directory `robots/.data/<package>/<Class>.data/` (a robot from a class
+    directory: `<Class>.data/` next to its class), and the engine keeps it from battle to battle. `getDataFile(name)`
+    returns a file that always exists: if it is missing, the engine creates the directory and the file, with the
+    content of `<Class>.data/<name>` from the robot's jar or empty. A robot therefore cannot tell a missing file by
+    `exists()`, only by its length. When a robot starts, the engine also copies every file under `<Class>.data/` in
+    its jar into the directory. It does not close streams a robot leaves open.
+  - **Bites when:** battles are meant to be independent (the harness clears `robots/.data/` before each one, see
+    harness.md, "Robot data"); deleting the data on Windows while a robot holds a file open.
+  - **Source:** `RobotItem.getWritableDirectory`, `FileUtil.getRobotsDataDir`, `RobotFileSystemManager.getDataFile`,
+    `RobotFileSystemManager.initialize` and `updateDataFilesFromJar`. · **Status:** tested: `recordProbes` ("Robot
+    data is kept from round to round and cleared before every battle": the empty file in round 1, the count in
+    round 2; without the clearing both battles read the counts of earlier runs, 2026-10-11). The copy from the jar
+    and the open streams: verified in the source.
+- **G-48 A robot thread that does not call the robot API is never stopped.**
+  - **What:** at the end of a round the engine interrupts a robot's thread and polls it for about 3 s
+    (`waitForStop`: 300 times `sleep(10)`); if it is still alive, `forceStop` interrupts and joins it for 1 s, then
+    3 s (`stopSteps`, `stop`), logs "Unable to stop thread: <robot>", punishes the robot as unstoppable (it dies and
+    scores nothing that round; no ban) and gives it a new thread group of the same name: about 7 s per stuck robot
+    and round. It does not call `Thread.stop`. A robot that sleeps or calls the API ends on the interrupt or on its
+    next call; one that loops in its own code keeps its thread, which runs on after the battle and takes a core until
+    the JVM ends. Each round it gets stuck in adds a thread. The log line alone does not mean a leak: a robot that
+    calls the API again after more than 30 skipped turns (G-18) goes through the same `forceStop` on its own thread,
+    and that thread ends at its next call.
+  - **Bites when:** many battles run in one JVM or several JVMs share a machine (the queue's slots, a rumble client):
+    the stray threads slow every later battle, and robots skip turns. Seen with a rumble robot whose wall avoidance
+    loops forever near one wall of a field that is not square.
+  - **Source:** `RobotThreadManager.waitForStop`, `forceStop`, `stopSteps` and `stop`; the robot's thread group is
+    named after the robot (`createThreadGroup`); `HostingRobotProxy.waitForStopThread`. · **Status:** tested:
+    `recordProbes` ("A robot thread that stops calling the API outlives its battle and keeps computing": the thread
+    outlives a one-round battle and keeps a core busy, 2026-10-11). The waits, the log line and the punishment:
+    verified in the bytecode.
 - **G-28 Field size differs per rumble:** 800×600, 1000×1000, 1200×1200, 800×800. DrussGT hard-codes 800×600.
   - **Source:** rumble configs; DrussGT source. · **Status:** verified.
 - **G-29 Angle conventions.**
@@ -357,17 +393,19 @@ to-test.
   - **A robot that dies during its own turn** (a security violation, punished in the robot's thread) is waited for
     only if it was still alive when the engine checked, just after waking it (`wakeupSerial`: `waitWakeup`, then
     `isAlive`, then `waitSleeping`). What it stores in its next `execute()` is visible only to the snapshot of that
-    turn: its thread then ends in `waitForBattleEndImpl`, and when the engine wakes it in the next turn, its commands
-    are replaced by ones without the debug properties. So its report reaches a snapshot only if the engine still
-    waits for it. Observed on the desktop worker (2 CPUs, turn limit 1.7 ms, 2026-10-09): `SandboxProbe`'s report
+    turn: its thread then ends in `waitForBattleEndImpl`, and in the last round, when the engine wakes it in the next
+    turn, its commands are replaced by ones without the debug properties. In an earlier round the thread does not
+    wait, and the dead robot's last commands, debug properties included, stay in every snapshot until the next round
+    starts. So its report reaches a snapshot only if the engine still
+    waits for it. Observed on the WSL container worker (`ogi-desktop`, 2 CPUs, turn limit 1.7 ms, 2026-10-09): `SandboxProbe`'s report
     missed in about 1 run in 4; the thread dump showed the probe waiting in `waitForBattleEndImpl`.
   - **Bites when:** recordings or tools read debug properties of dead robots; a bot draws from `Utils.getRandom()`;
     a probe reports after a deliberate violation.
   - **Source:** `Battle.wakeupSerial`, `RobotPeer.executeImpl`, `RobotPeer.waitForBattleEndImpl`,
     `HostingRobotProxy.run`, `ExecCommands(ExecCommands, boolean)`. · **Status:** verified; `TurnRecorder` leaves the
-    debug properties out, and `UtilsRandomProbe` stops drawing once dead (10 reruns identical since). `sandboxCheck`
+    debug properties of dead robots out, and so do the harness's turn times, and `UtilsRandomProbe` stops drawing once dead (10 reruns identical since). `sandboxCheck`
     runs in debug mode and `SandboxProbe` waits 20 ms before its first attempt, so the engine waits for its report:
-    20 runs in 20 on the desktop worker, 4 in 4 on the Mac (2026-10-09).
+    20 runs in 20 on the WSL container worker, 4 in 4 on the Mac (2026-10-09).
 - **G-41 Fixed starts hold in every round, unless a robot is in the way.**
   - **What:** a battle's initial positions (the string `(x,y,heading),…` of `RobocodeEngine.runBattle`, or the
     specification's `RobotSetup` array) apply to every round, not only the first. Headings are in degrees. Robot i

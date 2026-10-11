@@ -34,7 +34,7 @@ public final class DangerReplay {
                     hitMass + o.hitMass, learned + o.learned);
         }
 
-        /** Mean log share per bullet: higher is better; a uniform profile scores about ln(3/47) ≈ −2.75. */
+        /** Mean log share per bullet: higher is better; a uniform profile scores about −2.3 on real recordings. */
         double meanLog() {
             return shots == 0 ? Double.NaN : logMass / shots;
         }

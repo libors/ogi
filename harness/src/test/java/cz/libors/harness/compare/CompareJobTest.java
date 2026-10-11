@@ -24,6 +24,7 @@ import java.util.Random;
 import java.util.TreeMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CompareJobTest {
@@ -359,5 +360,74 @@ class CompareJobTest {
         assertEquals(State.DONE, second.state());
         assertEquals(0, ((Number) second.progress().get("reusedBattles")).intValue());
         assertEquals(0, second.inFlight());
+    }
+
+    /** The battle-cache key of a work, as the job computes it (the jar hash of version v is v repeated). */
+    private static String keyOf(BattleCache cache, Work work) {
+        String subject = work.spec().robots().get(0);
+        String version = subject.substring(subject.lastIndexOf(' ') + 1);
+        return cache.key("w", work.spec(), version.repeat(32)).orElseThrow();
+    }
+
+    /** The battles of version b, which a job comparing b with c waits for. */
+    private static List<Work> battlesOfB(List<Work> works) {
+        return works.stream().filter(w -> w.spec().robots().get(0).endsWith(" b")).toList();
+    }
+
+    @Test
+    void aRetryThatWillNotBePlayedReleasesItsClaim(@TempDir Path tmp) throws IOException {
+        for (boolean workerGoes : new boolean[] {false, true}) {
+            Path dir = tmp.resolve(workerGoes ? "worker-lost" : "cancelled");
+            BattleCache cache = sharedCache(dir);
+            CompareJob first = open(chained(dir.resolve("ab"), "a", "b"));
+            CompareJob second = open(chained(dir.resolve("bc"), "b", "c"));
+            first.cache(cache);
+            second.cache(cache);
+            Work failed = battlesOfB(drain(first)).get(0);
+            drain(second);
+            // A failed battle waits for a retry and keeps its claim; then the first job ends or loses its worker.
+            first.failed(failed, "slot ended", "w");
+            if (workerGoes) {
+                first.workerLost("w");
+            } else {
+                first.cancel();
+            }
+            List<Work> taken = drain(second);
+            assertEquals(1, taken.size(), "the second job plays the battle itself (" + dir.getFileName() + ")");
+            assertEquals(keyOf(cache, failed), keyOf(cache, taken.get(0)));
+        }
+    }
+
+    @Test
+    void aJobThatEndedDoesNotTakeOverAReleasedBattle(@TempDir Path tmp) throws IOException {
+        BattleCache cache = sharedCache(tmp);
+        CompareJob first = open(chained(tmp.resolve("ab"), "a", "b"));
+        CompareJob second = open(chained(tmp.resolve("bc"), "b", "c"));
+        first.cache(cache);
+        second.cache(cache);
+        Work shared = battlesOfB(drain(first)).get(0);
+        drain(second);
+        second.cancel();
+        first.lost(shared);
+        assertTrue(cache.claim(keyOf(cache, shared)), "nobody holds the battle any more");
+    }
+
+    @Test
+    void aFailingWaiterCostsNeitherTheJobNorTheCacheItsBattle(@TempDir Path tmp) throws IOException {
+        BattleCache cache = sharedCache(tmp);
+        CompareJob first = open(chained(tmp.resolve("ab"), "a", "b"));
+        CompareJob second = open(chained(tmp.resolve("bc"), "b", "c"));
+        first.cache(cache);
+        second.cache(cache);
+        Work shared = battlesOfB(drain(first)).get(0);
+        String key = keyOf(cache, shared);
+        cache.await(key, outcome -> {
+            throw new IOException("a waiter that fails");
+        });
+        drain(second);
+        assertThrows(IOException.class, () -> first.completed(shared, outcome(shared, 60), "w"));
+        assertEquals(1, battles(tmp.resolve("ab")), "the first job counted its battle");
+        assertTrue(cache.get(key).isPresent(), "the cache kept it");
+        assertEquals(1, ((Number) second.progress().get("reusedBattles")).intValue(), "the second job got it");
     }
 }

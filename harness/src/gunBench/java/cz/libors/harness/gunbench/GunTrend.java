@@ -17,7 +17,6 @@ import java.util.stream.Stream;
  * How the gun's hit rate changes during a battle, per opponent: the fired hit rate (the chosen gun, waves with a
  * bullet) in the first rounds against the last rounds, replayed with the bot's parameters. Our gun learns, so against
  * a mover that does not react to it the rate rises or stays; a mover that learns to dodge it pulls the rate down.
- * D-022 splits the opponents by this measure.
  *
  * <p>Usage: {@code GunTrend logs=<dir>,... [robot=<name prefix>] [rounds=10]}: compares the first and the last
  * {@code rounds} rounds of each battle and prints the opponents sorted by the change, with its standard error.

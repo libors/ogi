@@ -46,6 +46,7 @@ h2:first-child { margin-top: 4px; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin-top: 8px; font-size: 13px; }
 .kv > div:nth-child(odd) { color: var(--muted); }
 .err { color: var(--bad); font-size: 12px; margin-top: 6px; word-break: break-word; }
+.err.past { color: var(--muted); }
 details summary { cursor: pointer; color: var(--muted); }
 
 /* Jobs left, detail right */
@@ -54,6 +55,10 @@ details summary { cursor: pointer; color: var(--muted); }
 .list { display: flex; flex-direction: column; gap: 8px; }
 .job { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; }
 .job:hover { border-color: var(--accent); }
+/* The card takes the colour of its result line, lightly. */
+.job.r-pos { background: color-mix(in srgb, var(--ok) 9%, var(--panel)); }
+.job.r-neg { background: color-mix(in srgb, var(--bad) 9%, var(--panel)); }
+.job.r-muted { background: color-mix(in srgb, var(--idle) 11%, var(--panel)); }
 .job.selected { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
 .job .jtop { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .job .jtitle { font-weight: 600; }
@@ -275,7 +280,7 @@ function worker(w, now, keys) {
       <div>Battles</div><div class="num">${w.battles}${w.battlesPerSecond != null ? " · " + fmt(w.battlesPerSecond) + " per second" : ""}</div>
       ${w.failures || w.restarts ? `<div>Failures · restarts</div><div class="num">${w.failures} · ${w.restarts}</div>` : ""}
     </div>
-    ${w.lastError ? `<div class="err">${esc(w.lastError)}</div>` : ""}
+    ${w.lastError ? errorLine(w, now) : ""}
     <details data-key="worker-${esc(w.name)}"${openAttr(keys, "worker-" + w.name)} style="margin-top:6px">
       <summary>more</summary>
       <div class="kv">
@@ -286,6 +291,15 @@ function worker(w, now, keys) {
       ${running ? `<div style="margin-top:6px">${running}</div>` : ""}
     </details>
   </div>`;
+}
+
+/** The worker's last error with its time; grey once the worker has run or stopped normally since. */
+function errorLine(w, now) {
+  const past = ["ready", "stopping", "offline"].includes(w.state)
+    && (w.since >= w.lastErrorAt || w.lastOkAt > w.lastErrorAt);
+  const when = w.lastErrorAt ? `${timeOfDay(w.lastErrorAt)}, ${dur(now - w.lastErrorAt)} ago` : "";
+  return `<div class="err ${past ? "past" : ""}" title="${past ? "Since then the worker has recovered" : ""}">`
+    + `${past ? "Last error" : "Error"}${when ? " (" + esc(when) + ")" : ""}: ${esc(w.lastError)}</div>`;
 }
 
 function jobCard(j, now, shown, index, count) {
@@ -309,7 +323,7 @@ function jobCard(j, now, shown, index, count) {
       <button ${index === 0 ? "disabled" : ""} onclick="act('up','${esc(j.id)}')" title="Run earlier">↑</button>
       <button ${index === count - 1 ? "disabled" : ""} onclick="act('down','${esc(j.id)}')" title="Run later">↓</button>
       <button class="danger" onclick="if (confirm('Cancel this job?')) act('cancel','${esc(j.id)}')">cancel</button></span>` : "";
-  return `<div class="job ${j.id === shown ? "selected" : ""}" onclick="select('${esc(j.id)}')">
+  return `<div class="job ${j.id === shown ? "selected" : ""} ${res.cls ? "r-" + res.cls : ""}" onclick="select('${esc(j.id)}')">
     <div class="jtop"><span class="jtitle">${esc(titleOf(j))}</span><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></div>
     <div class="jsub">${esc(testWords(p))} · ${esc(opponentsWords(p))}</div>
     <div class="jres ${res.cls}">${esc(res.text)}</div>
@@ -346,7 +360,7 @@ async function loadDetail(id) {
       ${isCompare ? `<div>Compares</div><div>new <span class="mono">${esc(p.candidate)}</span> against old <span class="mono">${esc(p.baseline)}</span></div>` : ""}
       <div>Opponents</div><div>${esc(opponentsWords(p))}</div>
       <div>Test</div><div>${esc(testWords(p))}</div>
-      ${p.reusedBattles ? `<div>Reused</div><div>${p.reusedBattles} of ${p.battles} battles came from earlier jobs instead of being played again</div>` : ""}
+      ${p.reusedBattles ? `<div>Reused</div><div>${p.reusedBattles} battles came from earlier jobs instead of being played again (counted since the server started; ${p.battles} battles in all)</div>` : ""}
       <div>When</div><div>submitted ${clock(j.submittedAt)}${j.startedAt ? " · started " + clock(j.startedAt) : ""}${j.finishedAt ? " · finished " + clock(j.finishedAt) : ""}</div>
     </div>
   </div>`;

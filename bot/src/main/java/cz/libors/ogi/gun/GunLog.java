@@ -10,7 +10,7 @@ package cz.libors.ogi.gun;
  *       features, the guess factor found, the chosen gun and the target.</li>
  *   <li>{@value #PASS}, once for each wave that passed its target in this turn, before the turn's plan: the plan's
  *       turn, whether a bullet was fired with it (1 or 0), the wave's reference and escape angle, whether any heading
- *       would have hit (1 or 0), the lowest and the highest hitting heading, and the target.</li>
+ *       would have hit (1 or 0), the lowest and the highest hitting offset from the reference, and the target.</li>
  *   <li>{@value #SHIELD}, when an enemy bullet destroyed one of ours ({@code OgiGunLog} only): the turn of the
  *       bullet's plan and the name of the robot whose bullet it was. That bullet's wave still passes, but the bullet
  *       never got there.</li>

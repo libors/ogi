@@ -25,7 +25,8 @@ public record GunParameters(double[] weights, double neighbourScale, int maxNeig
             new GunParameters(new double[] {12, 3, 4.2, 1.75, 0.17, 2.1, 2.1, 0, 2.1, 0}, 1, 100, 0.125, 0);
 
     /**
-     * The anti-surfer gun's: the main gun's weights over its own data, the latest bullets only (see {@link GunModel}).
+     * The anti-surfer gun's: the main gun's weights over its own data, the waves of our bullets in three views (see
+     * {@link GunModel}). A fixed copy: parameters given to the main gun do not reach it.
      */
     public static final GunParameters ANTI_SURFER =
             new GunParameters(new double[] {12, 3, 4.2, 1.75, 0.17, 2.1, 2.1, 0, 2.1, 0}, 1, 100, 1, 0);

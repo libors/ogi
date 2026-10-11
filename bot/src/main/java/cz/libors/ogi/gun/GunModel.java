@@ -30,8 +30,8 @@ public final class GunModel {
     /** The bullets the anti-surfer gun needs to have been scored on before it may replace the chosen gun. */
     static final double MIN_BULLETS = 30;
     /**
-     * The anti-surfer gun is for enemies that are hard to hit: the guess-factor gun's record over our bullets must be
-     * below this, with confidence (the lower bound of its interval, one standard error below the record).
+     * The anti-surfer gun is for enemies that are hard to hit: the guess-factor gun's record over our bullets must
+     * not be clearly above this (the lower bound of its interval, one standard error below the record, is below it).
      */
     static final double HARD_TO_HIT = 0.2;
     private static final double HARD_TO_HIT_Z = 1;
@@ -72,8 +72,8 @@ public final class GunModel {
      * @param reference bearing from the wave's origin to the target's scan the plan used; offsets are relative to it
      * @param escape    the wave's maximum escape angle
      * @param hits      whether any heading would have hit
-     * @param minOffset the lowest hitting heading, +∞ if none hits
-     * @param maxOffset the highest hitting heading, −∞ if none hits
+     * @param minOffset the lowest hitting offset from the reference, +∞ if none hits
+     * @param maxOffset the highest hitting offset from the reference, −∞ if none hits
      */
     public record Pass(String target, long time, boolean real, double reference, double escape, boolean hits,
                        double minOffset, double maxOffset) {
@@ -171,7 +171,7 @@ public final class GunModel {
         return gun;
     }
 
-    /** Whether the guess-factor gun's record over our bullets is below {@link #HARD_TO_HIT} with confidence. */
+    /** Whether the guess-factor gun's record over our bullets is not clearly above {@link #HARD_TO_HIT}. */
     private boolean hardToHit() {
         double n = bullets[GUESS_FACTOR][1];
         if (n == 0) {

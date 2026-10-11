@@ -28,6 +28,9 @@ val gunBench: SourceSet = sourceSets.create("gunBench") {
     runtimeClasspath += sourceSets.main.get().output
 }
 
+// The benches replay the bot's classes: a change that breaks them fails the build, not only the next bench run.
+tasks.named("check") { dependsOn(tasks.named(gunBench.classesTaskName)) }
+
 dependencies {
     // Compile against the published API; at runtime the official installation's libs are used.
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")
@@ -445,7 +448,7 @@ tasks.register<JavaExec>("dangerBench") {
 
 tasks.register<JavaExec>("gunTrend") {
     group = "verification"
-    description = "Compares the gun's hit rate early and late in battles, per opponent, from gun logs (D-022)."
+    description = "Compares the gun's hit rate early and late in battles, per opponent, from gun logs."
     mainClass = "cz.libors.harness.gunbench.GunTrend"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = gunBench.runtimeClasspath
@@ -539,7 +542,7 @@ val remoteHost = providers.gradleProperty("remoteHost").getOrElse("ogi-win")
 val remoteContainer = providers.gradleProperty("remoteKind").getOrElse(
     if (remoteHost == "ogi-desktop") "container" else "windows") == "container"
 // The CPU constant on a worker: the median of idle measurements under the worker's JVM options, times this factor
-// (windows-worker-setup.md, load study). The queue's workers use the same.
+// (build-and-run.md, "Several battles at once"). The queue's workers use the same.
 val cpuFactor = providers.gradleProperty("cpuFactor").getOrElse("1.5")
 
 /**
@@ -555,7 +558,7 @@ val containerLayout = RemoteLayout(
     { name -> "/ogi/out/$name" },
 )
 
-// Paths on the native Windows worker (windows-worker-setup.md).
+// Paths on the native Windows worker (build-and-run.md, "Native Windows worker").
 val windowsLayout = RemoteLayout(
     { name -> "C:/ogi/run/$name" },
     { path -> if (path.startsWith("rumble:")) "C:/ogi/rumble/" + path.removePrefix("rumble:") else "C:/ogi/bundle/$path" },

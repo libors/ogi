@@ -42,14 +42,25 @@ import java.util.Optional;
  * bullet's segment of the turn before collide if the engine happens to move that bullet first), so that part of a hit
  * range is safe, or half safe, and a way's danger counts only its unshadowed share.
  *
- * <p>Danger models last for the battle (static, per robot, engine-model G-22); waves and detectors are per round.
+ * <p>Against an enemy that drives at us ({@link RamDetector}), each way also predicts the enemy: from its last scan it
+ * turns towards where we are and drives at full speed. Five ways orbit it instead of the wave's origin, two of them
+ * tilting more steeply against the preferred distance; a way that ends nearer to it is more dangerous at any distance,
+ * and a way on which it touches us costs a point-blank hit.
+ *
+ * <p>Danger models, ram detectors and our lateral histories last for the battle (static, per robot, engine-model
+ * G-22); waves and fire detectors are per round.
  */
 public final class WaveSurfer {
 
     static final int ORBIT_LEFT = 1;
     static final int ORBIT_RIGHT = -1;
     static final int STOP = 0;
+    /** Orbits that lean away from a robot that drives at us more steeply ({@link #RETREAT_TILT}). */
+    static final int RETREAT_LEFT = 2;
+    static final int RETREAT_RIGHT = -2;
     private static final int[] OPTIONS = {ORBIT_LEFT, ORBIT_RIGHT, STOP};
+    /** Against a robot that drives at us: the usual ways around it, and the ways that retreat from it. */
+    private static final int[] RAM_OPTIONS = {ORBIT_LEFT, ORBIT_RIGHT, RETREAT_LEFT, RETREAT_RIGHT, STOP};
 
     static final double PREFERRED_DISTANCE = 325;
     private static final double MAX_TILT = 0.5;
@@ -63,6 +74,25 @@ public final class WaveSurfer {
     private static final double CLOSE_FIGHT = 250;
     /** Danger every way carries, so that the distance to the enemy decides between ways the profile calls safe. */
     private static final double DANGER_FLOOR = 0.02;
+    /** Against an enemy that drives at us: how much more steeply the ways lean away from it, and how far at most. */
+    private static final double RETREAT_GAIN = 2;
+    private static final double RETREAT_TILT = 1.2;
+    /** How far past us a simulated rammer aims its move, so that it keeps its speed. */
+    private static final double RAM_OVERSHOOT = 100;
+    /** A way on which a robot that drives at us touches us costs its next bullet, fired at point blank. */
+    private static final double CONTACT_DANGER = BulletMotion.damage(RobotMotion.MAX_BULLET_POWER);
+    /**
+     * Against a robot that drives at us, every way is predicted at least this many turns, after its waves have passed
+     * if need be: about the time it takes to reload a full-power shot, so that the way's end shows where its next
+     * bullet finds us.
+     */
+    private static final int RAM_HORIZON = 20;
+    /**
+     * Its next bullet, at the end of the horizon, hits with the chance (this / distance)², at most 1: in our
+     * recordings such robots hit us with nearly every bullet fired from within about this distance, and further out
+     * with a share that falls about with the square of the distance (about 40 % at 80 px, 15 % at 125 px).
+     */
+    private static final double SURE_HIT_DISTANCE = 50;
     /** How long our bullets are followed for shadows, at most. */
     private static final int MAX_SHADOW_TURNS = 150;
     /** How closely a bullet's power must match its wave's. */
@@ -71,6 +101,9 @@ public final class WaveSurfer {
     private static final Object PROBE = new Object();
 
     private static final Map<String, DangerModel> MODELS = new HashMap<>();
+    private static final Map<String, RamDetector> RAM_DETECTORS = new HashMap<>();
+    /** Our lateral velocity as each enemy saw it, for the battle: what averaged and pattern guns aim with. */
+    private static final Map<String, LateralHistory> LATERAL = new HashMap<>();
 
     /** An enemy wave, the frame its guess factors are measured in, and where the enemy is likely to have aimed. */
     private static final class EnemyWave {
@@ -108,9 +141,13 @@ public final class WaveSurfer {
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
     private final RobotHistory ours = new RobotHistory();
-    /** Each enemy's scanned positions of recent turns, {x, y}, by turn: where it aimed from. */
+    /**
+     * Each enemy's scanned states of recent turns, {x, y, heading (mathematical), velocity}, by turn: where it aimed
+     * from, and where a robot that drives at us starts in a prediction.
+     */
     private final Map<String, Map<Long, double[]>> enemyPositions = new HashMap<>();
-    private int lastDirection = 1;
+    /** Per shooter, the direction of its last wave: the fallback when our lateral velocity is 0 when it aims. */
+    private final Map<String, Integer> lastDirection = new HashMap<>();
     private int lastOption = ORBIT_LEFT;
 
     public WaveSurfer(Field field, double coolingRate) {
@@ -123,14 +160,29 @@ public final class WaveSurfer {
         ourStates.put(time, new double[] {x, y, heading, velocity});
         ourStates.remove(time - 64);
         ours.add(time, x, y, heading, velocity);
+        // This turn's scans came first, so each enemy seen now has its position of this turn.
+        enemyPositions.forEach((name, positions) -> {
+            double[] e = positions.get(time);
+            if (e != null) {
+                LATERAL.computeIfAbsent(name, n -> new LateralHistory())
+                        .add(time, velocity * Math.sin(heading - Angles.bearing(e[0], e[1], x, y)));
+            }
+        });
     }
 
-    /** Our scan of an enemy; a shot it reveals becomes a wave. */
-    public void scanned(String name, long time, double x, double y, double velocity, double energy) {
+    /** Our scan of an enemy, heading mathematical; a shot it reveals becomes a wave. */
+    public void scanned(String name, long time, double x, double y, double heading, double velocity, double energy) {
         neighbours.seen(name, time, x, y);
         Map<Long, double[]> positions = enemyPositions.computeIfAbsent(name, n -> new HashMap<>());
-        positions.put(time, new double[] {x, y});
+        positions.put(time, new double[] {x, y, heading, velocity});
         positions.remove(time - 64);
+        // Scans come before this turn's own state (onScannedRobot runs before act()).
+        double[] us = ourStates.containsKey(time) ? ourStates.get(time) : ourStates.get(time - 1);
+        if (us != null) {
+            double distance = Math.hypot(us[0] - x, us[1] - y);
+            double approach = velocity * Math.cos(heading - Angles.bearing(x, y, us[0], us[1]));
+            ramDetector(name).observe(distance, approach);
+        }
         FireDetector detector = detector(name);
         if (neighbours.nearOther(name, time)) {
             detector.nearOtherRobot();
@@ -154,12 +206,16 @@ public final class WaveSurfer {
     /** An enemy bullet hit us at the end of its move in turn {@code time}; heading mathematical. */
     public void hitByBullet(String shooter, long time, double x, double y, double heading, double power) {
         detector(shooter).hitUs(power);
-        learn(shooter, time, x, y, heading, power);
+        learn(shooter, time, x, y, heading, power, 0);
     }
 
-    /** One of our bullets hit an enemy bullet at the end of its move in turn {@code time}; heading mathematical. */
+    /**
+     * One of our bullets hit an enemy bullet in turn {@code time}; heading mathematical. The engine reports both
+     * bullets where they were before their last move: one move back for a bullet that had moved in that turn, two for
+     * one that had not moved yet (engine-model G-04).
+     */
     public void bulletHitBullet(String shooter, long time, double x, double y, double heading, double power) {
-        learn(shooter, time, x, y, heading, power);
+        learn(shooter, time, x, y, heading, power, 1.5);
     }
 
     /**
@@ -182,9 +238,17 @@ public final class WaveSurfer {
         }
     }
 
+    /** Whether this enemy drives at us, to ram us or to fight at point blank ({@link RamDetector}). */
+    public boolean drivesAtUs(String name) {
+        RamDetector detector = RAM_DETECTORS.get(name);
+        return detector != null && detector.drivesAtUs();
+    }
+
     /** A dead robot fires no more, but its bullets in the air still fly and hit, so its waves stay. */
     public void robotDied(String name) {
         detectors.remove(name);
+        // Its waves keep their own origins; a dead robot neither rams nor marks a close fight any more.
+        enemyPositions.remove(name);
     }
 
     /**
@@ -222,10 +286,13 @@ public final class WaveSurfer {
             return Optional.empty();
         }
         EnemyWave second = nearest(me, now, nearest);
-        int best = lastOption;
+        EngineRobot rammer = rammer(nearest.wave.shooter(), now);
+        int[] options = rammer == null ? OPTIONS : RAM_OPTIONS;
+        // Ties keep the last way; a retreat left over from a robot that no longer drives at us becomes an orbit.
+        int best = Arrays.stream(options).anyMatch(o -> o == lastOption) ? lastOption : Integer.signum(lastOption);
         double bestDanger = danger(nearest, second, me, now, best);
-        for (int option : OPTIONS) {
-            if (option == lastOption) {
+        for (int option : options) {
+            if (option == best) {
                 continue;
             }
             double d = danger(nearest, second, me, now, option);
@@ -235,7 +302,8 @@ public final class WaveSurfer {
             }
         }
         lastOption = best;
-        return Optional.of(orbit(me, nearest.wave, best));
+        return Optional.of(rammer == null ? orbit(me, nearest.wave.x(), nearest.wave.y(), best)
+                : orbit(me, rammer.x, rammer.y, best));
     }
 
     /**
@@ -255,7 +323,7 @@ public final class WaveSurfer {
             addShadows(w, probe);
         }
         double least = Double.POSITIVE_INFINITY;
-        for (int option : OPTIONS) {
+        for (int option : rammer(nearest.wave.shooter(), now) == null ? OPTIONS : RAM_OPTIONS) {
             least = Math.min(least, danger(nearest, second, me, now, option));
         }
         for (EnemyWave w : waves) {
@@ -291,27 +359,45 @@ public final class WaveSurfer {
         EngineRobot r = start.copy();
         HitRange range = w.range.copy();
         HitRange nextRange = next == null ? null : next.range.copy();
+        EngineRobot rammer = rammer(w.wave.shooter(), now);
+        boolean contact = false;
         long t = now + 1;
         for (; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++) {
-            step(r, w.wave, option);
+            contact |= step(r, w.wave, rammer, option);
             range.observe(t, r.x, r.y);
             if (nextRange != null) {
                 nextRange.observe(t, r.x, r.y);
             }
         }
-        double danger = damage(w, range) * closing(w, start, r, now);
         if (next == null) {
-            return danger;
+            if (rammer != null) {
+                for (; t <= now + RAM_HORIZON; t++) {
+                    contact |= step(r, w.wave, rammer, option);
+                }
+            }
+            return damage(w, range) * closing(w, start, r, rammer, now) + ramDanger(r, rammer, contact);
         }
+        double danger = damage(w, range) * closing(w, start, r, rammer, now) + (contact ? CONTACT_DANGER : 0);
+        // The rammer as predicted so far drives the next wave's ways only if it fired that wave too (in melee another
+        // robot may have); the next wave of another shooter is surfed around its own origin.
+        EngineRobot nextRammer = next.wave.shooter().equals(w.wave.shooter()) ? rammer : null;
         double least = Double.POSITIVE_INFINITY;
-        for (int o : OPTIONS) {
+        for (int o : nextRammer == null ? OPTIONS : RAM_OPTIONS) {
             EngineRobot q = r.copy();
             HitRange qr = nextRange.copy();
-            for (long u = t; u <= now + MAX_PREDICTED_TURNS && !qr.passed(); u++) {
-                step(q, next.wave, o);
+            EngineRobot qe = nextRammer == null ? null : nextRammer.copy();
+            boolean touched = false;
+            long u = t;
+            for (; u <= now + MAX_PREDICTED_TURNS && !qr.passed(); u++) {
+                touched |= step(q, next.wave, qe, o);
                 qr.observe(u, q.x, q.y);
             }
-            least = Math.min(least, damage(next, qr) * closing(next, start, q, now));
+            if (qe != null) {
+                for (; u <= now + RAM_HORIZON; u++) {
+                    touched |= step(q, next.wave, qe, o);
+                }
+            }
+            least = Math.min(least, damage(next, qr) * closing(next, start, q, qe, now) + ramDanger(q, qe, touched));
         }
         return danger + least;
     }
@@ -320,19 +406,70 @@ public final class WaveSurfer {
      * How much more dangerous a way is for ending ({@code end}) closer to the wave's shooter than we are now
      * ({@code start}): the distance now over the distance then, as the angle we fill in the shooter's view grows with
      * nearness; 1 at the same distance; only in a close fight. A rammer that drives at us makes every close option
-     * dangerous, and from close up any gun hits.
+     * dangerous, and from close up any gun hits. Against an enemy that drives at us ({@code rammer}, where the
+     * prediction left it) the distance then is to the predicted enemy, at any distance.
      */
-    private double closing(EnemyWave w, EngineRobot start, EngineRobot end, long now) {
+    private double closing(EnemyWave w, EngineRobot start, EngineRobot end, EngineRobot rammer, long now) {
         double[] enemy = enemyAt(w.wave.shooter(), now);
         if (enemy == null) {
             return 1;
         }
         double before = Math.hypot(start.x - enemy[0], start.y - enemy[1]);
-        if (before >= CLOSE_FIGHT) {
+        if (rammer == null && before >= CLOSE_FIGHT) {
             return 1;
         }
-        double after = Math.max(MIN_CLOSING_DISTANCE, Math.hypot(end.x - enemy[0], end.y - enemy[1]));
+        double ex = rammer == null ? enemy[0] : rammer.x;
+        double ey = rammer == null ? enemy[1] : rammer.y;
+        double after = Math.max(MIN_CLOSING_DISTANCE, Math.hypot(end.x - ex, end.y - ey));
         return before / after;
+    }
+
+    /**
+     * What a robot that drives at us ({@code rammer}, where the prediction left it; null for any other) costs a way
+     * besides its waves: a point-blank bullet if it touched us on the way, and its next bullet from where it is at the
+     * way's end ({@link #SURE_HIT_DISTANCE}).
+     */
+    private static double ramDanger(EngineRobot end, EngineRobot rammer, boolean contact) {
+        if (rammer == null) {
+            return 0;
+        }
+        double d = Math.max(MIN_CLOSING_DISTANCE, Math.hypot(end.x - rammer.x, end.y - rammer.y));
+        double chance = Math.min(1, (SURE_HIT_DISTANCE / d) * (SURE_HIT_DISTANCE / d));
+        return (contact ? CONTACT_DANGER : 0) + chance * BulletMotion.damage(RobotMotion.MAX_BULLET_POWER);
+    }
+
+    /**
+     * The enemy as a prediction starts it, from its last scan up to 8 turns old, if it drives at us; else null. Its
+     * gun and the rest are left at their defaults: the prediction only moves it.
+     */
+    private EngineRobot rammer(String name, long now) {
+        double[] enemy = drivesAtUs(name) ? enemyAt(name, now) : null;
+        if (enemy == null) {
+            return null;
+        }
+        EngineRobot e = new EngineRobot();
+        e.x = enemy[0];
+        e.y = enemy[1];
+        e.bodyHeading = Angles.toRobocode(enemy[2]);
+        e.velocity = enemy[3];
+        e.energy = 100;
+        return e;
+    }
+
+    /**
+     * One turn of a robot that drives at us: it turns the shorter way towards where we are (forwards or backwards)
+     * and drives past us at full speed.
+     */
+    private void chase(EngineRobot e, double x, double y) {
+        double turn = Angles.normalizeRelative(Angles.toRobocode(Angles.bearing(e.x, e.y, x, y)) - e.bodyHeading);
+        double distance = Math.hypot(x - e.x, y - e.y) + RAM_OVERSHOOT;
+        if (Math.abs(turn) > Math.PI / 2) {
+            turn = Angles.normalizeRelative(turn + Math.PI);
+            distance = -distance;
+        }
+        e.bodyTurnRemaining = turn;
+        e.distanceRemaining = distance;
+        RobotMotion.move(e, (int) field.width(), (int) field.height(), coolingRate);
     }
 
     /** The enemy's last scanned position up to 8 turns old, or null. */
@@ -350,11 +487,29 @@ public final class WaveSurfer {
         return null;
     }
 
-    private void step(EngineRobot r, Wave origin, int option) {
-        double[] cmd = orbit(r, origin, option);
+    /**
+     * One predicted turn of a way. With a robot that drives at us ({@code rammer}, else null) it orbits the robot
+     * instead of the wave's origin, and the robot chases us; returns whether it touched us (the robots' boxes
+     * overlap), in which case it is pushed back and stopped as the engine does with the robot at fault.
+     */
+    private boolean step(EngineRobot r, Wave origin, EngineRobot rammer, int option) {
+        double[] cmd = rammer == null ? orbit(r, origin.x(), origin.y(), option) : orbit(r, rammer.x, rammer.y, option);
+        double x = r.x;
+        double y = r.y;
         r.distanceRemaining = cmd[0];
         r.bodyTurnRemaining = cmd[1];
         RobotMotion.move(r, (int) field.width(), (int) field.height(), coolingRate);
+        if (rammer == null) {
+            return false;
+        }
+        // It acts on where we were at the end of the last turn.
+        chase(rammer, x, y);
+        double size = 2 * RobotMotion.HALF_SIZE;
+        if (Math.abs(rammer.x - r.x) < size && Math.abs(rammer.y - r.y) < size) {
+            RobotMotion.ram(rammer);
+            return true;
+        }
+        return false;
     }
 
     /** The share of the wave's predicted aim inside this hit range, times its bullet's damage. */
@@ -418,12 +573,22 @@ public final class WaveSurfer {
     }
 
     /** Adds the guess factors of {@code w} that bullet {@code b} shadows, with the chance of a collision there. */
+    /**
+     * A shadow's bearings as an interval of guess factors. The second end is taken relative to the first, so a
+     * shadow across the bearing opposite the reference stays as narrow as it is instead of wrapping around to cover
+     * the whole wave.
+     */
+    static double[] shadowRange(double reference, int direction, double escape, double from, double to) {
+        double g1 = direction * Angles.normalizeRelative(from - reference) / escape;
+        double g2 = g1 + direction * Angles.normalizeRelative(to - from) / escape;
+        return new double[] {Math.min(g1, g2), Math.max(g1, g2)};
+    }
+
     private void addShadows(EnemyWave w, BulletPath b) {
         List<double[]> found = new ArrayList<>();
         for (double[] angles : b.shadows(w.wave)) {
-            double g1 = w.guessFactor(angles[0]);
-            double g2 = w.guessFactor(angles[1]);
-            found.add(new double[] {Math.min(g1, g2), Math.max(g1, g2), angles[2]});
+            double[] range = shadowRange(w.range.reference(), w.direction, w.escape, angles[0], angles[1]);
+            found.add(new double[] {range[0], range[1], angles[2]});
         }
         if (!found.isEmpty()) {
             w.shadows.put(b.id(), found);
@@ -431,16 +596,20 @@ public final class WaveSurfer {
     }
 
     /**
-     * One turn of orbiting the wave's origin in {@code option}'s direction, keeping a preferred distance and sliding
-     * along walls; {@link #STOP} brakes. Returns {distance, right turn} in the engine's convention.
+     * One turn of orbiting ({@code cx}, {@code cy}) in {@code option}'s direction, keeping a preferred distance and
+     * sliding along walls; {@link #STOP} brakes. The retreats lean away from the centre more steeply, against a robot
+     * that drives at us. Returns {distance, right turn} in the engine's convention.
      */
-    double[] orbit(EngineRobot r, Wave origin, int option) {
+    double[] orbit(EngineRobot r, double cx, double cy, int option) {
         double x = r.x;
         double y = r.y;
-        double away = Angles.bearing(origin.x(), origin.y(), x, y);
-        double distance = Math.hypot(x - origin.x(), y - origin.y());
-        int direction = option == STOP ? lastOption == STOP ? 1 : lastOption : option;
-        double tilt = Math.max(-MAX_TILT, Math.min(MAX_TILT, (PREFERRED_DISTANCE - distance) / PREFERRED_DISTANCE));
+        double away = Angles.bearing(cx, cy, x, y);
+        double distance = Math.hypot(x - cx, y - cy);
+        int direction = Integer.signum(option == STOP ? lastOption == STOP ? 1 : lastOption : option);
+        boolean retreat = option == RETREAT_LEFT || option == RETREAT_RIGHT;
+        double gain = retreat ? RETREAT_GAIN : 1;
+        double limit = retreat ? RETREAT_TILT : MAX_TILT;
+        double tilt = Math.max(-limit, Math.min(limit, gain * (PREFERRED_DISTANCE - distance) / PREFERRED_DISTANCE));
         double heading = away + direction * (Math.PI / 2 - tilt);
         for (int i = 0; i < Angles.TWO_PI / SMOOTH_STEP; i++) {
             if (field.contains(x + WALL_STICK * Math.cos(heading), y + WALL_STICK * Math.sin(heading), WALL_MARGIN)) {
@@ -468,12 +637,12 @@ public final class WaveSurfer {
         Wave wave = new Wave(shot.shooter(), shot.x(), shot.y(), shot.fireTime(), shot.power());
         double reference = Angles.bearing(wave.x(), wave.y(), us[0], us[1]);
         double[] features = new double[TargetingFeatures.COUNT];
-        int direction = TargetingFeatures.compute(wave.x(), wave.y(), seen, wave.speed(), field, lastDirection,
-                features);
-        lastDirection = direction;
+        int direction = TargetingFeatures.compute(wave.x(), wave.y(), seen, wave.speed(), field,
+                lastDirection.getOrDefault(shot.shooter(), 1), features);
+        lastDirection.put(shot.shooter(), direction);
         double[] from = enemyPositions.getOrDefault(shot.shooter(), Map.of()).getOrDefault(aimed,
                 new double[] {wave.x(), wave.y()});
-        double[] aims = SimpleAims.aims(from[0], from[1], seen, wave.speed(), field);
+        double[] aims = SimpleAims.aims(from[0], from[1], seen, wave.speed(), field, LATERAL.get(shot.shooter()));
         double[] simple = new double[SimpleAims.COUNT];
         for (int g = 0; g < SimpleAims.COUNT; g++) {
             simple[g] = direction * Angles.normalizeRelative(aims[g] - reference) / wave.maxEscapeAngle();
@@ -494,14 +663,20 @@ public final class WaveSurfer {
     }
 
     /** Matches a bullet of {@code shooter} to its wave by power and travelled distance, and learns its guess factor. */
-    private void learn(String shooter, long time, double x, double y, double heading, double power) {
+    /**
+     * Learns the wave of a bullet that ended in turn {@code time} at this position, which the engine reported
+     * {@code movesBack} bullet moves short of the wave's radius (within one move).
+     */
+    private void learn(String shooter, long time, double x, double y, double heading, double power,
+                       double movesBack) {
         for (Iterator<EnemyWave> it = waves.iterator(); it.hasNext(); ) {
             EnemyWave w = it.next();
             if (!w.wave.shooter().equals(shooter) || Math.abs(w.wave.power() - power) > POWER_TOLERANCE) {
                 continue;
             }
             double travelled = Math.hypot(x - w.wave.x(), y - w.wave.y());
-            if (Math.abs(travelled - w.wave.radius(time)) <= w.wave.speed()) {
+            double expected = w.wave.radius(time) - movesBack * w.wave.speed();
+            if (Math.abs(travelled - expected) <= w.wave.speed()) {
                 model(shooter).learn(w.features, w.prediction, w.guessFactor(heading));
                 it.remove();
                 return;
@@ -526,5 +701,9 @@ public final class WaveSurfer {
 
     private static DangerModel model(String name) {
         return MODELS.computeIfAbsent(name, n -> new DangerModel(DangerParameters.DEFAULT));
+    }
+
+    private static RamDetector ramDetector(String name) {
+        return RAM_DETECTORS.computeIfAbsent(name, n -> new RamDetector());
     }
 }

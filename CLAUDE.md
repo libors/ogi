@@ -32,8 +32,11 @@ packaged as `cz.libors.OgiTeam` plays in teams.
 
 - `bot/`: robot code. Java 17 API only (`--release 17`), no external dependencies. `cz.libors.OgiGunLog` (Ogi
   with the gun bench's log) has a jar of its own that never goes to a rumble.
-- `harness/`: battle runner, checks and the turn recorder on the Robocode control API.
+- `harness/`: battle runner, checks, turn recorder, comparisons and the queue on the Robocode control API; the
+  offline benches in the `gunBench` source set.
 - `probe/`: probe robots for engine recordings; deployed locally only, never to a rumble.
+- `worker/`: what runs on a remote worker (the WSL container, the Windows scripts, diagnostics); it reaches the worker
+  only in the bundle. Read `docs/build-and-run.md`, "Remote worker", before changing it.
 - `docs/`: read the relevant document before changing that area.
   - Before touching the build, Gradle tasks, toolchains or the Robocode installation, read `docs/build-and-run.md`.
   - Before changing or adding harness code or checks, read `docs/harness.md`.

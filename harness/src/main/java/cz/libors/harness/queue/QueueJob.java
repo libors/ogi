@@ -134,6 +134,11 @@ public abstract class QueueJob {
      */
     public abstract List<Work> next(String worker) throws IOException;
 
+    /** Whether this job's battles run in the engine's debug mode; a worker plays one mode at a time. */
+    public boolean debug() {
+        return false;
+    }
+
     public abstract void completed(Work work, Map<String, Object> outcome, String worker) throws IOException;
 
     /** A battle failed on the worker (an exception, a crash, a timeout); the job may retry it there or give up. */

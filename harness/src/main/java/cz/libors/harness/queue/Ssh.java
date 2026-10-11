@@ -17,8 +17,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
- * ssh and scp to a Windows worker, whose ssh shell is Windows PowerShell 5.1 (windows-worker-setup.md). There is no
- * rsync on Windows, so a directory is kept in sync by comparing SHA-256 lists and copying what differs with scp.
+ * ssh and scp to a Windows worker, whose ssh shell is Windows PowerShell 5.1 (build-and-run.md, "Native Windows
+ * worker"). There is no rsync on Windows, so a directory is kept in sync by comparing SHA-256 lists and copying what
+ * differs with scp.
  */
 final class Ssh {
 
@@ -43,6 +44,10 @@ final class Ssh {
         for (String a : args) {
             if (a.isEmpty()) {
                 throw new IllegalArgumentException("PowerShell drops empty arguments");
+            }
+            if (a.contains("\"")) {
+                // Windows PowerShell 5.1 passes a quote to a native program unescaped, so the argument would split.
+                throw new IllegalArgumentException("PowerShell does not pass quotes on: " + a);
             }
             sb.append(' ').append(quote(a));
         }

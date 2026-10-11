@@ -119,6 +119,18 @@ public final class GuessFactorGun {
         return plan(name, now - 1);
     }
 
+    /**
+     * Our bullet fired from the plan of turn {@code planTime} at this enemy was shot down by one of its bullets: it
+     * never reached the target, so its wave counts as a virtual one (not in the bullet records nor the anti-surfer
+     * views).
+     */
+    public void shotDown(String name, long planTime) {
+        Target t = targets.get(name);
+        if (t != null) {
+            t.waves.replaceAll(w -> w.real && w.plan.time() == planTime ? new GunWave(w.plan, w.range, false) : w);
+        }
+    }
+
     /** The shot planned in turn {@code time}, if it is the latest plan for this enemy. */
     public Optional<Plan> plan(String name, long time) {
         Target t = targets.get(name);

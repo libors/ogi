@@ -49,17 +49,22 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   aims at the guess factor most weight covers. The search runs only once the gun heat is at most 4 cooling steps:
   the 4 turns before the gun is cool and the turns it stays cool.
 - **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
-  the guess-factor gun searched for its plan (at power 1.9, 5 waves in 14): would each aim have been inside the hit
+  the guess-factor gun searched for its plan (at power 1.9, 4 waves in 14: in the turn it fires, the gun heat already
+  includes the new shot): would each aim have been inside the hit
   range? Per enemy, the gun with the better weighted record fires (a real bullet counts 1, a virtual wave 0.125);
   circular targeting until the guess-factor gun has a record.
 - **Anti-surfer gun:** a third gun with the same features and weights over the waves of our bullets only, in three
   views: the latest 30 and 150 bullets and all of them. A search takes the 4 nearest shots of each view and aims at
   the guess factor most of their summed kernel weight covers. A surfer dodges our bullets, not our waves, and keeps
   going where they missed it until one hits it there; the short views follow that, the long ones keep the rest. It
-  replaces the chosen gun when the enemy is hard to hit (the guess-factor gun's record over our bullets below 20 %,
-  one standard error below its record), it has been scored on 30 bullets and its record over them is the better one.
+  replaces the chosen gun when the enemy is hard to hit (the guess-factor gun's record over our bullets is not
+  clearly above 20 %: one standard error below the record, the Wilson lower bound, is below 20 %), it has been scored
+  on 30 bullets and its record over them is the better one. Our bullets an enemy bullet shot down count as virtual
+  waves: they never reached the target. Its weights are a fixed copy of the main gun's; the gun bench does not tune
+  them.
 - **Shadow shots:** in a duel, in the turn before a shot of the anti-surfer gun, its peaks with at least 70 % of the
-  best one's weight compete with its aim (at most three, 0.15 guess factors apart): the turret takes the heading
+  best one's weight compete with its aim (at most three, 0.15 guess factors apart, and only those the turret can
+  reach in one turn, 20°): the turret takes the heading
   whose bullet leaves the surfer the least danger, that bullet's shadows on the enemy waves counted
   (`WaveSurfer.dangerWithShot`), and the gun's own aim on a tie. A turret-only change, like the aim spread; the guns
   learn from their own aims.
@@ -81,19 +86,27 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   hit us and those one of ours hit. Each is stored with the guess factor it passed us at and with how we moved when
   the enemy aimed: the gun's `TargetingFeatures` of our own `RobotHistory` as it was at the end of the turn before the
   shot. A new wave gets a profile over 47 guess-factor bins:
-  - a smoothed histogram of the bullets fired in the most similar situations (KNN, about 1.4·√n of them), whose share
+  - a smoothed histogram of the bullets fired in the most similar situations (KNN, about 1.4·√n of them, at most 18),
+    whose share
     grows with the data (`knnRamp`), so that guns whose aim follows our velocity become predictable;
   - the rest a histogram of all bullets plus a prior of a gun aiming straight at us (guess factor 0).
-  - **An ensemble:** that data profile is one estimator. The others are four simple guns (`SimpleAims`: head-on,
-    linear with and without the walls, circular, each aimed from the enemy's scanned position and our state of the
-    turn it aimed), each a narrow kernel at its aim, and a flattener: a KNN over where we ourselves were when this
+  - **An ensemble:** that data profile is one estimator. The others are seven simple guns (`SimpleAims`: head-on,
+    linear with and without the walls, circular, linear with our lateral velocity averaged over the last 20 and 40
+    turns, and a pattern match on our lateral velocity; each aimed from the enemy's scanned position and our state of
+    the turn it aimed), each a narrow kernel at its aim, and a flattener: a KNN over where we ourselves were when this
     enemy's waves passed us (`DangerModel.visit`, the middle of the wave's hit range on us), which is where a gun that
     learns our movement aims. Every observed bullet scores each estimator by the share it gave the bullet's bin; the
     weights go with the prior times `exp(temper · record)`, the record forgetting a part per bullet (`decay`). A simple
     gun the enemy does not use loses its weight within a few bullets, so it costs no room against learning guns.
+  - **Lateral history** (`LateralHistory`, per enemy, for the battle): our lateral velocity as that enemy saw it, one
+    value per turn in which we scanned it. The averaged guns take the mean of this round's last 20 or 40 values. The
+    pattern gun finds the latest earlier occurrence of the longest run (3 to 40) of our newest lateral velocities
+    rounded to whole pixels per turn, over the whole battle, in one backward pass, and leads by the sum of the rounded
+    values that followed it over the bullet's flight time, divided by the distance; without a match it aims head-on.
   - The numbers (`DangerParameters.DEFAULT`) are tuned on the danger bench
-    ([harness.md](harness.md#danger-bench)); `DangerParameters.HISTOGRAM` is the single histogram the surfer used until
-    2026-10-09.
+    ([harness.md](harness.md#danger-bench)) with the first four simple guns; the averaged and pattern guns came later
+    with the same prior, checked on the bench and in battles. `DangerParameters.HISTOGRAM` is the single histogram the
+    surfer used until 2026-10-09.
 - **A dead enemy's waves stay** until they pass us: its bullets keep flying (engine-model G-44).
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
   `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
@@ -105,8 +118,10 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.
   - **Close fights:** nearer than 250 px to the wave's shooter, each wave's danger is multiplied by d_now / d_end, d
     being the distance to the enemy now and where the way ends (the angle we fill in the shooter's view grows with
-    nearness), and every way carries a floor of 0.02 of the bullet's damage, so that ways that close in on a rammer
-    cost more even where the profile is empty.
+    nearness).
+  - **A floor:** at any distance, every way a wave would hit carries a floor of 0.02 of the bullet's damage, so that
+    ways that close in on a rammer cost more even where the profile is empty. The floor is shadowed like the rest, so
+    a way whose hit range is all shadowed costs nothing.
   - **Bullet shadows:** every bullet we fire is followed from the `Bullet` that `setFireBullet` returns until it
     leaves the field or hits a robot or a bullet. For each enemy wave and each of our bullets, in every turn both are
     in the air, the part of our bullet's move in that turn that lies between the wave's radii at the start and the
@@ -116,6 +131,19 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     expected damage from a wave counts only the unshadowed share of its hit range, each guess factor weighted by the
     wave's profile and by the largest shadow weight on it.
   - The way with the least danger wins, and its first turn's commands are used. Ties keep the last way.
+  - **Against an enemy that drives at us** (`RamDetector`: per enemy for the battle, an exponential average, weight
+    0.01 per scan, of its speed towards us while it is closer than 200 px and 0 further away; above 2 px/turn it
+    drives at us):
+    - every way also predicts the enemy from its last scan: each turn it turns the shorter way towards where we were
+      (backwards if that turns it less) and drives at full speed, with the engine's physics (`RobotMotion`);
+    - the ways orbit the enemy instead of the wave's origin, five of them: the two usual orbits, two that tilt twice
+      as steeply against the preferred distance (up to 1.2 rad): away from the enemy when it is nearer than 325 px,
+      towards it when it is farther, and the stop; the next wave of another shooter is surfed around its own origin;
+    - every way is predicted at least 20 turns, after its waves have passed if need be;
+    - a way on which the boxes of the two robots overlap costs the damage of a full-power bullet, once per wave's part
+      of the way (the predicted enemy is pushed back, our robot is not stopped); at the way's end
+      the enemy's next full-power bullet counts with the chance min(1, (50 / d)²), d the distance to the predicted
+      enemy then; the close-fight factor uses the predicted enemy at any distance.
 - **Without an enemy wave** the bot orbits the target and changes direction at random intervals, from its own seeded
   generator. It also steers towards 325 px, but turns towards the target at walls, so it stays closer than the surfer.
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
@@ -129,7 +157,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   drawn as they are; arcs are polylines, never `Arc2D`.
 - **What is drawn:** our gun waves (grey, a fired one orange) with their hit ranges on the target (green), enemy waves
   (red) with their hit range on us (yellow), the gun's reference and escape angles, each gun's aim (guess factor
-  green, circular blue; the chosen one thick), and per target the guns' virtual hit rates and the data size.
+  green, circular blue, anti-surfer orange; the chosen one thick), and per target the guns' virtual hit rates and the data size.
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
   screen is the shot of the current turn.
@@ -139,21 +167,24 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   keeps it ([harness.md](harness.md#recording-comparison-battles)).
 - **For the gun bench:** `cz.libors.OgiGunLog` is Ogi that also logs its gun's inputs and decisions (`GunLog`): one
   `gunpass` property per gun wave that passed its target in this turn (the plan's turn, whether it carried a bullet,
-  the wave's reference and escape angle, the hitting headings), then `gunshot` with the turn's plan (the features,
+  the wave's reference and escape angle, the lowest and highest hitting offset from the reference), then `gunshot` with the turn's plan (the features,
   the direction, the reference, the escape angle, whether the guess-factor gun searched, the circular aim, the guess
   factor found and the chosen gun). That is everything `GunModel` needs to replay the battle.
   - `OgiGunLog` also logs `gunshield` when an enemy bullet destroys one of its bullets (the plan's turn and the
     shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
-    that shoot bullets down would otherwise look easy to hit on the bench.
+    that shoot bullets down would otherwise look easy to hit on the bench. The log keeps the guns' aims, not the
+    turret's offset (aim spread, shadow shots), so the bench scores the aims, as the guns learn them.
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).
 - **Without the GUI:** `OverlayRenderTest` paints a simulated fight into `bot/build/overlay/gun.png`. The image is
   mirrored by hand, so its text is upside down.
-- **Own turn time (P-04, `TurnClock`):** the bot measures the wall time from its first event of a turn (`onStatus`,
-  which the engine delivers before every other event) to its `execute()`, and reports the previous turn's time in µs
+- **Own turn time (`TurnClock`):** the bot measures the wall time from its first event of a turn (`onStatus`,
+  which the engine delivers before the events Ogi handles; only a skipped turn's, a win's and a round's or battle's
+  end come earlier) to its `execute()`, and reports the previous turn's time in µs
   as the debug property `cpu`. The engine gives that part of the turn the CPU constant (and up to a millisecond more,
   engine-model G-45). The harness compares it with the constant of an idle machine
   ([harness.md](harness.md#how-results-are-gathered)). Measured on the Mac (2026-10-09, lab opponents): median
   6–13 µs, 99th percentile ~80 µs, the longest turns 0.7–1.7 ms at a battle's start (the JIT) and in garbage
-  collections.
+  collections. Those numbers predate the shadow shots and the anti-ram ways; the queue's health has the current
+  ones per job (e.g. the 1v1 rumble on 2026-10-11: a few hundred turns over the idle constant in 4572 battles).

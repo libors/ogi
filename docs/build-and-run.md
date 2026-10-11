@@ -22,11 +22,14 @@ battles.
 
 | Command | What it does |
 |---|---|
-| `./gradlew build` | Compiles, runs unit tests and packages `bot/build/robots/cz.libors.Ogi_<v>.jar` and `cz.libors.OgiTeam_<v>.jar` |
+| `./gradlew build` | Compiles (the benches too), runs unit tests and packages `bot/build/robots/cz.libors.Ogi_<v>.jar`, `cz.libors.OgiTeam_<v>.jar` and `cz.libors.OgiGunLog_<v>.jar` |
 | `./gradlew skeletonCheck` | Headless battles against the sample bots; see [harness.md](harness.md) |
 | `./gradlew recordProbes` | Records probe battles turn by turn into `harness/build/recordings/` and checks integrity, coverage and determinism; see [harness.md](harness.md#recordings) |
 | `./gradlew engineTest` | Runs `recordProbes`, then replays the recordings through the bot's engine model (`harness/src/engineTest`) |
 | `./gradlew compare -Pbaseline=HEAD` | Paired, sequential comparison of the working tree with a baseline revision; see [harness.md](harness.md#comparing-two-versions) |
+| `./gradlew recordBattles -Pversions=<v>,<v>` | Recordings of comparison battles; see [harness.md](harness.md#recording-comparison-battles) |
+| `./gradlew recordGunLogs`, `gunBench`, `gunTrend -Plogs=<dir>` | The gun's logs and the gun bench; see [harness.md](harness.md#gun-bench) |
+| `./gradlew dangerBench -Precordings=<dir>` | The danger bench; see [harness.md](harness.md#danger-bench) |
 | `./gradlew :harness:baselineJars -Pbaseline=<rev>` | Only builds the robot and team jars of a git revision into `.robocode/baselines/` |
 | `./gradlew sandboxCheck` | Checks that robots run in Robocode's sandbox with a minimal environment; see [harness.md](harness.md#foreign-robots) |
 | `./gradlew jarCheck -Pjars=<jar or directory>,...` | Checks foreign robot jars against the allowlist before they run |
@@ -38,6 +41,7 @@ battles.
 | `./gradlew queueServer` | The queue's server and dashboard (`http://localhost:8765/`) until stopped; `-Pworkers=ogi-win:12` (default), `local:4`; see [harness.md](harness.md#queue) |
 | `./gradlew submit -Pbaseline=HEAD` | Queues a comparison of the working tree (a snapshot, `snapshotJars`) with a baseline; the options of `compare`, plus `-Pnote` |
 | `./gradlew submitGunLogs -Popponents=<set>` | Queues the gun's logs of the working tree against a set, for the gun bench |
+| `./gradlew submitRecordings -Popponents=<set>` | Queues full recordings of the working tree against a set, for the danger bench |
 | `./gradlew queueStatus`, `./gradlew queueCancel -Pjob=<id>` | The queue in a terminal; cancel a job |
 
 For Java 12–23 the harness adds `-Djava.security.manager=allow`, as Robocode's own launch scripts do. Java 24+ refuses
@@ -74,13 +78,15 @@ cd .robocode/1.11.1 && ./robocode.sh
 |---|---|---|
 | `cz.libors.Ogi_<v>.jar` | classes, `cz/libors/Ogi.properties`, manifest `robots: cz.libors.Ogi` | 1v1 and melee |
 | `cz.libors.OgiTeam_<v>.jar` | the same classes plus `cz/libors/OgiTeam.team` (five `cz.libors.Ogi` members, the first is the leader) | team |
+| `cz.libors.OgiGunLog_<v>.jar` | the classes plus `cz.libors.OgiGunLog`, which logs the gun for the gun bench | none; the build fails if a rumble jar holds it |
 | `cz.libors.probe_<v>.jar` (built by `probe/`) | the probe robots `cz.libors.probe.*` with their `.properties` | none, local recordings only |
 
 The version and author come from `botVersion` and `botAuthor` in `gradle.properties`.
 
 ## Remote worker
 
-Foreign robot jars run on a separate machine, never on the development machine. Code reaches it as a **bundle**
+The population of foreign robots runs on a separate machine; on the development machine only the few approved jars in
+`.robocode/foreign/` run, after the jar check. Code reaches the worker as a **bundle**
 built from the working tree (`./gradlew workerBundle`): the harness jar, our robot, team, probe and baseline jars,
 the opponent sets, the `worker/` scripts and the Robocode setup jar. The worker never builds and holds no git
 repository.
@@ -95,17 +101,22 @@ repository.
   session is gone. See [harness.md](harness.md#queue).
 - The bundle is synced by comparing SHA-256 lists and copying the differences with scp (no rsync on Windows);
   the executor unpacks Robocode from the bundle's setup jar into `C:\ogi\robocode\<hash>` once.
-- The `remote*` tasks run there by default (`queue.Remote`).
-- `worker/windows/parallel-check.ps1` and `load-check.ps1` stay as measurement tools.
+- The `remote*` tasks run there by default (`queue.Remote`). They share the bundle, the CPU constant file and the
+  measurement home with the queue's executor, so run them while the queue's worker is idle.
+- `worker/windows/parallel-check.ps1` and `load-check.ps1` stay as measurement tools; `load-check.ps1` runs its
+  robots with the ssh session's environment, not a minimal one.
+- `worker/windows/fetch-jars.ps1` downloads foreign jars from a list into a directory on the worker; they still need
+  the jar check and an `approved.txt` line before a slot uses them.
 - On Windows, `java.io.File` turns a robot's `jar:file:/…!` URL into backslashes; `BattleRunner` converts them back.
 - Windows Defender probably scans freshly copied jars: the first battle of a fresh slot took about 9 s, later ones
   1–2 s (lab set, 2026-10-09).
 
-### Container worker in WSL2 (working, not the default)
+### Container worker in WSL2 (working for trusted robots, not the default)
 
 - `worker/Dockerfile`: Temurin 17 and Robocode 1.11.1 (setup jar checked by SHA-256), base images pinned by digest,
   nothing of ours. `worker/run.sh` is the entry point: a fresh Robocode home on a tmpfs, the CPU constant kept in a
-  state directory, the minimal environment for the battle JVM.
+  state directory, the minimal environment for the battle JVM. It copies only the bundle's jars into the home, so
+  foreign opponents do not run there; adding them needs the SHA-256 and jar check gate the Windows worker has.
 - `worker/remote.sh` runs one harness main class from the Mac: rsync of the bundle, `docker build` if the Dockerfile
   or the setup jar changed, `docker run` with no network, a read-only root, no capabilities and a process limit,
   then the results back into `harness/build/remote/<name>/`.

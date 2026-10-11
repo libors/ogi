@@ -156,7 +156,8 @@ public final class DangerModel {
         double total = 0;
         for (int e = 0; e < ESTIMATORS; e++) {
             prior[e] /= priorTotal;
-            w[e] = prior[e] * Math.exp(parameters.temper() * (records[e] - best));
+            // An estimator without prior weight takes no part: 0 · exp(a large gap) would be NaN.
+            w[e] = prior[e] > 0 ? prior[e] * Math.exp(parameters.temper() * (records[e] - best)) : 0;
             total += w[e];
         }
         for (int e = 0; e < ESTIMATORS; e++) {

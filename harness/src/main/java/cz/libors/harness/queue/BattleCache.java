@@ -3,6 +3,7 @@ package cz.libors.harness.queue;
 import cz.libors.harness.Json;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,9 +29,10 @@ import java.util.TreeMap;
  * <p>A battle is the same when everything that decides it is the same: the field, the rounds, the seed and the start
  * positions; each participant's name and the SHA-256 of the jar it is loaded from (our robot's from the job, the
  * opponents' as the worker reports them, "builtin" for Robocode's own robots); and the worker with its operating
- * system, Java, Robocode, JVM options, CPU factor and sandbox. The CPU constant is left out: the worker measures it
- * anew at every start, and its jitter of a few per cent is noise in the turn time limit, not another battle. A battle
- * with an opponent whose jar the worker did not report, a recorded one and one in debug mode are never cached.
+ * system, Java, Robocode, JVM options, CPU factor and sandbox. The CPU constant is left out: the executor measures it
+ * once per worker and JVM options and keeps it, so it is the same for every battle unless someone measures again;
+ * after a new measurement, raise {@link #VERSION}. A battle with an opponent whose jar the worker did not report, a
+ * recorded one and one in debug mode are never cached.
  *
  * <p>A cached outcome is one sample of its battle: robots that skip turns or draw from the clock do not replay bit for
  * bit (harness.md), so it is as good as a new one, not equal to it. A comparison that wants new samples takes another
@@ -45,7 +47,8 @@ import java.util.TreeMap;
  */
 public final class BattleCache {
 
-    static final String VERSION = "battle-cache 1";
+    /** Version 2: every battle starts with empty robot data ({@code BattleRunner}); version 1's battles did not. */
+    static final String VERSION = "battle-cache 2";
 
     /** What the cache needs to know about a worker. */
     public interface Workers {
@@ -139,34 +142,75 @@ public final class BattleCache {
     /** The claimed battle will not come back: the jobs waiting for it are told to play it themselves. */
     public void release(String key) throws IOException {
         claimed.remove(key);
-        List<Waiter> waiters = waiting.remove(key);
-        if (waiters != null) {
-            for (Waiter w : waiters) {
-                w.done(Optional.empty());
-            }
-        }
+        notify(waiting.remove(key), Optional.empty());
     }
 
-    /** Keeps a battle's outcome, in memory and in the file, and hands it to the jobs waiting for it. */
+    /**
+     * Keeps a battle's outcome, in memory and in the file, and hands it to the jobs waiting for it. The outcome is
+     * kept before any waiter hears of it, so a waiter that fails does not cost the others or the cache the battle.
+     */
     public void put(String key, BattleSpec spec, Map<String, Object> outcome) throws IOException {
         claimed.remove(key);
         List<Waiter> waiters = waiting.remove(key);
-        if (waiters != null) {
-            for (Waiter w : waiters) {
-                w.done(Optional.of(outcome));
+        try {
+            if (!outcomes.containsKey(key)) {
+                outcomes.put(key, outcome);
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("key", key);
+                entry.put("battle", String.join(" vs ", spec.robots()) + ", seed " + spec.seed());
+                entry.put("outcome", outcome);
+                append(Json.line(entry));
             }
+        } finally {
+            notify(waiters, Optional.of(outcome));
         }
-        if (outcomes.containsKey(key)) {
+    }
+
+    /** Tells every waiter, also after one of them failed; the first failure is thrown at the end. */
+    private static void notify(List<Waiter> waiters, Optional<Map<String, Object>> outcome) throws IOException {
+        if (waiters == null) {
             return;
         }
-        outcomes.put(key, outcome);
-        Map<String, Object> entry = new LinkedHashMap<>();
-        entry.put("key", key);
-        entry.put("battle", String.join(" vs ", spec.robots()) + ", seed " + spec.seed());
-        entry.put("outcome", outcome);
+        IOException failure = null;
+        for (Waiter w : waiters) {
+            try {
+                w.done(outcome);
+            } catch (IOException | RuntimeException e) {
+                IOException wrapped = e instanceof IOException io ? io : new IOException(e);
+                if (failure == null) {
+                    failure = wrapped;
+                } else {
+                    failure.addSuppressed(wrapped);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * Appends one line. A line cut short by a crash has no newline at its end, so a newline goes first then: the
+     * next entry gets a line of its own instead of being lost with the broken one.
+     */
+    private void append(String line) throws IOException {
         Files.createDirectories(file.toAbsolutePath().getParent());
-        Files.writeString(file, Json.line(entry) + "\n", StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND);
+        String text = line + "\n";
+        if (Files.exists(file) && !endsWithNewline(file)) {
+            text = "\n" + text;
+        }
+        Files.writeString(file, text, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    }
+
+    private static boolean endsWithNewline(Path file) throws IOException {
+        long size = Files.size(file);
+        if (size == 0) {
+            return true;
+        }
+        try (RandomAccessFile f = new RandomAccessFile(file.toFile(), "r")) {
+            f.seek(size - 1);
+            return f.read() == '\n';
+        }
     }
 
     public int size() {

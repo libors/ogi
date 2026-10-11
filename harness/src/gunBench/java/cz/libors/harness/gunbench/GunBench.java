@@ -143,7 +143,8 @@ public final class GunBench {
         if (parameters.equals(GunParameters.DEFAULT)) {
             System.out.println(differing == 0 && orphans == 0
                     ? "Parity: every replayed decision equals the logged one."
-                    : "PARITY FAILED: " + differing + " replayed decisions differ from the log.");
+                    : "PARITY FAILED: " + differing + " replayed decisions differ from the log, " + orphans
+                            + " passed waves without their plan (a recording that lost a turn's debug properties).");
             System.exit(differing == 0 && orphans == 0 ? 0 : 1);
         }
         System.exit(0);
@@ -232,6 +233,10 @@ public final class GunBench {
                 trainOpponents.size(), train.size(), first.size() - leftOut.size() - trainOpponents.size(),
                 test.size());
         System.out.println("training half: " + String.join("; ", new TreeSet<>(trainOpponents)));
+        if (train.isEmpty()) {
+            throw new IllegalArgumentException("nothing to tune on: no opponent with a bullet fired in the training "
+                    + "half");
+        }
 
         long t0 = System.nanoTime();
         GunParameters tuned = tune(train, start, passes);
@@ -304,6 +309,9 @@ public final class GunBench {
             boolean improved = false;
             for (int i = 0; i < x.length; i++) {
                 double current = x[i];
+                // The best of all candidates, taken if it beats the current value by more than 0.01 points.
+                double[] bestY = null;
+                double bestV = best + 0.01;
                 for (double candidate : candidates(i, current, fine)) {
                     double[] y = x.clone();
                     y[i] = candidate;
@@ -314,11 +322,15 @@ public final class GunBench {
                         continue;
                     }
                     double v = objective(train, p);
-                    if (v > best + 0.01) {
-                        best = v;
-                        x = y;
-                        improved = true;
+                    if (v > bestV) {
+                        bestV = v;
+                        bestY = y;
                     }
+                }
+                if (bestY != null) {
+                    best = bestV;
+                    x = bestY;
+                    improved = true;
                 }
                 if (x[i] != current) {
                     System.out.printf(Locale.ROOT, "pass %d%s: %s %s -> %s, %.3f%n", pass, fine ? " (fine)" : "",
@@ -360,8 +372,9 @@ public final class GunBench {
         return c.stream().mapToDouble(Double::doubleValue).distinct().toArray();
     }
 
+    /** Every digit a double needs: the printed options must reproduce the tuned parameters exactly. */
     private static String fmt(double v) {
-        return String.format(Locale.ROOT, "%.4g", v);
+        return Double.toString(v);
     }
 
     private static double[] vector(GunParameters p) {

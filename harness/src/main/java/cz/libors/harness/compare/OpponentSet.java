@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * A fixed set of opponents and the battle format to meet them in, read from a text file:
@@ -15,8 +16,8 @@ import java.util.Map;
  * # comment
  * title The sample bots
  * format 1v1
- * weight [strong] 30
- * weight [other] 916
+ * weight [strong] 10
+ * weight [other] 90
  * [strong]
  * sample.RamFire
  * [other]
@@ -73,6 +74,10 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
         return parse(name, Files.readAllLines(file));
     }
 
+    private static final Set<String> KEYWORDS = Set.of("format", "title", "weight");
+    /** Scoreboards every comparison shows; a group of the same name would show twice. */
+    private static final Set<String> RESERVED_GROUPS = Set.of("all", "rumble");
+
     static OpponentSet parse(String name, List<String> lines) {
         Format format = null;
         String title = "";
@@ -85,26 +90,38 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
             if (line.isEmpty()) {
                 continue;
             }
-            if (line.startsWith("format ")) {
-                format = Format.of(line.substring("format ".length()).trim());
-            } else if (line.startsWith("title ")) {
-                title = line.substring("title ".length()).trim();
-            } else if (line.startsWith("weight ")) {
-                String rest = line.substring("weight ".length()).trim();
-                int close = rest.indexOf(']');
+            String keyword = line.split("\\s+", 2)[0];
+            String argument = line.substring(keyword.length()).trim();
+            if (KEYWORDS.contains(keyword) && argument.isEmpty()) {
+                throw new IllegalArgumentException(name + ": " + keyword + " needs an argument");
+            }
+            if (keyword.equals("format")) {
+                if (format != null) {
+                    throw new IllegalArgumentException(name + ": a second format line: " + line);
+                }
+                format = Format.of(argument);
+            } else if (keyword.equals("title")) {
+                title = argument;
+            } else if (keyword.equals("weight")) {
+                int close = argument.indexOf(']');
                 double weight;
                 try {
-                    weight = rest.startsWith("[") && close > 1 ? Double.parseDouble(rest.substring(close + 1).trim())
-                            : Double.NaN;
+                    weight = argument.startsWith("[") && close > 1
+                            ? Double.parseDouble(argument.substring(close + 1).trim()) : Double.NaN;
                 } catch (NumberFormatException e) {
                     weight = Double.NaN;
                 }
-                if (!(weight > 0)) {
+                if (!(weight > 0) || Double.isInfinite(weight)) {
                     throw new IllegalArgumentException(name + ": expected weight [group] <positive number>: " + line);
                 }
-                weights.put(rest.substring(1, close).trim(), weight);
+                if (weights.put(argument.substring(1, close).trim(), weight) != null) {
+                    throw new IllegalArgumentException(name + ": a second weight for the same group: " + line);
+                }
             } else if (line.startsWith("[") && line.endsWith("]")) {
                 group = line.substring(1, line.length() - 1).trim();
+                if (RESERVED_GROUPS.contains(group)) {
+                    throw new IllegalArgumentException(name + ": [" + group + "] is the name of a built-in scoreboard");
+                }
             } else if (opponents.stream().anyMatch(o -> o.name().equals(line))) {
                 throw new IllegalArgumentException(name + ": " + line + " is listed twice");
             } else {

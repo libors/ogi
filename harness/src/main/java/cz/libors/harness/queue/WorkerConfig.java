@@ -8,9 +8,9 @@ import java.util.List;
  * A machine that runs battles for the queue, and where things are on it.
  *
  * <ul>
- *   <li>{@code local}: this machine, as a local process; trusted robots only (D-020: statistics against foreign
- *       robots run on the desktop).</li>
- *   <li>any other name: an ssh host with the native Windows layout of windows-worker-setup.md: Java 17 in
+ *   <li>{@code local}: this machine, as a local process; trusted robots only (statistics against foreign robots
+ *       run on the Windows worker).</li>
+ *   <li>any other name: an ssh host with the native Windows layout (build-and-run.md): Java 17 in
  *       {@code C:\ogi\jdk}, everything else under {@code C:\ogi}, the approved foreign jars in
  *       {@code C:\ogi\rumble}.</li>
  * </ul>
@@ -20,7 +20,7 @@ import java.util.List;
 record WorkerConfig(String name, boolean local, int slots, boolean foreign, String java, String root, String bundle,
                     String foreignDir, List<String> jvm, double cpuFactor) {
 
-    /** The options of the load study (windows-worker-setup.md): cheap compilation, no concurrent collector. */
+    /** The options of the load study (build-and-run.md): cheap compilation, no concurrent collector. */
     static final List<String> DEFAULT_JVM = List.of("-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1");
 
     /**

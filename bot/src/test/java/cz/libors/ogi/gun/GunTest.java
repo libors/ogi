@@ -1,6 +1,7 @@
 package cz.libors.ogi.gun;
 
 import cz.libors.ogi.geom.Field;
+import cz.libors.ogi.world.EnemyState;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -166,4 +167,31 @@ class GunTest {
         assertEquals(then.displacement(10), copy.displacement(10), 1e-12);
         assertTrue(h.until(10).isEmpty(), "older than the stored states");
     }
+
+    /** A bullet an enemy bullet shot down never reached its target: its wave is learned as a virtual one. */
+    @Test
+    void aBulletShotDownIsLearnedAsVirtual() {
+        for (boolean shotDown : new boolean[] {false, true}) {
+            String name = "standing-" + shotDown;
+            GuessFactorGun gun = new GuessFactorGun(FIELD);
+            Boolean real = null;
+            for (long t = 0; t <= 100 && real == null; t++) {
+                gun.scanned(name, t, 500, 300, 0, 0);
+                // The plan of turn 10 is fired in turn 11.
+                gun.update(t, 200, 300, t == 11 ? name : null);
+                if (shotDown && t == 12) {
+                    gun.shotDown(name, 10);
+                }
+                for (GunModel.Pass p : gun.passed()) {
+                    if (p.time() == 10) {
+                        real = p.real();
+                    }
+                }
+                EnemyState state = new EnemyState(name, 500, 300, 0, 0, 0, 100, t);
+                gun.aim(name, t, 200, 300, 2, false, CircularAim.aim(200, 300, state, 14, t + 1, FIELD));
+            }
+            assertEquals(!shotDown, real, shotDown ? "shot down" : "reached the target");
+        }
+    }
 }
+

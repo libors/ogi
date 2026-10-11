@@ -2,9 +2,10 @@ package cz.libors.ogi.trace;
 
 /**
  * Wall time of the robot's own part of each turn: from its first event of the turn ({@code onStatus}, which the
- * engine delivers before any other) to its {@code execute()}. The engine gives a robot the CPU constant of wall time
- * for this and skips its turn when it takes longer, so the bot reports it: the harness compares it with the constant
- * of an idle machine, which a raised constant on a loaded worker would otherwise hide (P-04).
+ * engine delivers before every event Ogi handles) to its {@code execute()}. The engine gives a robot about the CPU
+ * constant of wall time for this (up to a millisecond more, engine-model G-45) and skips its turn when it takes
+ * longer, so the bot reports it: the harness compares it with the constant of an idle machine, which a raised
+ * constant on a loaded worker would otherwise hide.
  */
 public final class TurnClock {
 

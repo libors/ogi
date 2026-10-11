@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     java
 }
@@ -109,6 +111,14 @@ fun Jar.robocodeJar(fileName: String, robotsAttribute: String) {
 
 val gunLogClasses = "${robotPackage.replace('.', '/')}/$gunLogName*"
 
+/** The gun-log robot must never reach a rumble: a jar that holds it fails the build. */
+fun requireNoGunLog(jar: File) {
+    ZipFile(jar).use { zip ->
+        val leaked = zip.entries().asSequence().map { it.name }.filter { it.contains(gunLogName) }.toList()
+        check(leaked.isEmpty()) { "${jar.name} contains the gun-log robot: $leaked" }
+    }
+}
+
 val robotJar = tasks.register<Jar>("robotJar") {
     description = "Packages the robot jar entered in the 1v1 and melee rumbles."
     robocodeJar("$robotPackage.${robotName}_$botVersion.jar", "$robotPackage.$robotName")
@@ -116,6 +126,7 @@ val robotJar = tasks.register<Jar>("robotJar") {
     from(generateRobotFiles) {
         include("**/$robotName.properties")
     }
+    doLast { requireNoGunLog(archiveFile.get().asFile) }
 }
 
 val teamJar = tasks.register<Jar>("teamJar") {
@@ -128,6 +139,7 @@ val teamJar = tasks.register<Jar>("teamJar") {
     from(generateRobotFiles) {
         exclude("**/$gunLogName.properties")
     }
+    doLast { requireNoGunLog(archiveFile.get().asFile) }
 }
 
 val gunLogJar = tasks.register<Jar>("gunLogJar") {

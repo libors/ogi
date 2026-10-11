@@ -19,6 +19,8 @@ bundle=$2
 results=$3
 name=$4
 shift 4
+# The name becomes a directory that a clean run deletes: letters, digits, dots, dashes and underscores only.
+[[ $name =~ ^[A-Za-z0-9._-]+$ ]] || { echo "remote.sh: bad run name '$name'" >&2; exit 2; }
 
 # The image depends only on the Dockerfile and the Robocode setup jar.
 setup="robocode-$OGI_ROBOCODE_VERSION-setup.jar"

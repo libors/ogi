@@ -111,10 +111,14 @@ public final class DangerBench {
         return byOpponent;
     }
 
-    /** The mean over opponents of the mean log share per bullet: what the search maximises. */
+    /**
+     * The mean over opponents of the mean log share per bullet: what the search maximises. Opponents without a
+     * bullet do not count; one whose bullets score NaN makes the whole objective NaN, so parameters that break the
+     * model cannot win by leaving opponents out.
+     */
     static double objective(List<DangerBattle> battles, DangerParameters parameters) {
-        return evaluate(battles, parameters).values().stream().mapToDouble(DangerReplay.Tally::meanLog)
-                .filter(v -> !Double.isNaN(v)).average().orElse(Double.NaN);
+        return evaluate(battles, parameters).values().stream().filter(t -> t.shots() > 0)
+                .mapToDouble(DangerReplay.Tally::meanLog).average().orElse(Double.NaN);
     }
 
     private static void summary(String label, List<DangerBattle> battles, DangerParameters parameters,

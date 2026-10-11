@@ -82,5 +82,11 @@ class BattleCacheTest {
         BattleCache again = new BattleCache(file, new FakeWorkers());
         assertEquals(1, again.size());
         assertEquals(120, ((Number) again.get(key).orElseThrow().get("elapsedMillis")).intValue());
+        // The next entry after the cut line gets a line of its own and survives the next restart.
+        String next = again.key("w", battle("x.Bot 1.0", 8), "a".repeat(64)).orElseThrow();
+        again.put(next, battle("x.Bot 1.0", 8), Map.of("seed", 8, "elapsedMillis", 130));
+        BattleCache third = new BattleCache(file, new FakeWorkers());
+        assertEquals(2, third.size());
+        assertEquals(130, ((Number) third.get(next).orElseThrow().get("elapsedMillis")).intValue());
     }
 }

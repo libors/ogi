@@ -63,7 +63,7 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
     public static final int VERSION = 1;
 
     /**
-     * Debug properties that measure time, e.g. our robots' own turn times (P-04): they differ between two runs of the
+     * Debug properties that measure time, e.g. our robots' own turn times: they differ between two runs of the
      * same battle, so they are recorded but left out of the digest.
      */
     public static final Set<String> MEASUREMENTS = Set.of(BattleRunner.TURN_TIME_PROPERTY);

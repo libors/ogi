@@ -42,10 +42,12 @@ public record DangerParameters(double[] weights, double neighbourScale, int maxN
                     0, 0, 1000);
 
     /**
-     * Tuned on the danger bench (2026-10-09): coordinate searches on full recordings of 125 rumble opponents, checked
+     * Tuned on the danger bench (2026-10-09): coordinate searches on full recordings of 125 foreign opponents, checked
      * on other seeds. The bullet's flight time weighs most, then our lateral velocity; the turns since our last
      * reversal and the curve of our path not at all. The simple guns start at 0.28 of the data each and the flattener
-     * at 0.3; all follow their record softly (temper 0.245), forgetting 8 % of it per observed bullet.
+     * at 0.3; all follow their record softly (temper 0.245), forgetting 8 % of it per observed bullet. The tuning saw
+     * the first four simple guns; the averaged and pattern guns came later with the same prior, checked on the bench
+     * and in battles but not tuned.
      */
     public static final DangerParameters DEFAULT =
             new DangerParameters(new double[] {8.23, 3, 1.44, 1.225, 0, 1.05, 2.1, 1.4, 1.029, 0}, 1.4, 18, 0.686, 1,

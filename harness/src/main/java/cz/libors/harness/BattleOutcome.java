@@ -15,7 +15,7 @@ import java.util.Optional;
  * @param startMismatches robot rounds that did not begin at the start the setup asked for; 0 without fixed starts
  * @param shots        bullets fired and bullets that hit an enemy, per contestant name as the results name it; only
  *                     bullets that ended before one contestant was left count
- * @param turnTimes    the times robots reported for their own turns (our robots, P-04), per robot name
+ * @param turnTimes    the times robots reported for their own turns (our robots), per robot name
  */
 public record BattleOutcome(
         BattleSetup setup,

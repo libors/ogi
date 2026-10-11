@@ -39,11 +39,13 @@ public final class SandboxCheck {
     /** The sandbox refuses a new thread once the robot's group has more than 5, its main thread included. */
     private static final String THREADS = "5 started, then blocked SecurityException";
     /**
-     * What harness/build.gradle.kts passes to the battle JVM, if set, and what macOS adds to every process; on Windows
-     * what the queue's executor passes: the system directory (which Java adds anyway) and a temporary directory.
+     * The variables a battle JVM may see, by platform: elsewhere what harness/build.gradle.kts passes to it, if set,
+     * and what macOS adds to every process; on Windows what the queue's executor passes, the system directory (which
+     * Java adds anyway) and a temporary directory.
      */
-    private static final Set<String> ENVIRONMENT = Set.of("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
-            "__CF_USER_TEXT_ENCODING", "SystemRoot", "TEMP", "TMP");
+    private static final Set<String> ENVIRONMENT = System.getProperty("os.name", "").startsWith("Windows")
+            ? Set.of("SystemRoot", "TEMP", "TMP")
+            : Set.of("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "__CF_USER_TEXT_ENCODING");
     private static final long REPORT_TIMEOUT_NANOS = 20_000_000_000L;
     private static final long TURN_WAIT_NANOS = 100_000_000L;
 

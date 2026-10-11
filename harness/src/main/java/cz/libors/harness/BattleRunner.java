@@ -20,6 +20,7 @@ import robocode.control.snapshot.RobotState;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,6 +28,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -39,6 +42,7 @@ import java.util.TreeMap;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /** Runs battles headless on a real Robocode installation through the control API. */
 public final class BattleRunner implements AutoCloseable {
@@ -46,7 +50,7 @@ public final class BattleRunner implements AutoCloseable {
     private static final int MAX_PROBLEMS = 50;
 
     /**
-     * The CPU constant of an idle machine, in ns, for robots' own turn times (P-04): the queue's executor passes it,
+     * The CPU constant of an idle machine, in ns, for robots' own turn times: the queue's executor passes it,
      * because its slots run with a raised constant; elsewhere the home's constant is the idle one.
      */
     public static final String IDLE_CONSTANT_PROPERTY = "ogi.cpuConstantIdle";
@@ -96,10 +100,13 @@ public final class BattleRunner implements AutoCloseable {
      *
      * <p>A battle with foreign robots runs only while Robocode's sandbox is active ({@link Sandbox}).
      *
+     * <p>Every battle starts with empty robot data ({@link #clearRobotData}).
+     *
      * @param listeners extra listeners for this battle only, e.g. a recorder
      */
     public BattleOutcome run(BattleSetup setup, IBattleListener... listeners) {
         Sandbox.requireFor(setup.robots(), Sandbox.active());
+        clearRobotData();
         RobotSpecification[] robots = resolve(setup.robots());
         long seed = setup.seed() != null ? setup.seed() : seeds.nextLong();
         RandomFactory.resetDeterministic(seed);
@@ -135,11 +142,100 @@ public final class BattleRunner implements AutoCloseable {
     private static final java.util.regex.Pattern SKIPPED_TURN =
             java.util.regex.Pattern.compile("^SYSTEM: .+ skipped turn \\d+");
 
+    /**
+     * Deletes the data that robots from jars wrote in earlier battles: the engine gives each one the directory
+     * {@code robots/.data/<package>/<Class>.data/} ({@code RobotItem.getWritableDirectory}, {@code
+     * FileUtil.getRobotsDataDir}) and keeps it across battles. Some opponents save what they learned about us there
+     * and read it in their next battle, so without this a battle would depend on the battles the same home played
+     * before it, e.g. a baseline's battle on the candidate's. Robots loaded from class directories, i.e. Robocode's
+     * samples, keep their data next to their classes; only {@code sample.SittingDuck} writes any, a count it prints.
+     *
+     * <p>On Windows a file that a robot left open cannot be deleted: the engine does not close robots' streams
+     * (engine-model G-47). Once the battle is over such a stream should be unreachable, and a garbage collection then
+     * closes it, so a failed deletion is tried again after one ({@link #DATA_CLEAR_TRIES} times in all).
+     *
+     * @throws RobotDataNotCleared if a file still cannot be deleted; only a new JVM frees it then
+     */
+    public void clearRobotData() {
+        Path data = home.resolve("robots").resolve(".data");
+        for (int attempt = 1; ; attempt++) {
+            try {
+                deleteRecursively(data);
+                return;
+            } catch (IOException e) {
+                if (attempt >= DATA_CLEAR_TRIES) {
+                    throw new RobotDataNotCleared(data, e);
+                }
+                System.gc();
+                try {
+                    Thread.sleep(100L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RobotDataNotCleared(data, e);
+                }
+            }
+        }
+    }
+
+    private static final int DATA_CLEAR_TRIES = 3;
+
+    private static void deleteRecursively(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(dir)) {
+            for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(p);
+            }
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        }
+    }
+
+    /** The robots' data of earlier battles could not be deleted; no battle can run in this home until it is. */
+    public static final class RobotDataNotCleared extends UncheckedIOException {
+
+        private static final long serialVersionUID = 1L;
+
+        RobotDataNotCleared(Path data, IOException cause) {
+            super("cannot clear the robots' data in " + data, cause);
+        }
+    }
+
     /** Number of robots in a battle of these contestants, with team members counted one by one. */
     public int robotCount(List<String> names) {
+        return members(names).length;
+    }
+
+    /** The robots of a battle of these contestants, team members one by one. */
+    private RobotSpecification[] members(List<String> names) {
         String selected = String.join(",", Arrays.stream(resolve(names))
                 .map(RobotSpecification::getNameAndVersion).toList());
-        return engine.getLocalRepository(selected).length;
+        return engine.getLocalRepository(selected);
+    }
+
+    /**
+     * The threads of the last battle's robots that are still alive, by thread name; after the battle, the robots
+     * that did not stop. The engine stops a robot only by interrupting its thread and waiting for it ({@code
+     * RobotThreadManager.waitForStop}, {@code stopSteps}), so a thread that loops without calling the robot API runs
+     * on until the JVM ends and keeps a core busy through every later battle (engine-model G-48). A robot's threads
+     * run in a thread group named after it as the battle names it ({@code RobotThreadManager.createThreadGroup}), or
+     * in a group the robot made inside that one. The names come from the battle itself, so a robot the engine banned
+     * in it counts too, and the repository is not read again.
+     */
+    public List<String> robotThreadsAlive() {
+        Set<String> robots = Set.copyOf(collector.robotNames);
+        List<String> alive = new ArrayList<>();
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            for (ThreadGroup g = t.getThreadGroup(); t.isAlive() && g != null; g = g.getParent()) {
+                if (robots.contains(g.getName())) {
+                    alive.add(t.getName());
+                    break;
+                }
+            }
+        }
+        Collections.sort(alive);
+        return alive;
     }
 
     public String robocodeVersion() {
@@ -151,7 +247,11 @@ public final class BattleRunner implements AutoCloseable {
      * robots directory first, so jars copied there since the last battle are listed.
      */
     public List<List<String>> repository() {
-        return Arrays.stream(engine.getLocalRepository())
+        return repository(engine.getLocalRepository());
+    }
+
+    private static List<List<String>> repository(RobotSpecification[] all) {
+        return Arrays.stream(all)
                 .map(r -> List.of(r.getName(), r.getNameAndVersion()))
                 .distinct()
                 .toList();
@@ -160,17 +260,19 @@ public final class BattleRunner implements AutoCloseable {
     /**
      * The SHA-256 of the jar each robot and team would be loaded from in a battle, under each name a set may use for
      * it ("name version" and the bare name, resolved as battles resolve them); "builtin" for one from Robocode's own
-     * robots directory. For the queue's battle cache.
+     * robots directory. For the queue's battle cache. It reads the repository once: every read rescans the robots
+     * directory, so a read per name took minutes with a thousand jars.
      */
     public Map<String, String> repositoryJars() throws IOException {
+        RobotSpecification[] all = engine.getLocalRepository();
         Map<Path, String> hashed = new HashMap<>();
         Map<String, String> jars = new TreeMap<>();
-        for (List<String> entry : repository()) {
+        for (List<String> entry : repository(all)) {
             for (String name : entry) {
                 if (jars.containsKey(name)) {
                     continue;
                 }
-                Optional<Path> jar = jarFile(name);
+                Optional<Path> jar = jarPath(resolve(all, List.of(name))[0]);
                 if (jar.isEmpty()) {
                     jars.put(name, "builtin");
                 } else if (hashed.containsKey(jar.get())) {
@@ -233,7 +335,10 @@ public final class BattleRunner implements AutoCloseable {
      * after it, {@code <name>_<version>.jar}, wins.
      */
     private RobotSpecification[] resolve(List<String> names) {
-        RobotSpecification[] all = engine.getLocalRepository();
+        return resolve(engine.getLocalRepository(), names);
+    }
+
+    private static RobotSpecification[] resolve(RobotSpecification[] all, List<String> names) {
         List<RobotSpecification> selected = new ArrayList<>();
         for (String name : names) {
             List<RobotSpecification> matches = Arrays.stream(all)
@@ -304,7 +409,11 @@ public final class BattleRunner implements AutoCloseable {
             return result;
         }
 
+        /** The robots of the battle as the engine names them, which is how it names their thread groups. */
+        final Set<String> robotNames = new HashSet<>();
+
         void reset(List<BattleSetup.Start> expectedStarts) {
+            robotNames.clear();
             turnTimes.clear();
             turnCounts.clear();
             results.clear();
@@ -326,6 +435,9 @@ public final class BattleRunner implements AutoCloseable {
 
         @Override
         public void onRoundStarted(RoundStartedEvent event) {
+            for (IRobotSnapshot robot : event.getStartSnapshot().getRobots()) {
+                robotNames.add(robot.getName());
+            }
             if (starts == null) {
                 return;
             }
@@ -347,17 +459,21 @@ public final class BattleRunner implements AutoCloseable {
             int turn = event.getTurnSnapshot().getTurn();
             countShots(round, event.getTurnSnapshot().getRobots(), event.getTurnSnapshot().getBullets());
             for (IRobotSnapshot robot : event.getTurnSnapshot().getRobots()) {
-                countTurnTime(robot);
+                boolean skipped = false;
                 String output = robot.getOutputStreamSnapshot();
-                if (output == null || output.isEmpty()) {
-                    continue;
-                }
-                for (String line : output.split("\\R")) {
-                    if (skippedTurn(line)) {
-                        skippedTurns.merge(robot.getName(), 1, Integer::sum);
-                    } else if (line.contains("Exception") || line.contains("Error")) {
-                        addProblem(robot.getName() + " [round " + round + ", turn " + turn + "]: " + line.trim());
+                if (output != null && !output.isEmpty()) {
+                    for (String line : output.split("\\R")) {
+                        if (skippedTurn(line)) {
+                            skippedTurns.merge(robot.getName(), 1, Integer::sum);
+                            skipped = true;
+                        } else if (line.contains("Exception") || line.contains("Error")) {
+                            addProblem(robot.getName() + " [round " + round + ", turn " + turn + "]: " + line.trim());
+                        }
                     }
+                }
+                // A dead robot and one that skipped the turn still show the debug properties of its last commands.
+                if (!skipped && robot.getState() != RobotState.DEAD) {
+                    countTurnTime(robot);
                 }
             }
         }

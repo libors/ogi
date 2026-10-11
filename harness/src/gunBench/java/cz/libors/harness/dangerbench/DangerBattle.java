@@ -5,7 +5,10 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.RobotHistory;
 import cz.libors.ogi.gun.TargetingFeatures;
+import cz.libors.ogi.move.LateralHistory;
 import cz.libors.ogi.move.SimpleAims;
+import cz.libors.ogi.physics.RadarScan;
+import cz.libors.ogi.physics.RobotBox;
 import cz.libors.ogi.wave.HitRange;
 import cz.libors.ogi.wave.Wave;
 
@@ -90,6 +93,8 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
 
         List<Object> events = new ArrayList<>();
         int id = 0;
+        // Our lateral velocity as the opponent saw it, for the battle, as the surfer keeps it.
+        LateralHistory lateral = new LateralHistory();
         for (int round : ours.keySet()) {
             events.add(new RoundStart(round));
             Map<Integer, Recording.RobotTick> us = ours.get(round);
@@ -126,7 +131,7 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
                             / escape;
                     // Where the enemy aimed from: its position when it aimed, as the surfer's scan saw it.
                     Recording.RobotTick from = them.getOrDefault(t - 2, origin);
-                    double[] aims = SimpleAims.aims(from.x(), from.y(), seen, wave.speed(), field);
+                    double[] aims = SimpleAims.aims(from.x(), from.y(), seen, wave.speed(), field, lateral);
                     double[] simple = new double[SimpleAims.COUNT];
                     for (int g = 0; g < SimpleAims.COUNT; g++) {
                         simple[g] = direction * Angles.normalizeRelative(aims[g] - reference) / escape;
@@ -161,11 +166,29 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
                 Recording.RobotTick r = us.get(t);
                 if (r != null) {
                     history.add(t, r.x(), r.y(), Angles.fromRobocode(r.bodyHeading()), r.velocity());
+                    Recording.RobotTick e = them.get(t);
+                    // As online (WaveSurfer.ourState): only in turns our radar saw the enemy, and while we live.
+                    if (e != null && !e.state().equals("DEAD") && !r.state().equals("DEAD")
+                            && scanned(us.get(t - 1), r, e)) {
+                        double heading = Angles.fromRobocode(r.bodyHeading());
+                        lateral.add(t, r.velocity() * Math.sin(heading - Angles.bearing(e.x(), e.y(), r.x(), r.y())));
+                    }
                 }
                 events.addAll(visited.getOrDefault(t, List.of()));
             }
         }
         return new DangerBattle(file, subject.name(), opponent.name(), List.copyOf(events));
+    }
+
+    /** Whether our radar saw the enemy in this turn, by the engine's scan (engine-model G-13). */
+    private static boolean scanned(Recording.RobotTick before, Recording.RobotTick after, Recording.RobotTick enemy) {
+        if (before == null) {
+            return false;
+        }
+        boolean moved = before.bodyHeading() != after.bodyHeading() || before.gunHeading() != after.gunHeading()
+                || before.radarHeading() != after.radarHeading() || before.x() != after.x() || before.y() != after.y();
+        return moved && RadarScan.sees(RadarScan.sweep(after.x(), after.y(), before.radarHeading(),
+                after.radarHeading()), new RobotBox(enemy.x(), enemy.y()));
     }
 
     /** The opponent's bullets per round and id: where they started and how they ended. */

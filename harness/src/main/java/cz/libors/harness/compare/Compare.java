@@ -205,6 +205,9 @@ public final class Compare {
                 .toList();
         Map<String, Integer> nextPair = new HashMap<>();
         int pairsPerOpponent = Integer.parseInt(options.get("pairsPerOpponent"));
+        if (pairsPerOpponent < 0) {
+            throw new IllegalArgumentException("pairsPerOpponent must be at least 0: " + pairsPerOpponent);
+        }
         int maxPairs = Integer.parseInt(options.get("maxPairs"));
         long start = System.nanoTime();
         try (CompareLog opened = CompareLog.open(dir.resolve("battles.tsv"), config)) {
@@ -245,7 +248,8 @@ public final class Compare {
         environment.put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"));
         environment.put("cpuConstant", cpuConstant(home));
         environment.put("lastRunSeconds", Long.toString((System.nanoTime() - start) / 1_000_000_000));
-        Summary summary = summarize(config, environment, options.get("metric"), bounds, strata, set.weights(), log);
+        Summary summary = summarize(config, environment, options.get("metric"), bounds, strata, set.weights(), log,
+                Integer.parseInt(options.get("pairsPerOpponent")));
         Path summaryFile = dir.resolve("summary.json");
         Files.writeString(summaryFile, Json.write(summary));
         printReport(summary, System.out);
@@ -267,6 +271,8 @@ public final class Compare {
         config.put("rounds", Integer.toString(rounds));
         config.put("starts", fixedStarts ? "fixed" : "random");
         config.put("seed", Long.toString(runSeed));
+        // Logs from before BattleRunner cleared the robots' data have no such key, so they are not resumed.
+        config.put("robotData", "cleared");
         return config;
     }
 
@@ -393,7 +399,8 @@ public final class Compare {
      * @param weights per group, the robots of the rumble it stands for ({@link OpponentSet#weights()}); may be empty
      */
     static Summary summarize(Map<String, String> config, Map<String, String> environment, String metric,
-                             Bounds bounds, List<Stratum> strata, Map<String, Double> weights, CompareLog log) {
+                             Bounds bounds, List<Stratum> strata, Map<String, Double> weights, CompareLog log,
+                             int pairsPerOpponent) {
         Map<String, List<Battle[]>> pairsByOpponent = log.completePairs();
         List<OpponentRow> rows = strata.stream()
                 .map(s -> row(s, pairsByOpponent.getOrDefault(s.opponent(), List.of())))
@@ -433,6 +440,11 @@ public final class Compare {
         }
         Health health = new Health(skipped[0], skipped[1], skipped[2], problems, mismatches, battleMillis / 1000);
 
+        if (pairsPerOpponent > 0) {
+            // Fixed mode runs no test: no decision, no LLR, no bounds.
+            return new Summary(config, environment, metric, "fixed", pairsPerOpponent + " pairs per opponent",
+                    Double.NaN, Double.NaN, Double.NaN, pairs, boards, rows, noise, health);
+        }
         Decision decision = Sprt.decide(strata, bounds);
         return new Summary(config, environment, metric, bounds.toString(), describe(decision, bounds),
                 Sprt.llr(d, bounds), bounds.lower(), bounds.upper(), pairs, boards, rows, noise, health);
@@ -490,22 +502,31 @@ public final class Compare {
     /**
      * The groups weighted by the robots of the rumble each stands for, each opponent weighing the same within its
      * group: an estimate of the rumble's average, not what the test decides on. The variance adds the groups'
-     * variances times their squared weights.
+     * variances times their squared weights. The test measure (the first four values) needs every group; the others
+     * leave out a group without the value (e.g. no shots), with the remaining weights scaled up, as the plain
+     * scoreboards do.
      */
     static Scoreboard weighted(String name, List<Stratum> strata, List<OpponentRow> rows, Map<String, Double> weights) {
         List<String> groups = strata.stream().map(Stratum::group).distinct().toList();
-        double total = groups.stream().mapToDouble(weights::get).sum();
         double[] v = new double[12];
+        double[] used = new double[12];
         for (String g : groups) {
-            double w = weights.get(g) / total;
+            double w = weights.get(g);
             Scoreboard b = scoreboard(g, strata, rows, s -> s.group().equals(g));
             double[] gv = {b.baseline(), b.candidate(), b.difference(), b.halfWidth() / 1.96, b.apsBaseline(),
                     b.apsCandidate(), b.pwinBaseline(), b.pwinCandidate(), b.hitRateBaseline(), b.hitRateCandidate(),
                     b.hitByBaseline(), b.hitByCandidate()};
             for (int i = 0; i < v.length; i++) {
+                if (Double.isNaN(gv[i]) && i >= 4) {
+                    continue;
+                }
                 // The standard error (index 3) adds up as a variance.
                 v[i] += i == 3 ? w * w * gv[i] * gv[i] : w * gv[i];
+                used[i] += w;
             }
+        }
+        for (int i = 0; i < v.length; i++) {
+            v[i] = used[i] == 0 ? Double.NaN : i == 3 ? v[i] / (used[i] * used[i]) : v[i] / used[i];
         }
         return new Scoreboard(name, strata.size(), v[0], v[1], v[2], 1.96 * Math.sqrt(v[3]), v[4], v[5], v[6], v[7],
                 v[8], v[9], v[10], v[11]);
@@ -556,8 +577,12 @@ public final class Compare {
                         + "start mismatches %d; %d s in battles%n", h.skippedTurnsBaseline(),
                 h.skippedTurnsCandidate(), h.skippedTurnsOpponents(), h.problems(), h.startMismatches(),
                 h.battleSeconds());
-        out.printf(Locale.ROOT, "result   %d pairs, LLR %+.2f in [%.2f, %.2f], bounds %s: %s%n", s.pairs(),
-                s.llr(), s.llrLower(), s.llrUpper(), s.bounds(), s.decision());
+        if (Double.isNaN(s.llr()) && s.bounds().equals("fixed")) {
+            out.printf(Locale.ROOT, "result   %d pairs, fixed: %s%n", s.pairs(), s.decision());
+        } else {
+            out.printf(Locale.ROOT, "result   %d pairs, LLR %+.2f in [%.2f, %.2f], bounds %s: %s%n", s.pairs(),
+                    s.llr(), s.llrLower(), s.llrUpper(), s.bounds(), s.decision());
+        }
     }
 
     static String cpuConstant(Path home) throws IOException {
@@ -578,5 +603,26 @@ public final class Compare {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * A job option that must be an int of at least {@code min}; the default if it is absent. For the checks before a
+     * job is queued: a value the job's constructor would refuse later makes the job unreadable in the server.
+     */
+    static int intOption(Properties spec, String key, int fallback, int min) {
+        String raw = spec.getProperty(key);
+        if (raw == null) {
+            return fallback;
+        }
+        int value;
+        try {
+            value = Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be a whole number: " + raw);
+        }
+        if (value < min) {
+            throw new IllegalArgumentException(key + " must be at least " + min + ": " + raw);
+        }
+        return value;
     }
 }

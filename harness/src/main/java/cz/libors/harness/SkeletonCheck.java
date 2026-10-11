@@ -21,7 +21,7 @@ public final class SkeletonCheck {
     private static final double MIN_TEAM_SHARE = 0.70;
     private static final String SITTING_DUCK = "sample.SittingDuck";
     /**
-     * Shares of our robots' own turns that may take longer than half the CPU constant, and than all of it (P-04).
+     * Shares of our robots' own turns that may take longer than half the CPU constant, and than all of it.
      * Ogi takes ~10 µs in a median turn; the few longer ones are the JIT at a battle's start and garbage collections,
      * which reached 2.1 ms once against a 2.0 ms constant in a team battle (the engine allows up to a millisecond more,
      * engine-model G-45, and skipped turns are checked on their own).

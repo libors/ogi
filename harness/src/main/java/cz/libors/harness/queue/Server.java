@@ -64,6 +64,8 @@ public final class Server {
     private final List<Link> links = new ArrayList<>();
     private final Map<String, QueueJob> jobs = new LinkedHashMap<>();
     private final Set<String> unreadable = new HashSet<>();
+    /** Jobs active when last looked at, to log each one's end once ({@link #announceEnds}). */
+    private final Set<String> activeSeen = new HashSet<>();
     private final long startedAt = System.currentTimeMillis();
     private final PrintStream logFile;
     private long nextId;
@@ -111,6 +113,13 @@ public final class Server {
         int failures;
         int restarts;
         String lastError = "";
+        long lastErrorAt;
+        /** What the executor reported before it ended, if it failed; the reason it ended then names it. */
+        String fatal;
+        /** Why the server dropped the connection, if it did; the reason it ended then names it. */
+        String dropped;
+        /** When the worker last brought a battle back. */
+        long lastOkAt;
 
         Link(WorkerConfig config) {
             this.config = config;
@@ -118,6 +127,11 @@ public final class Server {
 
         String name() {
             return config.name();
+        }
+
+        void error(String reason) {
+            lastError = reason;
+            lastErrorAt = System.currentTimeMillis();
         }
 
         void state(String newState, String newDetail) {
@@ -155,7 +169,11 @@ public final class Server {
         return links.stream().filter(l -> l.name().equals(worker)).findFirst();
     }
 
-    /** What decides a battle on a worker, for the battle cache; not the CPU constant, which it measures anew. */
+    /**
+     * What decides a battle on a worker, for the battle cache. Not the CPU constant: the executor measures it once
+     * per worker and JVM options and keeps it (Executor, {@code cpu-constant.properties}); a new measurement does
+     * not change the cache's keys (harness.md, "Battle cache").
+     */
     private static Map<String, String> battleEnvironment(Link link) {
         Map<String, String> m = new TreeMap<>();
         for (String key : List.of("os", "java", "robocode", "jvm", "cpuFactor", "sandbox")) {
@@ -190,19 +208,30 @@ public final class Server {
 
     private void loop() throws InterruptedException {
         while (true) {
+            Error fatal = null;
             synchronized (this) {
                 try {
                     tick();
                 } catch (IOException | RuntimeException e) {
                     log("tick failed: " + e);
                     e.printStackTrace();
+                } catch (Error e) {
+                    fatal = e;
+                    log("server stopped: " + e);
+                    e.printStackTrace();
                 }
+            }
+            if (fatal != null) {
+                // The JVM ends, dashboard included, rather than serve a queue that no longer runs. Outside the lock:
+                // the shutdown hook takes it.
+                System.exit(1);
             }
             Thread.sleep(TICK_MILLIS);
         }
     }
 
     private void tick() throws IOException {
+        announceEnds();
         long now = System.currentTimeMillis();
         if (now - lastScan > SCAN_MILLIS) {
             scanJobs();
@@ -270,6 +299,12 @@ public final class Server {
             if (jobs.containsKey(id) || unreadable.contains(id) || !Files.exists(dir.resolve("status.properties"))) {
                 continue;
             }
+            if (!id.matches("[\\w-]+")) {
+                // The dashboard puts ids into page code; Submit makes them of letters, digits and dashes only.
+                unreadable.add(id);
+                log("job " + id + " ignored: not a job id");
+                continue;
+            }
             try {
                 QueueJob job = QueueJob.open(dir);
                 if (job instanceof CompareJob c) {
@@ -318,32 +353,66 @@ public final class Server {
         }
     }
 
+    /**
+     * The next battle for a worker: from the first job in queue order that has one. While battles of one debug mode
+     * are under way on the worker, jobs of the other mode wait: a slot switches modes by starting a new JVM, and
+     * mixing the modes made the slots switch back and forth.
+     */
     private Work nextWork(Link link) throws IOException {
-        for (QueueJob job : activeJobs()) {
-            if (!eligible(link, job)) {
-                continue;
+        Boolean mode = runningMode(link);
+        try {
+            for (QueueJob job : activeJobs()) {
+                if (!eligible(link, job) || (mode != null && job.debug() != mode)) {
+                    continue;
+                }
+                List<String> missing = job.opponents().stream().filter(o -> !link.robots.contains(o)).toList();
+                if (!missing.isEmpty()) {
+                    if (links.stream().noneMatch(o -> o != link && eligible(o, job))) {
+                        fail(job, "robots missing on " + link.name() + ": " + missing);
+                    }
+                    continue;
+                }
+                if (!link.deployed.containsAll(job.jars().keySet())) {
+                    deploy(link, job);
+                    continue;
+                }
+                boolean queued = job.state() == State.QUEUED;
+                List<Work> works;
+                try {
+                    works = job.next(link.name());
+                } catch (IOException | RuntimeException e) {
+                    // One job's trouble ends that job, not the dispatch of all the others.
+                    log("job " + job.id() + ": handing out work failed: " + e);
+                    fail(job, "handing out work failed: " + e);
+                    continue;
+                }
+                if (queued && job.state() != State.QUEUED) {
+                    // It started itself on battles from the cache.
+                    log("job " + job.id() + " started on " + link.name());
+                }
+                if (works.isEmpty()) {
+                    continue;
+                }
+                if (job.state() == State.QUEUED) {
+                    job.started();
+                    log("job " + job.id() + " started on " + link.name());
+                }
+                link.pending.addAll(works.subList(1, works.size()));
+                return works.get(0);
             }
-            List<String> missing = job.opponents().stream().filter(o -> !link.robots.contains(o)).toList();
-            if (!missing.isEmpty()) {
-                fail(job, "robots missing on " + link.name() + ": " + missing);
-                continue;
-            }
-            if (!link.deployed.containsAll(job.jars().keySet())) {
-                deploy(link, job);
-                continue;
-            }
-            List<Work> works = job.next(link.name());
-            if (works.isEmpty()) {
-                continue;
-            }
-            if (job.state() == State.QUEUED) {
-                job.started();
-                log("job " + job.id() + " started on " + link.name());
-            }
-            link.pending.addAll(works.subList(1, works.size()));
-            return works.get(0);
+            return null;
+        } finally {
+            announceEnds();
         }
-        return null;
+    }
+
+    /** The debug mode of the battles under way on a worker, or null if it plays none. */
+    private static Boolean runningMode(Link link) {
+        for (InFlight f : link.inFlight.values()) {
+            return f.work.spec().debug();
+        }
+        Work w = link.pending.peek();
+        return w == null ? null : w.spec().debug();
     }
 
     /** Copies a job's jars to the worker in the background, then tells the executor to take them. */
@@ -381,7 +450,10 @@ public final class Server {
                 synchronized (this) {
                     link.deploying.removeAll(files);
                     log(link.name() + ": copying jars failed: " + e);
-                    fail(job, "copying its jars to " + link.name() + " failed: " + e);
+                    // A connection that went away meanwhile copies them again after it is back.
+                    if (link.generation == generation) {
+                        fail(job, "copying its jars to " + link.name() + " failed: " + e);
+                    }
                 }
             }
         }, "deploy-" + link.name());
@@ -393,6 +465,8 @@ public final class Server {
 
     private void connect(Link link) {
         int generation = ++link.generation;
+        link.fatal = null;
+        link.dropped = null;
         link.state("connecting", link.config.local() ? "starting the executor" : "syncing the bundle");
         Thread t = new Thread(() -> {
             try {
@@ -493,7 +567,11 @@ public final class Server {
         }
         synchronized (this) {
             if (link.generation == generation) {
-                disconnected(link, "the executor ended (exit " + exit + ")");
+                String reason = link.fatal != null ? "the executor failed: " + link.fatal
+                        : link.dropped != null ? link.dropped : "the executor ended (exit " + exit + ")";
+                link.fatal = null;
+                link.dropped = null;
+                disconnected(link, reason);
             }
         }
     }
@@ -547,12 +625,19 @@ public final class Server {
                     while (!link.completions.isEmpty() && link.completions.peek() < now - RATE_WINDOW_MILLIS) {
                         link.completions.poll();
                     }
+                    link.lastOkAt = now;
                     Map<String, Object> outcome = m.map("outcome");
                     QueueJob job = f.work.job();
-                    boolean active = job.state().active();
-                    job.completed(f.work, outcome, link.name());
-                    record(link, f, "ok" + turnTimes(outcome), ((Number) outcome.get("elapsedMillis")).longValue());
-                    announceEnd(job, active);
+                    try {
+                        job.completed(f.work, outcome, link.name());
+                    } catch (IOException | RuntimeException e) {
+                        // The battle would be lost to a job that runs on: it fails instead, and is seen.
+                        log("job " + job.id() + ": counting a battle failed: " + e);
+                        fail(job, "counting a battle failed: " + e);
+                    }
+                    guarded(link, "logging a battle", () -> record(link, f, "ok" + turnTimes(outcome),
+                            ((Number) outcome.get("elapsedMillis")).longValue()));
+                    announceEnds();
                 }
                 dispatch(link);
             }
@@ -560,13 +645,17 @@ public final class Server {
                 InFlight f = link.inFlight.remove(m.longValue("id"));
                 if (f != null) {
                     link.failures++;
-                    link.lastError = m.string("reason");
+                    link.error(m.string("reason"));
                     log(link.name() + ": battle failed: " + m.string("reason"));
                     QueueJob job = f.work.job();
-                    boolean active = job.state().active();
-                    job.failed(f.work, m.string("reason"), link.name());
-                    record(link, f, "failed: " + m.string("reason"), -1);
-                    announceEnd(job, active);
+                    try {
+                        job.failed(f.work, m.string("reason"), link.name());
+                    } catch (IOException | RuntimeException e) {
+                        log("job " + job.id() + ": counting a failed battle failed: " + e);
+                        fail(job, "counting a failed battle failed: " + e);
+                    }
+                    guarded(link, "logging a battle", () -> record(link, f, "failed: " + m.string("reason"), -1));
+                    announceEnds();
                 }
                 dispatch(link);
             }
@@ -594,7 +683,8 @@ public final class Server {
             }
             case "log" -> log(link.name() + ": " + m.string("text"));
             case "fatal" -> {
-                link.lastError = m.string("message");
+                link.error(m.string("message"));
+                link.fatal = m.string("message");
                 log(link.name() + ": executor failed: " + m.string("message"));
             }
             default -> log(link.name() + ": unknown message " + m.type());
@@ -604,7 +694,8 @@ public final class Server {
     /** Ends the connection now; the reader then reports it. */
     private void drop(Link link, String reason) {
         log(link.name() + ": dropping the connection: " + reason);
-        link.lastError = reason;
+        link.error(reason);
+        link.dropped = reason;
         if (link.process != null) {
             link.process.destroyForcibly();
         } else {
@@ -616,21 +707,18 @@ public final class Server {
         boolean stopping = link.state.equals("stopping");
         link.generation++;
         Set<QueueJob> touched = new HashSet<>();
-        try {
-            for (InFlight f : link.inFlight.values()) {
-                f.work.job().lost(f.work);
-                record(link, f, "lost: " + reason, -1);
-                touched.add(f.work.job());
-            }
-            for (Work w : link.pending) {
-                w.job().lost(w);
-                touched.add(w.job());
-            }
-            for (QueueJob job : jobs.values()) {
-                job.workerLost(link.name());
-            }
-        } catch (IOException e) {
-            log(link.name() + ": returning its battles failed: " + e);
+        // One by one: a battle whose job cannot take it back must not keep the others on the lost worker.
+        for (InFlight f : link.inFlight.values()) {
+            touched.add(f.work.job());
+            guarded(link, "returning a battle", () -> f.work.job().lost(f.work));
+            guarded(link, "logging a lost battle", () -> record(link, f, "lost: " + reason, -1));
+        }
+        for (Work w : link.pending) {
+            touched.add(w.job());
+            guarded(link, "returning a battle", () -> w.job().lost(w));
+        }
+        for (QueueJob job : jobs.values()) {
+            guarded(link, "telling job " + job.id(), () -> job.workerLost(link.name()));
         }
         link.inFlight.clear();
         link.pending.clear();
@@ -652,11 +740,23 @@ public final class Server {
         }
     }
 
+    private interface Step {
+        void run() throws IOException;
+    }
+
+    private void guarded(Link link, String what, Step step) {
+        try {
+            step.run();
+        } catch (IOException | RuntimeException e) {
+            log(link.name() + ": " + what + " failed: " + e);
+        }
+    }
+
     private void backoff(Link link, String reason) {
         link.connectFailures++;
         long delay = Math.min(300_000, 10_000L << Math.min(5, link.connectFailures - 1));
         link.backoffUntil = System.currentTimeMillis() + delay;
-        link.lastError = reason;
+        link.error(reason);
         link.state("backoff", reason + "; retrying in " + delay / 1000 + " s");
         log(link.name() + ": " + reason + "; retrying in " + delay / 1000 + " s");
     }
@@ -700,13 +800,21 @@ public final class Server {
         }
     }
 
-    private void announceEnd(QueueJob job, boolean wasActive) {
-        if (wasActive && !job.state().active()) {
-            log("job " + job.id() + " " + job.state().name().toLowerCase(Locale.ROOT) + ": " + job.reason());
+    /**
+     * Logs the end of every job that was active when last seen. A job can end in its own battle's handling, when
+     * it hands out work (all its battles came from the cache), or in another job's (it waited for that battle).
+     */
+    private void announceEnds() {
+        for (QueueJob job : jobs.values()) {
+            if (job.state().active()) {
+                activeSeen.add(job.id());
+            } else if (activeSeen.remove(job.id())) {
+                log("job " + job.id() + " " + job.state().name().toLowerCase(Locale.ROOT) + ": " + job.reason());
+            }
         }
     }
 
-    /** Our robots' own turn times in an outcome (P-04), for the dispatch log: the longest, and how many went over. */
+    /** Our robots' own turn times in an outcome, for the dispatch log: the longest, and how many went over. */
     private static String turnTimes(Map<String, Object> outcome) {
         Object reported = outcome.get("turnTimes");
         if (!(reported instanceof Map<?, ?> times) || times.isEmpty()) {
@@ -789,6 +897,8 @@ public final class Server {
             w.put("failures", link.failures);
             w.put("restarts", link.restarts);
             w.put("lastError", link.lastError);
+            w.put("lastErrorAt", link.lastErrorAt);
+            w.put("lastOkAt", link.lastOkAt);
             w.put("info", link.info);
             List<Object> running = new ArrayList<>();
             for (InFlight f : link.inFlight.values()) {
