@@ -147,6 +147,32 @@ class WaveSurferTest {
     }
 
     /**
+     * Before its first shot of a round, an enemy that drives at us finds us moving away from it, not orbiting it at the
+     * preferred distance, which from 450 px away closes in.
+     */
+    @Test
+    void evadesAnEnemyThatDrivesAtUsBeforeItFires() {
+        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        String name = "charger";
+        for (long t = 0; t <= 300; t++) {
+            surfer.scanned(name, t, 400, 300, Math.PI, 8, 100);
+            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+            surfer.update(t);
+        }
+        for (long t = 301; t <= 305; t++) {
+            surfer.scanned(name, t, 700, 300, Math.PI, 8, 100);
+            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+            surfer.update(t);
+        }
+        assertTrue(surfer.command(us(250, 300), 305).isEmpty(), "no wave is in the air");
+        double[] command = surfer.evade(us(250, 300), name, 305).orElseThrow();
+        double heading = Angles.fromRobocode(us(250, 300).bodyHeading + command[1]);
+        double drive = command[0] < 0 ? heading + Math.PI : heading;
+        assertTrue(command[0] == 0 || Math.cos(drive) <= 0, "drives towards it: " + drive);
+        assertTrue(surfer.evade(us(250, 300), "someone else", 305).isEmpty(), "an enemy we never saw drives at us");
+    }
+
+    /**
      * The engine reports a bullet our bullet hit one or two moves short of its wave's radius (engine-model G-04);
      * either way its wave is learned and goes.
      */
@@ -168,6 +194,35 @@ class WaveSurferTest {
             assertTrue(surfer.command(us(250, 300), 40).isEmpty(),
                     "the wave of the bullet shot down " + back + " moves back is still there");
         }
+    }
+
+    /**
+     * A gun that learns our movement learns the waves whose bullets hit us too, so the flattener still learns where we
+     * were when such a wave passed us.
+     */
+    @Test
+    void aWaveWhoseBulletHitUsStillTeachesTheFlattener() {
+        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        String enemy = "hit-flattener";
+        boolean hit = false;
+        for (long t = 0; t <= 80; t++) {
+            surfer.scanned(enemy, t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
+            Trace trace = new Trace();
+            surfer.describe(t, trace);
+            // The bullet reaches our box (we stand 400 px west of it) at the end of its move in turn t.
+            if (!hit && !trace.waves().isEmpty() && trace.waves().get(0).radius() >= 400 - 18) {
+                Trace.WaveView wave = trace.waves().get(0);
+                surfer.hitByBullet(enemy, t, wave.x() - wave.radius(), wave.y(), Math.PI, 2.0);
+                hit = true;
+            }
+            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+            surfer.update(t);
+        }
+        assertTrue(hit, "the bullet reached us");
+        double[] visits = WaveSurfer.model(enemy)
+                .predict(new double[TargetingFeatures.COUNT], new double[SimpleAims.COUNT]).visits();
+        double uniform = 1.0 / DangerModel.BINS;
+        assertTrue(visits[DangerModel.bin(0)] > 2 * uniform, "no visit at guess factor 0: " + visits[DangerModel.bin(0)]);
     }
 
     @Test

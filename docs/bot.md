@@ -12,9 +12,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 1. **Our state** goes to the surfer, and the enemy waves advance to our position at the end of this turn.
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
 3. **Radar:** locked on the target in 1v1, spinning otherwise.
-4. **Movement:** the surfer's commands while an enemy wave is in the air, otherwise orbiting the target
-   (`OrbitMovement`). A disabled target in a duel (energy 0: it can neither fire nor move) is rammed instead, once
-   none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
+4. **Movement:** the surfer's commands while an enemy wave is in the air; otherwise the surfer's ways around a target
+   that drives at us (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A disabled target in a duel
+   (energy 0: it can neither fire nor move) is rammed instead, once none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
    a bullet kill 20 % ([engine-model.md](engine-model.md) G-46). From these commands `RobotMotion` predicts our position at the end of the next turn, exactly
    unless we ram someone.
 5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading; the surfer follows
@@ -94,9 +94,10 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     linear with and without the walls, circular, linear with our lateral velocity averaged over the last 20 and 40
     turns, and a pattern match on our lateral velocity; each aimed from the enemy's scanned position and our state of
     the turn it aimed), each a narrow kernel at its aim, and a flattener: a KNN over where we ourselves were when this
-    enemy's waves passed us (`DangerModel.visit`, the middle of the wave's hit range on us), which is where a gun that
-    learns our movement aims. Every observed bullet scores each estimator by the share it gave the bullet's bin; the
-    weights go with the prior times `exp(temper · record)`, the record forgetting a part per bullet (`decay`). A simple
+    enemy's waves passed us (`DangerModel.visit`, the middle of the wave's hit range on us; every wave, also those
+    whose bullet hit us or one of ours, which the surfer no longer surfs but follows until they pass), which is where
+    a gun that learns our movement aims. Every observed bullet scores each estimator by the share it gave the
+    bullet's bin; the weights go with the prior times `exp(temper · record)`, the record forgetting a part per bullet (`decay`). A simple
     gun the enemy does not use loses its weight within a few bullets, so it costs no room against learning guns.
   - **Lateral history** (`LateralHistory`, per enemy, for the battle): our lateral velocity as that enemy saw it, one
     value per turn in which we scanned it. The averaged guns take the mean of this round's last 20 or 40 values. The
@@ -143,9 +144,13 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     - a way on which the boxes of the two robots overlap costs the damage of a full-power bullet, once per wave's part
       of the way (the predicted enemy is pushed back, our robot is not stopped); at the way's end
       the enemy's next full-power bullet counts with the chance min(1, (50 / d)²), d the distance to the predicted
-      enemy then; the close-fight factor uses the predicted enemy at any distance.
-- **Without an enemy wave** the bot orbits the target and changes direction at random intervals, from its own seeded
-  generator. It also steers towards 325 px, but turns towards the target at walls, so it stays closer than the surfer.
+      enemy then; the close-fight factor uses the predicted enemy at any distance;
+    - while no wave is in the air (`WaveSurfer.evade`), the same five ways around the target, if it drives at us,
+      each predicted 20 turns and weighed by the contact and the enemy's next shot alone. At a round's start a
+      rammer's gun is still hot for about 30 turns, and the orbit below closed in on it from beyond 325 px meanwhile.
+- **Without an enemy wave** (and no target that drives at us) the bot orbits the target and changes direction at
+  random intervals, from its own seeded generator. It also steers towards 325 px, but turns towards the target at
+  walls, so it stays closer than the surfer.
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
   up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
 

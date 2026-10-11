@@ -306,6 +306,12 @@ public class Ogi extends TeamRobot {
             return predictNext(surf.get()[0], surf.get()[1]);
         }
         boolean ram = finishesByRamming(target);
+        Optional<double[]> evade = ram ? Optional.empty() : surfer.evade(ourEngineState(), target.name(), now);
+        if (evade.isPresent()) {
+            setAhead(evade.get()[0]);
+            setTurnRightRadians(evade.get()[1]);
+            return predictNext(evade.get()[0], evade.get()[1]);
+        }
         double heading = ram ? Angles.bearing(getX(), getY(), target.x(), target.y())
                 : movement.desiredHeading(getX(), getY(), target.x(), target.y(), now,
                 world.recentTeammates(now, MAX_TEAMMATE_AGE));

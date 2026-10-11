@@ -476,7 +476,7 @@ never sees. The bench replays each battle through the bot's own `DangerModel`, `
   `decay`, `share`, `flatPrior`, `flatWindow`.
 - **Simple guns and the flattener:** a shot also carries where the `SimpleAims` would have aimed, from the enemy's
   recorded position of turn f − 2. A wave that passes us (`HitRange` over our recorded positions, as the surfer
-  advances it) teaches the flattener where we were, unless the surfer had dropped it on learning its bullet.
+  advances it) teaches the flattener where we were, also when the surfer learned its bullet before.
 - **`-Ptune=<passes>`:** a coordinate search from the given parameters that maximises the mean over opponents of
   `mean ln` on the recordings of pair 0, and reports the start, the result and the histogram on pair 0 and on the
   other pairs (other seeds of the same opponents). An opponent whose bullets score NaN with some parameters makes the
@@ -614,8 +614,10 @@ is waiting.
 - **`submit`** builds the jars of `-Pbaseline` (and `-Pcandidate`) like `compare` does. Without `-Pcandidate` it
   takes a snapshot of the working tree (`snapshotJars`): its jars get the version `w` plus 7 hex digits of a SHA-256
   over `bot/` and the build files, tracked or not (ignored files left out), in `.robocode/snapshots/`. The same code
-  gives the same version; jobs queued from different working trees never share a jar name. The working tree's own
-  version (`botVersion`) names different code after every edit, so the queue does not use it.
+  gives the same version; jobs queued from different working trees never share a jar name. Comments count too: an
+  edit of a comment alone gives a new version, whose battles are not in the
+  [battle cache](#battle-cache-queuebattlecache). The working tree's own version (`botVersion`) names different code
+  after every edit, so the queue does not use it.
 - A job is a directory `.robocode/queue/jobs/<id>/`: `job.properties` (as submitted), `opponents.txt`,
   `status.properties` (state, times, order), and what the job writes. `submit` works whether the server runs or not;
   the server picks a job up within seconds. Its jars are copied into `.robocode/queue/jars/`, where a name stands for
@@ -743,8 +745,9 @@ refreshes every 2 s and keeps open the sections the viewer opened.
   set: old and new score share, the change with its interval, how often they hit us, how often we hit them, wins),
   each opponent (worst change first) and the technical details (job id, the job as submitted, the decision, LLR, noise, health, own turns, the directory, the
   workers' environment, problems, the last battles).
-- `./gradlew queueStatus` prints the same in a terminal; actions are POSTs that need the header
-  `X-Requested-With: ogi`, so another web page cannot trigger them.
+- `./gradlew queueStatus` prints the same in a terminal; actions are POSTs
+  (`/api/action?action=cancel|up|down&id=<job>`) that need the header `X-Requested-With: ogi`, so another web page
+  cannot trigger them.
 
 ### Remote checks
 
@@ -760,6 +763,9 @@ a slot's environment (`queue.Remote`, the executor's `run`): the bundle is synce
   (against the moving lab opponents, ~100 px more cost 3–10 points of hit rate). Compare guns with the same
   movement on both sides, and when the movement differs, check the distance at fire time in recordings
   ([Recording comparison battles](#recording-comparison-battles)).
+- **Jobs that reuse the same cached baseline share its luck.** Their differences per opponent move together (two
+  candidates at 4 pairs per opponent: correlation 0.53, 2026-10-11), so two such jobs that both look better are less
+  evidence than two independent runs. To choose between two candidates, compare them with each other.
 - A team jar lists its robots in the repository under the same name and version as the robot jar
   (engine-model G-42). `BattleRunner` picks the jar named after the robot.
 - `BattleResults.getRank()` in melee does not always follow the score order (engine-model G-31). Do not rely on it

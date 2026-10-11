@@ -144,7 +144,7 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
                     if (learns) {
                         learned.computeIfAbsent(b.endTurn(), k -> new ArrayList<>()).add(id);
                     }
-                    // The wave passes us unless the surfer dropped it on learning its bullet first.
+                    // The wave passes us, also when the surfer learned its bullet before.
                     HitRange range = new HitRange(wave, reference, (int) field.width(), (int) field.height());
                     for (int p = t - 1; p <= lastTurn; p++) {
                         Recording.RobotTick at = us.get(p);
@@ -153,7 +153,7 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
                         }
                         range.observe(p, at.x(), at.y());
                         if (p >= t && range.passed()) {
-                            if (range.hits() && (!learns || b.endTurn() > p)) {
+                            if (range.hits()) {
                                 double middle = (range.minOffset() + range.maxOffset()) / 2;
                                 visited.computeIfAbsent(p, k -> new ArrayList<>())
                                         .add(new Visit(id, direction * middle / escape));

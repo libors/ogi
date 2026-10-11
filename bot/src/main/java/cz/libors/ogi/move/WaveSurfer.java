@@ -45,7 +45,8 @@ import java.util.Optional;
  * <p>Against an enemy that drives at us ({@link RamDetector}), each way also predicts the enemy: from its last scan it
  * turns towards where we are and drives at full speed. Five ways orbit it instead of the wave's origin, two of them
  * tilting more steeply against the preferred distance; a way that ends nearer to it is more dangerous at any distance,
- * and a way on which it touches us costs a point-blank hit.
+ * and a way on which it touches us costs a point-blank hit. While no wave is in the air (before its first shot of a
+ * round, say), {@link #evade} chooses among the same ways by the contact and its next shot alone.
  *
  * <p>Danger models, ram detectors and our lateral histories last for the battle (static, per robot, engine-model
  * G-22); waves and fire detectors are per round.
@@ -137,6 +138,8 @@ public final class WaveSurfer {
     private final Map<String, FireDetector> detectors = new HashMap<>();
     private final Neighbours neighbours = new Neighbours();
     private final List<EnemyWave> waves = new ArrayList<>();
+    /** Waves whose bullet we learned: no longer surfed, but followed until they pass us, for the flattener. */
+    private final List<EnemyWave> spent = new ArrayList<>();
     private final List<BulletPath> ourBullets = new ArrayList<>();
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
@@ -253,7 +256,7 @@ public final class WaveSurfer {
 
     /**
      * Advances the waves to our position at the end of turn {@code now} and drops those that have passed us; where we
-     * were in each of them goes to its shooter's flattener.
+     * were in each of them goes to its shooter's flattener, also in those whose bullet hit us or one of our bullets.
      */
     public void update(long now) {
         ourBullets.removeIf(b -> b.endTime() < now);
@@ -261,7 +264,13 @@ public final class WaveSurfer {
         if (us == null) {
             return;
         }
-        for (Iterator<EnemyWave> it = waves.iterator(); it.hasNext(); ) {
+        advance(waves, now, us);
+        // A gun that learns our movement learns these waves too, whatever became of their bullets.
+        advance(spent, now, us);
+    }
+
+    private static void advance(List<EnemyWave> list, long now, double[] us) {
+        for (Iterator<EnemyWave> it = list.iterator(); it.hasNext(); ) {
             EnemyWave w = it.next();
             w.range.observe(now, us[0], us[1]);
             if (w.range.passed()) {
@@ -304,6 +313,44 @@ public final class WaveSurfer {
         lastOption = best;
         return Optional.of(rammer == null ? orbit(me, nearest.wave.x(), nearest.wave.y(), best)
                 : orbit(me, rammer.x, rammer.y, best));
+    }
+
+    /**
+     * The commands for the next turn while no wave is in the air, if {@code name} drives at us: the ways around it, each
+     * weighed by what the robot costs us besides its waves ({@link #ramDanger}) after {@link #RAM_HORIZON} turns;
+     * empty if it does not drive at us. Before its first shot of a round it would otherwise find us orbiting at the
+     * preferred distance, which closes in on it from further away.
+     */
+    public Optional<double[]> evade(EngineRobot me, String name, long now) {
+        EngineRobot rammer = rammer(name, now);
+        if (rammer == null) {
+            return Optional.empty();
+        }
+        int best = Arrays.stream(RAM_OPTIONS).anyMatch(o -> o == lastOption) ? lastOption : Integer.signum(lastOption);
+        double bestDanger = evasion(me, rammer, best);
+        for (int option : RAM_OPTIONS) {
+            if (option == best) {
+                continue;
+            }
+            double d = evasion(me, rammer, option);
+            if (d < bestDanger) {
+                best = option;
+                bestDanger = d;
+            }
+        }
+        lastOption = best;
+        return Optional.of(orbit(me, rammer.x, rammer.y, best));
+    }
+
+    /** What a robot that drives at us costs a way without waves, {@link #RAM_HORIZON} turns long. */
+    private double evasion(EngineRobot start, EngineRobot rammer, int option) {
+        EngineRobot r = start.copy();
+        EngineRobot e = rammer.copy();
+        boolean contact = false;
+        for (int t = 0; t < RAM_HORIZON; t++) {
+            contact |= step(r, null, e, option);
+        }
+        return ramDanger(r, e, contact);
     }
 
     /**
@@ -489,8 +536,9 @@ public final class WaveSurfer {
 
     /**
      * One predicted turn of a way. With a robot that drives at us ({@code rammer}, else null) it orbits the robot
-     * instead of the wave's origin, and the robot chases us; returns whether it touched us (the robots' boxes
-     * overlap), in which case it is pushed back and stopped as the engine does with the robot at fault.
+     * instead of the wave's origin (which may then be null), and the robot chases us; returns whether it touched us
+     * (the robots' boxes overlap), in which case it is pushed back and stopped as the engine does with the robot at
+     * fault.
      */
     private boolean step(EngineRobot r, Wave origin, EngineRobot rammer, int option) {
         double[] cmd = rammer == null ? orbit(r, origin.x(), origin.y(), option) : orbit(r, rammer.x, rammer.y, option);
@@ -679,6 +727,7 @@ public final class WaveSurfer {
             if (Math.abs(travelled - expected) <= w.wave.speed()) {
                 model(shooter).learn(w.features, w.prediction, w.guessFactor(heading));
                 it.remove();
+                spent.add(w);
                 return;
             }
         }
@@ -699,7 +748,7 @@ public final class WaveSurfer {
                 n -> new FireDetector(n, coolingRate, (int) field.width(), (int) field.height()));
     }
 
-    private static DangerModel model(String name) {
+    static DangerModel model(String name) {
         return MODELS.computeIfAbsent(name, n -> new DangerModel(DangerParameters.DEFAULT));
     }
 
