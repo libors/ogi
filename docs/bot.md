@@ -114,9 +114,19 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   325 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
   until there is room, so near walls it drifts outwards and stays further than 325 px. `HitRange` gives the guess
   factors that would hit us on each path.
-  - **Two waves:** the next wave's hit range observes the same path, and from where each way ends the next wave is
-    surfed the three ways too. A way's danger is its expected damage from the nearest wave (the share of the wave's
-    profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.
+  - **Paths:** besides the three ways held until the wave passes, paths that change once from one of them to another
+    after k turns: they drive past a point and come back, stop short, or wait and go, so they reach the points between
+    the held ways' ends and the same points at other times and speeds. k is one of 3, 6, 10 and 15 turns, a different
+    one each turn in rotation; the path chosen goes on a turn later (k − 1) as a candidate of its own and wins ties, so
+    a plan found on one turn is followed while it stays the best. Paths that share their first turns are predicted
+    together, and the next wave is surfed from the paths in the order of the nearest wave's danger until that alone
+    reaches the best total, which leaves the choice as it would be. Against a robot that drives at us the ways are
+    held, as below. CPU: a predicted turn costs about 0.25 µs for the orbit and the engine physics plus 0.075 µs per
+    wave's hit range (Mac, C1 only as on the queue's worker); one switch turn a turn costs about twice the held ways,
+    all four every turn about four times, which made the robot skip about 3 turns a battle on the worker (2026-10-11).
+  - **Two waves:** the next wave's hit range observes the same path, and from where each path ends the next wave is
+    surfed the three ways (held) too. A path's danger is its expected damage from the nearest wave (the share of the
+    wave's profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.
   - **Close fights:** nearer than 250 px to the wave's shooter, each wave's danger is multiplied by d_now / d_end, d
     being the distance to the enemy now and where the way ends (the angle we fill in the shooter's view grows with
     nearness).
@@ -131,7 +141,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     if the engine moves that bullet first, which is a fresh coin each turn, so they shadow at weight ½. A way's
     expected damage from a wave counts only the unshadowed share of its hit range, each guess factor weighted by the
     wave's profile and by the largest shadow weight on it.
-  - The way with the least danger wins, and its first turn's commands are used. Ties keep the last way.
+  - The path with the least danger wins, and its first turn's commands are used. Ties keep the last path.
   - **Against an enemy that drives at us** (`RamDetector`: per enemy for the battle, an exponential average, weight
     0.01 per scan, of its speed towards us while it is closer than 200 px and 0 further away; above 2 px/turn it
     drives at us):
@@ -193,3 +203,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   6–13 µs, 99th percentile ~80 µs, the longest turns 0.7–1.7 ms at a battle's start (the JIT) and in garbage
   collections. Those numbers predate the shadow shots and the anti-ram ways; the queue's health has the current
   ones per job (e.g. the 1v1 rumble on 2026-10-11: a few hundred turns over the idle constant in 4572 battles).
+- **The first call of a record's `equals` (also `hashCode`, `toString`) or of a lambda links an `invokedynamic`
+  call site**, which in a fresh JVM takes long enough to skip a turn: the path search with a record `equals` and a
+  sort lambda skipped 1–2 turns in the first battle of every `skeletonCheck` run (2026-10-11), and none with plain
+  methods (`Path.sameAs`, `Predicted.compareTo`). Code that runs in a turn for the first time mid-battle avoids them.

@@ -226,6 +226,18 @@ class WaveSurferTest {
     }
 
     @Test
+    void aPathChangesItsWayOnceAndGoesOnATurnLater() {
+        WaveSurfer.Path back = new WaveSurfer.Path(WaveSurfer.ORBIT_LEFT, 2, WaveSurfer.ORBIT_RIGHT);
+        assertEquals(WaveSurfer.ORBIT_LEFT, back.at(1));
+        assertEquals(WaveSurfer.ORBIT_RIGHT, back.at(2));
+        assertEquals(new WaveSurfer.Path(WaveSurfer.ORBIT_LEFT, 1, WaveSurfer.ORBIT_RIGHT), back.next());
+        assertEquals(WaveSurfer.Path.held(WaveSurfer.ORBIT_RIGHT), back.next().next(), "the switch is behind it");
+        WaveSurfer.Path stop = WaveSurfer.Path.held(WaveSurfer.STOP);
+        assertEquals(stop, stop.next());
+        assertEquals(WaveSurfer.STOP, stop.at(1000));
+    }
+
+    @Test
     void aShadowAcrossTheOppositeBearingStaysNarrow() {
         double[] across = WaveSurfer.shadowRange(0, 1, 0.5, Math.PI - 0.01, -Math.PI + 0.01);
         assertEquals(0.04, across[1] - across[0], 1e-9, "0.02 rad of shadow at an escape angle of 0.5");

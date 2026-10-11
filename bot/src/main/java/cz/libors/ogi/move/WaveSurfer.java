@@ -32,10 +32,13 @@ import java.util.Optional;
  * ({@link TargetingFeatures} of our own history). A new wave gets the model's profile for that situation.
  *
  * <p>For the nearest wave the surfer predicts three ways to move until the wave has passed: orbiting its origin either
- * way, or stopping. The prediction runs the engine's own rules ({@link RobotMotion}), and {@link HitRange} gives the
- * guess factors that would hit us on each path. From where each way leaves us, the next wave is surfed the same way,
- * and its best way counts too. The way with the least expected damage (each wave's profile inside its hit range,
- * times its bullet's damage) wins, and its first turn's commands are returned.
+ * way, or stopping. Paths that change once from one of them to another after a few turns (drive past a point and come
+ * back, stop short, wait and go) reach the points between and the same points at other times and speeds; the path
+ * chosen goes on a turn later as a candidate of its own. The prediction runs the engine's own rules
+ * ({@link RobotMotion}), and {@link HitRange} gives the guess factors that would hit us on each path. From where each
+ * path leaves us, the next wave is surfed in its three ways, and the best of them counts too. The path with the least
+ * expected damage (each wave's profile inside its hit range, times its bullet's damage) wins, and its first turn's
+ * commands are returned.
  *
  * <p>Bullet shadows: where one of our bullets in the air will cross an enemy wave, the enemy's bullets at those angles
  * would hit ours (engine-model G-04: segments of the same turn that cross always collide; a segment and the other
@@ -101,6 +104,12 @@ public final class WaveSurfer {
     /** The key of the bullet {@link #dangerWithShot} imagines. */
     private static final Object PROBE = new Object();
 
+    /**
+     * Turns after which a path changes its way (drives past a point and comes back, stops short, or waits and goes),
+     * one of them a turn, in rotation.
+     */
+    private static final int[] SWITCH_TURNS = {3, 6, 10, 15};
+
     private static final Map<String, DangerModel> MODELS = new HashMap<>();
     private static final Map<String, RamDetector> RAM_DETECTORS = new HashMap<>();
     /** Our lateral velocity as each enemy saw it, for the battle: what averaged and pattern guns aim with. */
@@ -133,6 +142,33 @@ public final class WaveSurfer {
         }
     }
 
+    /**
+     * A way to move until the nearest wave has passed: {@code first} for {@code turns} turns, then {@code then}.
+     * Besides the three ways held throughout, paths that change their way once reach the same points at other times and
+     * speeds, and points the held ways miss.
+     */
+    record Path(int first, int turns, int then) {
+
+        static Path held(int option) {
+            return new Path(option, Integer.MAX_VALUE, option);
+        }
+
+        /** The way in the {@code turn}-th predicted turn, from 0. */
+        int at(int turn) {
+            return turn < turns ? first : then;
+        }
+
+        /** The same path a turn later. */
+        Path next() {
+            return first == then ? this : turns > 1 ? new Path(first, turns - 1, then) : held(then);
+        }
+
+        /** As {@code equals}, which a record links on its first call at a cost that can skip a turn. */
+        boolean sameAs(Path o) {
+            return first == o.first && turns == o.turns && then == o.then;
+        }
+    }
+
     private final Field field;
     private final double coolingRate;
     private final Map<String, FireDetector> detectors = new HashMap<>();
@@ -152,6 +188,8 @@ public final class WaveSurfer {
     /** Per shooter, the direction of its last wave: the fallback when our lateral velocity is 0 when it aims. */
     private final Map<String, Integer> lastDirection = new HashMap<>();
     private int lastOption = ORBIT_LEFT;
+    /** The path chosen last turn, while no robot drives at us; null otherwise. */
+    private Path lastPath;
 
     public WaveSurfer(Field field, double coolingRate) {
         this.field = field;
@@ -292,27 +330,113 @@ public final class WaveSurfer {
     public Optional<double[]> command(EngineRobot me, long now) {
         EnemyWave nearest = nearest(me, now, null);
         if (nearest == null) {
+            lastPath = null;
             return Optional.empty();
         }
         EnemyWave second = nearest(me, now, nearest);
         EngineRobot rammer = rammer(nearest.wave.shooter(), now);
-        int[] options = rammer == null ? OPTIONS : RAM_OPTIONS;
+        if (rammer == null) {
+            Path best = surfPaths(nearest, second, me, now);
+            lastOption = best.first();
+            lastPath = best;
+            return Optional.of(orbit(me, nearest.wave.x(), nearest.wave.y(), best.first()));
+        }
         // Ties keep the last way; a retreat left over from a robot that no longer drives at us becomes an orbit.
-        int best = Arrays.stream(options).anyMatch(o -> o == lastOption) ? lastOption : Integer.signum(lastOption);
-        double bestDanger = danger(nearest, second, me, now, best);
-        for (int option : options) {
+        int best = Arrays.stream(RAM_OPTIONS).anyMatch(o -> o == lastOption) ? lastOption : Integer.signum(lastOption);
+        double bestDanger = danger(nearest, second, me, now, Path.held(best), Double.POSITIVE_INFINITY);
+        for (int option : RAM_OPTIONS) {
             if (option == best) {
                 continue;
             }
-            double d = danger(nearest, second, me, now, option);
+            double d = danger(nearest, second, me, now, Path.held(option), bestDanger);
             if (d < bestDanger) {
                 best = option;
                 bestDanger = d;
             }
         }
         lastOption = best;
-        return Optional.of(rammer == null ? orbit(me, nearest.wave.x(), nearest.wave.y(), best)
-                : orbit(me, rammer.x, rammer.y, best));
+        lastPath = null;
+        return Optional.of(orbit(me, rammer.x, rammer.y, best));
+    }
+
+    /**
+     * A path predicted until the nearest wave has passed: that wave's danger, and where and when it leaves us. Ordered
+     * by the danger without a lambda, whose first call can skip a turn.
+     */
+    private record Predicted(Path path, double danger, EngineRobot end, HitRange nextRange, long time)
+            implements Comparable<Predicted> {
+
+        @Override
+        public int compareTo(Predicted o) {
+            return Double.compare(danger, o.danger);
+        }
+    }
+
+    /**
+     * The path with the least danger, while no robot drives at us: the three ways held until the nearest wave has
+     * passed, each changing once to another of them after this turn's one of {@link #SWITCH_TURNS} if that wave is
+     * still on its way then, and last turn's path a turn on, which wins ties. A path found goes on as last turn's
+     * path, so the switch turns of a few turns are all tried while one costs no more than a few more ways. Paths that
+     * share their first turns are predicted together; the next wave is surfed from the paths in the order of the
+     * nearest wave's danger, until that alone reaches the least total.
+     */
+    private Path surfPaths(EnemyWave w, EnemyWave next, EngineRobot me, long now) {
+        Path best = lastPath != null ? lastPath.next() : Path.held(Integer.signum(lastOption));
+        double bestDanger = danger(w, next, me, now, best, Double.POSITIVE_INFINITY);
+        int switchTurn = SWITCH_TURNS[(int) (now % SWITCH_TURNS.length)];
+        List<Predicted> predicted = new ArrayList<>();
+        for (int first : OPTIONS) {
+            EngineRobot r = me.copy();
+            HitRange range = w.range.copy();
+            HitRange nextRange = next == null ? null : next.range.copy();
+            long t = now + 1;
+            for (int turn = 0; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++, turn++) {
+                if (turn == switchTurn) {
+                    for (int then : OPTIONS) {
+                        if (then != first) {
+                            predicted.add(predict(w, me, r.copy(), range.copy(),
+                                    nextRange == null ? null : nextRange.copy(), t, now, new Path(first, turn, then)));
+                        }
+                    }
+                }
+                step(r, w.wave, null, first);
+                range.observe(t, r.x, r.y);
+                if (nextRange != null) {
+                    nextRange.observe(t, r.x, r.y);
+                }
+            }
+            predicted.add(new Predicted(Path.held(first), damage(w, range) * closing(w, me, r, null, now), r,
+                    nextRange, t));
+        }
+        predicted.sort(null);
+        for (Predicted p : predicted) {
+            if (p.danger() >= bestDanger) {
+                break;
+            }
+            if (p.path().sameAs(best)) {
+                continue;
+            }
+            double d = next == null ? p.danger()
+                    : p.danger() + following(next, me, p.end(), p.nextRange(), p.time(), now, null);
+            if (d < bestDanger) {
+                best = p.path();
+                bestDanger = d;
+            }
+        }
+        return best;
+    }
+
+    /** Goes on along {@code path} from turn {@code t} until the nearest wave has passed. */
+    private Predicted predict(EnemyWave w, EngineRobot start, EngineRobot r, HitRange range, HitRange nextRange, long t,
+                              long now, Path path) {
+        for (; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++) {
+            step(r, w.wave, null, path.at((int) (t - now - 1)));
+            range.observe(t, r.x, r.y);
+            if (nextRange != null) {
+                nextRange.observe(t, r.x, r.y);
+            }
+        }
+        return new Predicted(path, damage(w, range) * closing(w, start, r, null, now), r, nextRange, t);
     }
 
     /**
@@ -339,6 +463,7 @@ public final class WaveSurfer {
             }
         }
         lastOption = best;
+        lastPath = null;
         return Optional.of(orbit(me, rammer.x, rammer.y, best));
     }
 
@@ -370,8 +495,9 @@ public final class WaveSurfer {
             addShadows(w, probe);
         }
         double least = Double.POSITIVE_INFINITY;
+        // The held ways only: the paths would cost every candidate shot as much as a turn's surfing.
         for (int option : rammer(nearest.wave.shooter(), now) == null ? OPTIONS : RAM_OPTIONS) {
-            least = Math.min(least, danger(nearest, second, me, now, option));
+            least = Math.min(least, danger(nearest, second, me, now, Path.held(option), least));
         }
         for (EnemyWave w : waves) {
             w.shadows.remove(PROBE);
@@ -398,11 +524,12 @@ public final class WaveSurfer {
     }
 
     /**
-     * The damage we expect from the nearest wave if we moved this way until it has passed, plus the least we expect
-     * from the next wave, surfed from there in its best way. Each wave counts the share of the enemy's aim that would
-     * hit us times its bullet's damage.
+     * The damage we expect from the nearest wave if we moved along this path until it has passed, plus the least we
+     * expect from the next wave, surfed from there in its best way held. Each wave counts the share of the enemy's aim
+     * that would hit us times its bullet's damage. Once the nearest wave alone costs {@code bound} or more, the next
+     * wave, which can only add to it, is left out.
      */
-    private double danger(EnemyWave w, EnemyWave next, EngineRobot start, long now, int option) {
+    private double danger(EnemyWave w, EnemyWave next, EngineRobot start, long now, Path path, double bound) {
         EngineRobot r = start.copy();
         HitRange range = w.range.copy();
         HitRange nextRange = next == null ? null : next.range.copy();
@@ -410,7 +537,7 @@ public final class WaveSurfer {
         boolean contact = false;
         long t = now + 1;
         for (; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++) {
-            contact |= step(r, w.wave, rammer, option);
+            contact |= step(r, w.wave, rammer, path.at((int) (t - now - 1)));
             range.observe(t, r.x, r.y);
             if (nextRange != null) {
                 nextRange.observe(t, r.x, r.y);
@@ -419,20 +546,33 @@ public final class WaveSurfer {
         if (next == null) {
             if (rammer != null) {
                 for (; t <= now + RAM_HORIZON; t++) {
-                    contact |= step(r, w.wave, rammer, option);
+                    contact |= step(r, w.wave, rammer, path.at((int) (t - now - 1)));
                 }
             }
             return damage(w, range) * closing(w, start, r, rammer, now) + ramDanger(r, rammer, contact);
         }
         double danger = damage(w, range) * closing(w, start, r, rammer, now) + (contact ? CONTACT_DANGER : 0);
+        if (danger >= bound) {
+            return danger;
+        }
         // The rammer as predicted so far drives the next wave's ways only if it fired that wave too (in melee another
         // robot may have); the next wave of another shooter is surfed around its own origin.
         EngineRobot nextRammer = next.wave.shooter().equals(w.wave.shooter()) ? rammer : null;
+        return danger + following(next, start, r, nextRange, t, now, nextRammer);
+    }
+
+    /**
+     * The least danger of the next wave, surfed in its ways held from where the nearest wave left us ({@code r} in
+     * turn {@code t}, the next wave's hit range observed so far); {@code rammer} is the robot that drives at us as
+     * predicted so far if it fired that wave, else null.
+     */
+    private double following(EnemyWave next, EngineRobot start, EngineRobot r, HitRange nextRange, long t, long now,
+                             EngineRobot rammer) {
         double least = Double.POSITIVE_INFINITY;
-        for (int o : nextRammer == null ? OPTIONS : RAM_OPTIONS) {
+        for (int o : rammer == null ? OPTIONS : RAM_OPTIONS) {
             EngineRobot q = r.copy();
             HitRange qr = nextRange.copy();
-            EngineRobot qe = nextRammer == null ? null : nextRammer.copy();
+            EngineRobot qe = rammer == null ? null : rammer.copy();
             boolean touched = false;
             long u = t;
             for (; u <= now + MAX_PREDICTED_TURNS && !qr.passed(); u++) {
@@ -446,7 +586,7 @@ public final class WaveSurfer {
             }
             least = Math.min(least, damage(next, qr) * closing(next, start, q, qe, now) + ramDanger(q, qe, touched));
         }
-        return danger + least;
+        return least;
     }
 
     /**

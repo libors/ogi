@@ -47,10 +47,13 @@ public final class HitRange {
         RobotBox box = new RobotBox(x, y);
         double inner = wave.radius(time);
         double outer = wave.radius(time + 1);
-        double[] turn = turn(wave.x(), wave.y(), inner, outer, box, reference, fieldWidth, fieldHeight);
-        if (turn != null) {
-            min = Math.min(min, turn[0]);
-            max = Math.max(max, turn[1]);
+        // Most turns the bullets are still short of the box, and nothing can hit; the full test is far slower.
+        if (nearestPoint(wave.x(), wave.y(), box) <= outer + 1e-6) {
+            double[] turn = turn(wave.x(), wave.y(), inner, outer, box, reference, fieldWidth, fieldHeight);
+            if (turn != null) {
+                min = Math.min(min, turn[0]);
+                max = Math.max(max, turn[1]);
+            }
         }
         passed = inner > farthestCorner(wave.x(), wave.y(), box);
     }
@@ -246,6 +249,13 @@ public final class HitRange {
         double offset = Angles.normalizeRelative(Angles.bearing(ox, oy, px, py) - reference);
         range[0] = Math.min(range[0], offset);
         range[1] = Math.max(range[1], offset);
+    }
+
+    /** The distance from the origin to the box's nearest point. */
+    private static double nearestPoint(double ox, double oy, RobotBox box) {
+        double dx = Math.max(0, Math.max(box.x() - ox, ox - (box.x() + box.width())));
+        double dy = Math.max(0, Math.max(box.y() - oy, oy - (box.y() + box.height())));
+        return Math.sqrt(dx * dx + dy * dy);
     }
 
     private static double farthestCorner(double ox, double oy, RobotBox box) {
