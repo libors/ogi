@@ -76,6 +76,19 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   on 30 bullets and its record over them is the better one. Our bullets an enemy bullet shot down count as virtual
   waves: they never reached the target. Its weights are a fixed copy of the main gun's; the gun bench does not tune
   them.
+- **Random gun:** a fourth gun aims uniformly inside the target's precise escape range (`EscapeRange`): from its last
+  scan the target orbits our planned origin at full speed each way, moved by the engine's rules and sliding along the
+  walls (a 120 px stick, turning towards us), until the wave reaches it; the range is the lowest and highest bearing
+  on the way, widened by half a robot's mean width (2 · 36 / π px). No movement leaves it: in recordings of the whole
+  rumble under 0.2 % of the bullets found their target outside it (2026-10-12). So a surfer cannot learn where it aims,
+  and it hits any movement about as often as a robot's width over the range's. It is scored by the share of its range
+  that would have hit, not by its one aim; the place in the range is drawn from a seeded generator of its own
+  (`Ogi.randomAim`) once per bullet and held until the bullet fires, so that the turret reaches it in the turns
+  before the gun is cool (a draw every turn made the turret chase it, and the bullets fired where a draw fell within
+  its reach: later and not uniformly); it goes into the shot, so the bench replays it. Against an enemy that is hard to hit it replaces
+  the gun that would fire (the anti-surfer gun's or the main gun's choice) once it has been scored on 30 bullets and
+  its record over them is the better one (DrussGT's idea). The range costs two predicted runs of the target, only in
+  the turns the guns search.
 - **Shadow shots:** in a duel, in the turn before a shot of the anti-surfer gun, its peaks with at least 70 % of the
   best one's weight compete with its aim (at most three, 0.15 guess factors apart, and only those the turret can
   reach in one turn, 20°): the turret takes the heading
@@ -209,7 +222,8 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   drawn as they are; arcs are polylines, never `Arc2D`.
 - **What is drawn:** our gun waves (grey, a fired one orange) with their hit ranges on the target (green), enemy waves
   (red) with their hit range on us (yellow), the gun's reference and escape angles, each gun's aim (guess factor
-  green, circular blue, anti-surfer orange; the chosen one thick), and per target the guns' virtual hit rates and the data size.
+  green, circular blue, anti-surfer orange, random violet; the chosen one thick), and per target the
+  guns' virtual hit rates and the data size.
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
   screen is the shot of the current turn.
@@ -219,9 +233,11 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   keeps it ([harness.md](harness.md#recording-comparison-battles)).
 - **For the gun bench:** `cz.libors.OgiGunLog` is Ogi that also logs its gun's inputs and decisions (`GunLog`): one
   `gunpass` property per gun wave that passed its target in this turn (the plan's turn, whether it carried a bullet,
-  the wave's reference and escape angle, the lowest and highest hitting offset from the reference), then `gunshot` with the turn's plan (the features,
-  the direction, the reference, the escape angle, whether the guess-factor gun searched, the circular aim, the guess
-  factor found and the chosen gun). That is everything `GunModel` needs to replay the battle.
+  the wave's reference and escape angle, the lowest and highest hitting offset from the reference), then `gunshot`
+  with the turn's plan (the features, the direction, the reference, the escape angle, whether the guess-factor gun
+  searched, the circular aim, the guess factor found, the chosen gun, and the random gun's range and draw; lines
+  logged before 2026-10-12 lack the last three and are read without a random gun). That is everything `GunModel`
+  needs to replay the battle.
   - `OgiGunLog` also logs `gunshield` when an enemy bullet destroys one of its bullets (the plan's turn and the
     shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
     that shoot bullets down would otherwise look easy to hit on the bench. The log keeps the guns' aims, not the

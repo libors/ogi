@@ -17,8 +17,8 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Guess-factor targeting with nearest neighbours ("dynamic clustering"), chosen against circular targeting and an
- * anti-surfer gun by how often each would have hit.
+ * Guess-factor targeting with nearest neighbours ("dynamic clustering"), chosen against circular targeting, an
+ * anti-surfer gun and a random gun by how often each would have hit.
  *
  * <p>Each turn has a wave: the shot that could have been fired in it. When the wave has passed the target, its
  * {@link HitRange} says which guess factors would have hit, and the shot's features and that range join the data.
@@ -43,7 +43,8 @@ public final class GuessFactorGun {
     public static final int GUESS_FACTOR = GunModel.GUESS_FACTOR;
     public static final int CIRCULAR = GunModel.CIRCULAR;
     public static final int ANTI_SURFER = GunModel.ANTI_SURFER;
-    private static final String[] GUN_NAMES = {"gf", "circular", "anti-surfer"};
+    public static final int RANDOM = GunModel.RANDOM;
+    private static final String[] GUN_NAMES = {"gf", "circular", "anti-surfer", "random"};
 
     private static final Map<String, GunModel> MODELS = new HashMap<>();
 
@@ -190,15 +191,16 @@ public final class GuessFactorGun {
      */
     public double aim(String name, long now, double nextX, double nextY, double power, boolean searchNeighbours,
                       double circularAim) {
-        return aim(name, now, nextX, nextY, power, searchNeighbours, circularAim, 0);
+        return aim(name, now, nextX, nextY, power, searchNeighbours, circularAim, 0, 0.5);
     }
 
     /**
      * As {@link #aim(String, long, double, double, double, boolean, double)}, with {@code offset} radians added to
-     * the turret's aim only (see {@link Plan}).
+     * the turret's aim only (see {@link Plan}), and {@code randomDraw}, uniform in [0, 1), the place in the target's
+     * {@link EscapeRange} where the random gun aims.
      */
     public double aim(String name, long now, double nextX, double nextY, double power, boolean searchNeighbours,
-                      double circularAim, double offset) {
+                      double circularAim, double offset, double randomDraw) {
         Target t = target(name);
         if (t.history.isEmpty()) {
             t.plan = null;
@@ -210,8 +212,13 @@ public final class GuessFactorGun {
         t.direction = direction;
         double reference = Angles.bearing(nextX, nextY, t.history.x(), t.history.y());
         double escape = Math.asin(RobotMotion.MAX_VELOCITY / speed);
+        // The random gun's range only when the guns search: it costs two predicted runs of the target.
+        double[] range = searchNeighbours
+                ? EscapeRange.guessFactors(nextX, nextY, now + 1, t.history.time(), t.history.x(), t.history.y(),
+                        t.history.heading(), t.history.velocity(), speed, reference, direction, escape, field)
+                : new double[] {Double.NaN, Double.NaN};
         GunModel.Shot shot = new GunModel.Shot(name, now, features, direction, reference, escape, searchNeighbours,
-                circularAim);
+                circularAim, range[0], range[1], randomDraw);
         t.plan = new Plan(shot, t.model.aim(shot), power, nextX, nextY, t.history.x(), t.history.y(), offset);
         return t.plan.aim();
     }
@@ -269,7 +276,8 @@ public final class GuessFactorGun {
 
     private Trace.GunView view(String name, Target t) {
         Plan p = t.plan;
-        double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR), hitRate(name, ANTI_SURFER)};
+        double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR), hitRate(name, ANTI_SURFER),
+                hitRate(name, RANDOM)};
         return new Trace.GunView(name, p.time(), p.originX(), p.originY(), p.targetX(), p.targetY(),
                 p.shot().reference(), p.shot().escape(), p.power(), p.shot().direction(), p.decision().aims().clone(),
                 p.decision().gun(), GUN_NAMES, rates, t.model.dataSize());

@@ -82,6 +82,13 @@ public class Ogi extends TeamRobot {
     private GuessFactorGun gun;
     private WaveSurfer surfer;
     private Random aimSpread;
+    /**
+     * Where in the target's escape range the random gun aims: drawn once per bullet and held until the bullet fires,
+     * so that the turret reaches it in the turns before the gun is cool. A draw in every turn would make the turret
+     * chase it, and the bullets would fire where it happened to fall within the turret's reach.
+     */
+    private Random randomAim;
+    private double randomDraw;
     private final Trace trace = new Trace();
     private final TurnClock clock = new TurnClock();
     /** Whether last turn's plan for this turn is a shot we can afford. */
@@ -94,6 +101,8 @@ public class Ogi extends TeamRobot {
         movement = new OrbitMovement(field, new Random(roundSeed()));
         gun = new GuessFactorGun(field);
         aimSpread = new Random(~roundSeed());
+        randomAim = new Random(roundSeed() * 31 + 17);
+        randomDraw = randomAim.nextDouble();
         surfer = new WaveSurfer(field, getGunCoolingRate());
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
@@ -138,6 +147,9 @@ public class Ogi extends TeamRobot {
         EnemyState t = target.get();
         double[] next = move(t, now);
         boolean fired = fire(t, now);
+        if (fired) {
+            randomDraw = randomAim.nextDouble();
+        }
         gun.update(now, getX(), getY(), fired ? t.name() : null);
         logPassedWaves();
         aim(t, now, next[0], next[1]);
@@ -222,7 +234,7 @@ public class Ogi extends TeamRobot {
         double circular = CircularAim.aim(nextX, nextY, target, Rules.getBulletSpeed(planned), now + 1, field);
         boolean soon = getGunHeat() <= AIM_LEAD_TURNS * getGunCoolingRate();
         double offset = (2 * aimSpread.nextDouble() - 1) * AIM_SPREAD / Math.max(distance, 1);
-        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset);
+        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset, randomDraw);
         if (plannedShot && getOthers() == 1 && getGunHeat() <= getGunCoolingRate() + 1e-9 && !Double.isNaN(aim)) {
             aim = shadowingAim(target.name(), now, nextX, nextY, planned, aim, offset);
         }

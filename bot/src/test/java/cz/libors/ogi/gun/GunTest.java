@@ -94,6 +94,50 @@ class GunTest {
         assertEquals(GunModel.GUESS_FACTOR, aim.gun());
     }
 
+    @Test
+    void theRandomGunReplacesGunsThatASurferDodges() {
+        // A surfer that always goes to the one of -0.8, 0 and +0.8 farthest from where the learned guns aim.
+        GunModel model = new GunModel(GunParameters.DEFAULT);
+        double escape = 0.6;
+        Random random = new Random(3);
+        GunModel.Aim aim = null;
+        for (int i = 0; i < 200; i++) {
+            GunModel.Shot base = shot(i, random, escape);
+            GunModel.Shot shot = new GunModel.Shot("t", i, base.features(), 1, 0, escape, true, Double.NaN, -1, 1,
+                    random.nextDouble());
+            aim = model.aim(shot);
+            double best = Double.NaN;
+            double farthest = -1;
+            for (double gf : new double[] {-0.8, 0, 0.8}) {
+                double away = Double.POSITIVE_INFINITY;
+                for (int g : new int[] {GunModel.GUESS_FACTOR, GunModel.ANTI_SURFER}) {
+                    if (!Double.isNaN(aim.aims()[g])) {
+                        away = Math.min(away, Math.abs(gf - aim.aims()[g] / escape));
+                    }
+                }
+                if (away > farthest) {
+                    farthest = away;
+                    best = gf;
+                }
+            }
+            model.learn(shot, aim,
+                    new GunModel.Pass("t", i, true, 0, escape, true, (best - 0.05) * escape, (best + 0.05) * escape));
+        }
+        // It hits a tenth of its range's width (0.1 of 2) wherever the surfer goes; the learned guns hardly hit.
+        assertEquals(0.05, model.hitRate(GunModel.RANDOM), 1e-9);
+        assertTrue(model.hitRate(GunModel.ANTI_SURFER) < 0.05, "anti-surfer " + model.hitRate(GunModel.ANTI_SURFER));
+        assertEquals(GunModel.RANDOM, aim.gun());
+        double gf = aim.aim() / escape;
+        assertTrue(gf >= -1 && gf <= 1, "random aim " + gf);
+    }
+
+    @Test
+    void withoutARangeTheRandomGunNeverAims() {
+        GunModel model = new GunModel(GunParameters.DEFAULT);
+        GunModel.Aim aim = model.aim(shot(0, new Random(1), 0.6));
+        assertTrue(Double.isNaN(aim.aims()[GunModel.RANDOM]));
+    }
+
     private static GunModel.Shot shot(long time, Random random, double escape) {
         double[] f = new double[TargetingFeatures.COUNT];
         for (int j = 0; j < f.length; j++) {

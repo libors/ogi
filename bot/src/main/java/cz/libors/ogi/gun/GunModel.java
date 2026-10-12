@@ -6,14 +6,17 @@ import cz.libors.ogi.geom.Angles;
  * What the guess-factor gun knows about one enemy for the whole battle, and the arithmetic of its decisions: the
  * stored shots, each gun's virtual score, which gun aims, and how a passed wave is learned.
  *
- * <p>Three guns: the guess-factor gun over every wave (a wave without a bullet counts
- * {@link GunParameters#virtualWeight()}), circular targeting, and the anti-surfer gun over the waves of our bullets
- * only: a few nearest neighbours from each of several views, the latest 30 and 150 bullets and all of them, their
- * kernels summed. A surfer dodges our bullets, not our waves, and keeps going where our bullets missed it until one
- * hits it there, so the latest bullets say where it goes now (most of what a bullet says about that is gone after
- * about a round's worth of bullets); the longer views keep what does not change. The guess-factor gun is chosen over
+ * <p>Four guns: the guess-factor gun over every wave (a wave without a bullet counts
+ * {@link GunParameters#virtualWeight()}), circular targeting, the anti-surfer gun over the waves of our bullets
+ * only, and a random gun. The anti-surfer gun takes a few nearest neighbours from each of several views, the latest
+ * 30 and 150 bullets and all of them, their kernels summed. A surfer dodges our bullets, not our waves, and keeps
+ * going where our bullets missed it until one hits it there, so the latest bullets say where it goes now (most of what
+ * a bullet says about that is gone after about a round's worth of bullets); the longer views keep what does not
+ * change. The random gun aims uniformly inside the target's {@link EscapeRange}, which a surfer cannot learn; it is
+ * scored by the share of that range that would have hit, not by its one aim. The guess-factor gun is chosen over
  * circular targeting by the whole battle's record; against an enemy that is hard to hit the anti-surfer gun replaces
- * the chosen gun when it has the better record over the battle's bullets.
+ * the chosen gun when it has the better record over the battle's bullets, and the random gun replaces either when its
+ * record over them is better still (DrussGT's idea: a surfer that learned our aim is hit less often than at random).
  *
  * <p>The bot runs it inside {@link GuessFactorGun}; the offline gun bench runs it on the {@link GunLog} lines of a
  * recorded battle. With the bot's parameters the bench therefore decides exactly as the bot did.
@@ -23,11 +26,12 @@ public final class GunModel {
     public static final int GUESS_FACTOR = 0;
     public static final int CIRCULAR = 1;
     public static final int ANTI_SURFER = 2;
-    public static final int GUNS = 3;
+    public static final int RANDOM = 3;
+    public static final int GUNS = 4;
 
     /** The anti-surfer gun's views: {the latest bullets it keeps (0: all), the neighbours it takes}. */
     private static final int[][] ANTI_SURFER_VIEWS = {{30, 4}, {150, 4}, {0, 4}};
-    /** The bullets the anti-surfer gun needs to have been scored on before it may replace the chosen gun. */
+    /** The bullets the anti-surfer or the random gun needs to have been scored on before it may replace another. */
     static final double MIN_BULLETS = 30;
     /**
      * The anti-surfer gun is for enemies that are hard to hit: the guess-factor gun's record over our bullets must
@@ -45,16 +49,27 @@ public final class GunModel {
      * @param escape      the maximum escape angle at the shot's power
      * @param search      whether the guess-factor gun searches its data for this shot
      * @param circularAim the circular gun's aim, NaN if it has none
+     * @param randomLow   the lowest guess factor of the target's {@link EscapeRange}, NaN without one
+     * @param randomHigh  its highest guess factor
+     * @param randomDraw  a number drawn uniformly from [0, 1): where in that range the random gun aims
      */
     public record Shot(String target, long time, double[] features, int direction, double reference, double escape,
-                       boolean search, double circularAim) {
+                       boolean search, double circularAim, double randomLow, double randomHigh, double randomDraw) {
+
+        /** A shot without a random gun's range. */
+        public Shot(String target, long time, double[] features, int direction, double reference, double escape,
+                    boolean search, double circularAim) {
+            this(target, time, features, direction, reference, escape, search, circularAim, Double.NaN, Double.NaN,
+                    Double.NaN);
+        }
     }
 
     /**
      * The decision for a shot.
      *
      * @param guessFactor the guess-factor gun's answer, NaN if it did not search or had no data
-     * @param aims        each gun's aim, NaN if it had none; the chosen gun's falls back to the reference
+     * @param aims        each gun's aim, NaN if it had none (the random gun aims only when the guess-factor gun
+     *                    searched); the chosen gun's falls back to the reference
      * @param gun         the gun whose aim the turret follows
      */
     public record Aim(double guessFactor, double[] aims, int gun) {
@@ -115,8 +130,8 @@ public final class GunModel {
      * Each gun's aim for a shot and the gun to follow: the guess-factor gun once it has
      * {@link GunParameters#minTries()} weighted tries and the better record, or when the circular gun has no aim;
      * the anti-surfer gun instead against an enemy that is hard to hit, once it has {@link #MIN_BULLETS} bullets and
-     * the better record over them. A
-     * chosen gun without an aim aims at the reference.
+     * the better record over them, and the random gun instead of either on the same terms. A chosen gun without an
+     * aim aims at the reference.
      */
     public Aim aim(Shot shot) {
         double gf = shot.search() ? data.bestGuessFactor(shot.features()) : Double.NaN;
@@ -125,6 +140,8 @@ public final class GunModel {
         aims[GUESS_FACTOR] = Double.isNaN(gf) ? Double.NaN : shot.reference() + shot.direction() * gf * shot.escape();
         aims[CIRCULAR] = shot.circularAim();
         aims[ANTI_SURFER] = Double.isNaN(as) ? Double.NaN : shot.reference() + shot.direction() * as * shot.escape();
+        double random = shot.randomLow() + shot.randomDraw() * (shot.randomHigh() - shot.randomLow());
+        aims[RANDOM] = shot.search() ? shot.reference() + shot.direction() * random * shot.escape() : Double.NaN;
         int gun = choose(aims);
         if (Double.isNaN(aims[gun])) {
             aims[gun] = shot.reference();
@@ -163,12 +180,17 @@ public final class GunModel {
                 && gf[0] / gf[1] > circular[0] / Math.max(circular[1], 1e-9);
         int gun = Double.isNaN(aims[CIRCULAR]) || (gfBetter && !Double.isNaN(aims[GUESS_FACTOR])) ? GUESS_FACTOR
                 : CIRCULAR;
-        double[] as = bullets[ANTI_SURFER];
-        if (!Double.isNaN(aims[ANTI_SURFER]) && as[1] >= MIN_BULLETS && hardToHit()
-                && as[0] / as[1] > bullets[gun][0] / Math.max(bullets[gun][1], 1e-9)) {
-            return ANTI_SURFER;
+        if (replaces(ANTI_SURFER, gun, aims)) {
+            gun = ANTI_SURFER;
         }
-        return gun;
+        return replaces(RANDOM, gun, aims) ? RANDOM : gun;
+    }
+
+    /** Whether {@code gun} replaces {@code chosen} against an enemy that is hard to hit, by the bullet records. */
+    private boolean replaces(int gun, int chosen, double[] aims) {
+        double[] own = bullets[gun];
+        return !Double.isNaN(aims[gun]) && own[1] >= MIN_BULLETS && hardToHit()
+                && own[0] / own[1] > bullets[chosen][0] / Math.max(bullets[chosen][1], 1e-9);
     }
 
     /** Whether the guess-factor gun's record over our bullets is not clearly above {@link #HARD_TO_HIT}. */
@@ -186,9 +208,10 @@ public final class GunModel {
 
     /**
      * Learns the passed wave of a shot: it scores the guess-factor and circular guns if both aimed and the
-     * anti-surfer gun if it aimed, a bullet's wave also scores the bullet records if the guess-factor and the
-     * anti-surfer gun both aimed, and the wave becomes data if any heading would have hit (the anti-surfer gun's only
-     * with a bullet). Returns the guns whose aim would have hit, as bits {@code 1 << gun}.
+     * anti-surfer and the random gun each if it aimed, a bullet's wave also scores the bullet records if the
+     * guess-factor and the anti-surfer gun both aimed, and the wave becomes data if any heading would have hit (the
+     * anti-surfer gun's only with a bullet). The random gun scores the share of its range that would have hit. Returns
+     * the guns whose aim would have hit, as bits {@code 1 << gun}.
      */
     public int learn(Shot shot, Aim aim, Pass pass) {
         double weight = pass.real() ? 1 : parameters.virtualWeight();
@@ -203,18 +226,22 @@ public final class GunModel {
                 hit |= 1 << g;
             }
         }
+        double[] credit = new double[GUNS];
+        for (int g = 0; g < GUNS; g++) {
+            credit[g] = g == RANDOM ? randomCredit(shot, pass) : (hit & 1 << g) != 0 ? 1 : 0;
+        }
         boolean mainScored = !Double.isNaN(aims[GUESS_FACTOR]) && !Double.isNaN(aims[CIRCULAR]);
         for (int g = 0; g < GUNS; g++) {
-            if (g == ANTI_SURFER ? !Double.isNaN(aims[g]) : mainScored) {
+            if (g == ANTI_SURFER || g == RANDOM ? !Double.isNaN(aims[g]) : mainScored) {
                 scores[g][1] += weight;
-                scores[g][0] += (hit & 1 << g) != 0 ? weight : 0;
+                scores[g][0] += weight * credit[g];
             }
         }
         if (pass.real() && !Double.isNaN(aims[GUESS_FACTOR]) && !Double.isNaN(aims[ANTI_SURFER])) {
             for (int g = 0; g < GUNS; g++) {
                 if (!Double.isNaN(aims[g])) {
                     bullets[g][1]++;
-                    bullets[g][0] += (hit & 1 << g) != 0 ? 1 : 0;
+                    bullets[g][0] += credit[g];
                 }
             }
         }
@@ -229,5 +256,25 @@ public final class GunModel {
             }
         }
         return hit;
+    }
+
+    /**
+     * The share of the random gun's range whose headings would have hit: the chance that its aim, uniform over the
+     * range, hits.
+     */
+    private static double randomCredit(Shot shot, Pass pass) {
+        if (!pass.hits()) {
+            return 0;
+        }
+        double a = Angles.normalizeRelative(
+                shot.reference() + shot.direction() * shot.randomLow() * shot.escape() - pass.reference());
+        double b = Angles.normalizeRelative(
+                shot.reference() + shot.direction() * shot.randomHigh() * shot.escape() - pass.reference());
+        double low = Math.min(a, b);
+        double high = Math.max(a, b);
+        if (high <= low) {
+            return low >= pass.minOffset() && low <= pass.maxOffset() ? 1 : 0;
+        }
+        return Math.max(0, Math.min(high, pass.maxOffset()) - Math.max(low, pass.minOffset())) / (high - low);
     }
 }

@@ -50,6 +50,32 @@ class GunLogTest {
         assertThrows(IllegalArgumentException.class, () -> GunLog.pass("4,2,-1.5,0.7,1,-0.01,0.02,x"));
     }
 
+    @Test
+    void theRandomGunsRangeAndDrawParseBack() {
+        double[] features = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1};
+        GunModel.Shot shot = new GunModel.Shot("a.B 1.0, beta", 17, features, 1, 0.5, 0.6, true, 0.25,
+                -0.7300000000000001, 0.9, 0.123456789);
+        GunModel.Aim aim = new GunModel.Aim(0.3, new double[] {0.1, 0.25, 0.2, 0.4}, GunModel.RANDOM);
+        GunLog.LoggedShot logged = GunLog.shot(GunLog.line(shot, aim));
+        assertEquals(shot.target(), logged.shot().target());
+        assertEquals(shot.randomLow(), logged.shot().randomLow());
+        assertEquals(shot.randomHigh(), logged.shot().randomHigh());
+        assertEquals(shot.randomDraw(), logged.shot().randomDraw());
+        assertEquals(GunModel.RANDOM, logged.gun());
+    }
+
+    @Test
+    void aLineFromBeforeTheRandomGunIsReadWithoutItsRange() {
+        String old = "17,1,-1,0.5,0.6,NaN,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.3,2,a.B 1.0, beta";
+        GunLog.LoggedShot logged = GunLog.shot(old);
+        assertEquals("a.B 1.0, beta", logged.shot().target());
+        assertEquals(0.3, logged.guessFactor());
+        assertEquals(GunModel.ANTI_SURFER, logged.gun());
+        assertTrue(Double.isNaN(logged.shot().randomLow()));
+        assertTrue(Double.isNaN(logged.shot().randomDraw()));
+        assertEquals(1.0, logged.shot().features()[9]);
+    }
+
     /**
      * Replays the log of a simulated fight with a fresh model, as the gun bench does: every decision comes out the
      * same, bit for bit.
