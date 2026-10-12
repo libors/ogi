@@ -9,12 +9,15 @@ import java.util.List;
  * factor that the most weight among its nearest neighbours would have hit with. With a size limit only the latest
  * shots are kept.
  *
- * <p>Brute force over primitive arrays: the reference implementation a faster search must agree with.
+ * <p>Data that keeps every shot is searched with a {@link KdTree}; with a size limit (a few hundred shots at most) a
+ * scan finds the same neighbours. Both rank by distance, then by the order the shots came in.
  */
 final class GunData {
 
     private final int dims = TargetingFeatures.COUNT;
     private final double[] weights;
+    /** The features whose weight is not 0. */
+    private final int[] used;
     private final double neighbourScale;
     private final int maxNeighbours;
     /** At most this many shots are kept, the latest; 0 keeps all. */
@@ -24,6 +27,8 @@ final class GunData {
     private double[] high = new double[1024];
     private double[] weight = new double[1024];
     private int size;
+    /** Over all shots when there is no size limit, else null. */
+    private final KdTree tree;
 
     private final int[] nearest;
     private final double[] nearestDistance;
@@ -37,12 +42,14 @@ final class GunData {
     GunData(GunParameters parameters, int maxSize) {
         this.maxSize = maxSize;
         weights = parameters.weights();
+        used = KdTree.usedFeatures(weights);
         neighbourScale = parameters.neighbourScale();
         maxNeighbours = parameters.maxNeighbours();
         nearest = new int[maxNeighbours];
         nearestDistance = new double[maxNeighbours];
         eventAt = new double[2 * maxNeighbours];
         eventWeight = new double[2 * maxNeighbours];
+        tree = maxSize == 0 ? new KdTree(dims, weights) : null;
     }
 
     int size() {
@@ -70,6 +77,9 @@ final class GunData {
         high[size] = gfHigh;
         weight[size] = w;
         size++;
+        if (tree != null) {
+            tree.add(features, size - 1);
+        }
     }
 
     /** The number of neighbours a query uses: about the square root of the data, scaled, at least 1. */
@@ -172,53 +182,112 @@ final class GunData {
 
     /** Fills {@link #nearest} with the {@code k} closest shots, closest first; returns how many there are. */
     private int findNearest(double[] query, int k) {
+        return tree != null ? tree.nearest(features, query, k, nearest, nearestDistance) : scan(query, k);
+    }
+
+    /** The k nearest shots by looking at every one; equally far shots stay in the order they came. */
+    private int scan(double[] query, int k) {
         int found = 0;
-        for (int p = 0; p < size; p++) {
-            double d = distance(query, p);
-            if (found < k) {
-                insert(found++, p, d);
-            } else if (d < nearestDistance[found - 1]) {
-                insert(found - 1, p, d);
+        int p = 0;
+        for (; p < size && found < k; p++) {
+            insert(found++, p, KdTree.distance(features, dims, p, query, weights, used));
+        }
+        if (found == 0) {
+            return 0;
+        }
+        double worst = nearestDistance[found - 1];
+        for (; p < size; p++) {
+            // The terms are not negative, so a shot is out as soon as its partial sum reaches the k-th distance; a
+            // completed sum is the same number as the full distance.
+            int base = p * dims;
+            double sum = 0;
+            int i = 0;
+            for (; i < used.length; i++) {
+                int j = used[i];
+                double d = (query[j] - features[base + j]) * weights[j];
+                sum += d * d;
+                if (sum >= worst) {
+                    break;
+                }
+            }
+            if (i == used.length) {
+                insert(found - 1, p, sum);
+                worst = nearestDistance[found - 1];
             }
         }
         return found;
     }
 
-    /** Puts a shot into the sorted list at or before {@code slot}, dropping what was in {@code slot}. */
+    /** The indices of the {@code k} (at most the maximum neighbours) nearest shots, nearest first. */
+    int[] nearestShots(double[] query, int k) {
+        return Arrays.copyOf(nearest, findNearest(query, k));
+    }
+
+    /** The same, found by a scan of every shot whatever the data's search. */
+    int[] scannedShots(double[] query, int k) {
+        return Arrays.copyOf(nearest, scan(query, k));
+    }
+
+    /** Puts a shot into the sorted list at or before {@code slot}, after equally far ones, dropping what was there. */
     private void insert(int slot, int p, double d) {
-        int i = slot;
-        while (i > 0 && nearestDistance[i - 1] > d) {
-            nearest[i] = nearest[i - 1];
-            nearestDistance[i] = nearestDistance[i - 1];
-            i--;
-        }
-        nearest[i] = p;
-        nearestDistance[i] = d;
-    }
-
-    private double distance(double[] query, int p) {
-        double sum = 0;
-        int base = p * dims;
-        for (int j = 0; j < dims; j++) {
-            double d = (query[j] - features[base + j]) * weights[j];
-            sum += d * d;
-        }
-        return sum;
-    }
-
-    /** Insertion sort by position; at equal positions, starts before ends, so touching ranges overlap. */
-    private static void sortEvents(double[] at, double[] w, int n) {
-        for (int i = 1; i < n; i++) {
-            double a = at[i];
-            double v = w[i];
-            int j = i - 1;
-            while (j >= 0 && (at[j] > a || (at[j] == a && w[j] < 0 && v > 0))) {
-                at[j + 1] = at[j];
-                w[j + 1] = w[j];
-                j--;
+        int lo = 0;
+        int hi = slot;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (nearestDistance[mid] > d) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
             }
-            at[j + 1] = a;
-            w[j + 1] = v;
         }
+        System.arraycopy(nearest, lo, nearest, lo + 1, slot - lo);
+        System.arraycopy(nearestDistance, lo, nearestDistance, lo + 1, slot - lo);
+        nearest[lo] = p;
+        nearestDistance[lo] = d;
+    }
+
+    /**
+     * Stable merge sort by position; at equal positions, starts before ends, so touching ranges overlap. Kernels are
+     * never 0, so every event is a start or an end and the order is a strict weak one: the same order an insertion
+     * sort gives.
+     */
+    static void sortEvents(double[] at, double[] w, int n) {
+        double[] fromAt = at;
+        double[] fromW = w;
+        double[] toAt = new double[n];
+        double[] toW = new double[n];
+        for (int width = 1; width < n; width *= 2) {
+            for (int lo = 0; lo < n; lo += 2 * width) {
+                int mid = Math.min(lo + width, n);
+                int hi = Math.min(lo + 2 * width, n);
+                int i = lo;
+                int j = mid;
+                for (int k = lo; k < hi; k++) {
+                    // The right one goes first only if it must, so equal ones keep their order.
+                    if (j < hi && (i >= mid || before(fromAt[j], fromW[j], fromAt[i], fromW[i]))) {
+                        toAt[k] = fromAt[j];
+                        toW[k] = fromW[j++];
+                    } else {
+                        toAt[k] = fromAt[i];
+                        toW[k] = fromW[i++];
+                    }
+                }
+            }
+            double[] t = fromAt;
+            fromAt = toAt;
+            toAt = t;
+            t = fromW;
+            fromW = toW;
+            toW = t;
+        }
+        if (fromAt != at) {
+            System.arraycopy(fromAt, 0, at, 0, n);
+            System.arraycopy(fromW, 0, w, 0, n);
+        }
+    }
+
+    /** Whether the event at {@code a} with weight {@code v} goes before the one at {@code b} with weight {@code u}. */
+    private static boolean before(double a, double v, double b, double u) {
+        return a < b || (a == b && v > 0 && u < 0);
     }
 }

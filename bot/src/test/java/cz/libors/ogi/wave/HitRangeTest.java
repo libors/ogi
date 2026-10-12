@@ -151,4 +151,40 @@ class HitRangeTest {
             return hit;
         }
     }
+
+    /**
+     * Far from the walls the full test skips the wall clipping ({@link HitRange#WALL_CLEARANCE}): there the clipping
+     * must keep every range it is given.
+     */
+    @Test
+    void farFromTheWallsClippingKeepsTheRange() {
+        Random random = new Random(13);
+        int checked = 0;
+        for (int i = 0; i < 100_000; i++) {
+            double cx = HitRange.WALL_CLEARANCE + 1e-9 + (WIDTH - 2 * HitRange.WALL_CLEARANCE) * random.nextDouble();
+            double cy = HitRange.WALL_CLEARANCE + 1e-9 + (HEIGHT - 2 * HitRange.WALL_CLEARANCE) * random.nextDouble();
+            double ox = 18 + (WIDTH - 36) * random.nextDouble();
+            double oy = 18 + (HEIGHT - 36) * random.nextDouble();
+            RobotBox box = new RobotBox(cx, cy);
+            double near = Math.max(0, Math.hypot(cx - ox, cy - oy) - 30);
+            double speed = BulletMotion.speed(0.1 + 2.9 * random.nextDouble());
+            double inner = near + 60 * random.nextDouble();
+            if (Math.hypot(cx - ox, cy - oy) < 30) {
+                continue;
+            }
+            double x0 = box.x();
+            double y0 = box.y();
+            double local = Angles.bearing(ox, oy, (x0 + x0 + box.width()) / 2, (y0 + y0 + box.height()) / 2);
+            double[] range = HitRange.turn(ox, oy, inner, inner + speed, box, local, WIDTH, HEIGHT);
+            if (range == null) {
+                continue;
+            }
+            double[] clipped = range.clone();
+            assertTrue(HitRange.clipWalls(clipped, ox, oy, inner + speed, local, WIDTH, HEIGHT));
+            assertEquals(range[0], clipped[0]);
+            assertEquals(range[1], clipped[1]);
+            checked++;
+        }
+        assertTrue(checked > 10_000, "ranges checked: " + checked);
+    }
 }

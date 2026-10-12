@@ -3,6 +3,7 @@ package cz.libors.ogi.wave;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.physics.BulletMotion;
 import cz.libors.ogi.physics.RobotBox;
+import cz.libors.ogi.physics.RobotMotion;
 
 import java.util.Arrays;
 
@@ -20,6 +21,13 @@ import java.util.Arrays;
  * bullet first.
  */
 public final class HitRange {
+
+    /**
+     * A box whose centre is further than this from every wall needs no wall clipping. A heading in the range meets the
+     * box between the two radii, so its bullet's end lies within the box's depth (51 px) plus a bullet's move (20 px)
+     * of a point of the box, which is within 25.5 px of the centre: under 97 px, far from the wall lines at 3 px.
+     */
+    static final double WALL_CLEARANCE = 120;
 
     private final Wave wave;
     private final double reference;
@@ -44,18 +52,23 @@ public final class HitRange {
         if (passed || time < wave.fireTime()) {
             return;
         }
-        RobotBox box = new RobotBox(x, y);
         double inner = wave.radius(time);
         double outer = wave.radius(time + 1);
+        double ox = wave.x();
+        double oy = wave.y();
+        // The box's corner as the engine rounds it (RobotBox), without allocating one for the quick tests.
+        double x0 = (float) (x - RobotMotion.HALF_SIZE);
+        double y0 = (float) (y - RobotMotion.HALF_SIZE);
+        double size = 2 * RobotMotion.HALF_SIZE;
         // Most turns the bullets are still short of the box, and nothing can hit; the full test is far slower.
-        if (nearestPoint(wave.x(), wave.y(), box) <= outer + 1e-6) {
-            double[] turn = turn(wave.x(), wave.y(), inner, outer, box, reference, fieldWidth, fieldHeight);
+        if (nearestPoint(ox, oy, x0, y0, size) <= outer + 1e-6) {
+            double[] turn = turn(ox, oy, inner, outer, new RobotBox(x, y), reference, fieldWidth, fieldHeight);
             if (turn != null) {
                 min = Math.min(min, turn[0]);
                 max = Math.max(max, turn[1]);
             }
         }
-        passed = inner > farthestCorner(wave.x(), wave.y(), box);
+        passed = inner > farthestCorner(ox, oy, x0, y0, size);
     }
 
     /** Whether the wave has passed the robot's last observed box, so later turns cannot hit it. */
@@ -117,7 +130,11 @@ public final class HitRange {
         corner(range, ox, oy, x0, y1, inner, outer, local);
         edges(range, ox, oy, inner, x0, y0, x1, y1, local);
         edges(range, ox, oy, outer, x0, y0, x1, y1, local);
-        if (range[0] > range[1] || !clipWalls(range, ox, oy, outer, local, fieldWidth, fieldHeight)) {
+        double cx = (x0 + x1) / 2;
+        double cy = (y0 + y1) / 2;
+        boolean clear = cx > WALL_CLEARANCE && cy > WALL_CLEARANCE && cx < fieldWidth - WALL_CLEARANCE
+                && cy < fieldHeight - WALL_CLEARANCE;
+        if (range[0] > range[1] || !clear && !clipWalls(range, ox, oy, outer, local, fieldWidth, fieldHeight)) {
             return null;
         }
         double shift = Angles.normalizeRelative(local - reference);
@@ -131,7 +148,7 @@ public final class HitRange {
      * engine tests walls before robots. The circle of the end points crosses the wall lines at a few headings; the
      * pieces between them are either all in or all out. Narrows {@code range} in place; false if nothing is left.
      */
-    private static boolean clipWalls(double[] range, double ox, double oy, double outer, double reference,
+    static boolean clipWalls(double[] range, double ox, double oy, double outer, double reference,
                                      int fieldWidth, int fieldHeight) {
         double low = BulletMotion.RADIUS;
         double[] cuts = new double[8];
@@ -251,16 +268,16 @@ public final class HitRange {
         range[1] = Math.max(range[1], offset);
     }
 
-    /** The distance from the origin to the box's nearest point. */
-    private static double nearestPoint(double ox, double oy, RobotBox box) {
-        double dx = Math.max(0, Math.max(box.x() - ox, ox - (box.x() + box.width())));
-        double dy = Math.max(0, Math.max(box.y() - oy, oy - (box.y() + box.height())));
+    /** The distance from the origin to the nearest point of the square box with corner (x0, y0). */
+    private static double nearestPoint(double ox, double oy, double x0, double y0, double size) {
+        double dx = Math.max(0, Math.max(x0 - ox, ox - (x0 + size)));
+        double dy = Math.max(0, Math.max(y0 - oy, oy - (y0 + size)));
         return Math.sqrt(dx * dx + dy * dy);
     }
 
-    private static double farthestCorner(double ox, double oy, RobotBox box) {
-        double fx = Math.max(Math.abs(box.x() - ox), Math.abs(box.x() + box.width() - ox));
-        double fy = Math.max(Math.abs(box.y() - oy), Math.abs(box.y() + box.height() - oy));
+    private static double farthestCorner(double ox, double oy, double x0, double y0, double size) {
+        double fx = Math.max(Math.abs(x0 - ox), Math.abs(x0 + size - ox));
+        double fy = Math.max(Math.abs(y0 - oy), Math.abs(y0 + size - oy));
         return Math.hypot(fx, fy);
     }
 }

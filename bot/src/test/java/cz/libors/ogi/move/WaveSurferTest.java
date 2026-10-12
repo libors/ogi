@@ -9,6 +9,7 @@ import cz.libors.ogi.wave.Wave;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -290,5 +291,32 @@ class WaveSurferTest {
         double heading = Angles.fromRobocode(me.bodyHeading + nearTop[1]);
         double driveHeading = nearTop[0] < 0 ? heading + Math.PI : heading;
         assertTrue(Math.sin(driveHeading) < 0.5, "turned away from the top wall: " + driveHeading);
+    }
+
+    /** The wall smoothing steps over headings that cannot clear the walls; it must land on the same number. */
+    @Test
+    void wallSmoothingReturnsTheHeadingOfATestAtEveryStep() {
+        Random random = new Random(9);
+        for (int i = 0; i < 200_000; i++) {
+            // Most positions near the walls and in the corners, where the smoothing turns far.
+            double x = random.nextBoolean() ? 18 + 150 * random.nextDouble() : 18 + 764 * random.nextDouble();
+            double y = random.nextBoolean() ? 582 - 150 * random.nextDouble() : 18 + 564 * random.nextDouble();
+            double heading = 4 * Math.PI * random.nextDouble() - Math.PI;
+            int direction = random.nextBoolean() ? 1 : -1;
+            assertEquals(Double.doubleToLongBits(everyStep(x, y, heading, direction)),
+                    Double.doubleToLongBits(WaveSurfer.smoothed(FIELD, x, y, heading, direction)),
+                    "at " + x + ", " + y + " heading " + heading + " direction " + direction);
+        }
+    }
+
+    /** The smoothing before it stepped over headings. */
+    private static double everyStep(double x, double y, double heading, int direction) {
+        for (int i = 0; i < Angles.TWO_PI / 0.05; i++) {
+            if (FIELD.contains(x + 120 * Math.cos(heading), y + 120 * Math.sin(heading), 25)) {
+                break;
+            }
+            heading -= direction * 0.05;
+        }
+        return heading;
     }
 }

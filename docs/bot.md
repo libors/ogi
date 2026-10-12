@@ -48,6 +48,14 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 - **Aim:** the nearest √n stored shots (at most 100), weighted by distance, vote with their whole hit ranges; the gun
   aims at the guess factor most weight covers. The search runs only once the gun heat is at most 4 cooling steps:
   the 4 turns before the gun is cool and the turns it stays cool.
+- **Search (`KdTree`, `GunData`):** data that keeps every shot is searched with a bucket kd-tree (32 shots a leaf,
+  split at the middle of the widest weighted spread); the views with a size limit are scanned, a shot dropped as soon
+  as its partial sum of squares reaches the k-th distance. Both find exactly the shots that sorting all of them by
+  distance and then by age finds: the tree's bound on a node is summed with the same arithmetic as a distance, so it
+  is never above one inside, and `KdTreeTest` checks both against that sort, ties included. The neighbours' hit
+  ranges are sorted by a stable merge sort. Against Komarious (35 rounds, Mac, C1 only as on the queue's worker,
+  2026-10-12) a search took 32 µs on average instead of the scan's 146 µs, and the gun's aiming 0.29 s of a battle
+  instead of 1.06 s; the scan grew to 55–100 µs a turn by the last rounds.
 - **Bullet power** (`Ogi.bulletPower`): 3 within 200 px, else 23/12 and one unit in the last place (1.916666666666667),
   at most the enemy's energy / 4 + 0.1 and our energy less 0.1. Ten times that bullet's speed lies just past a half
   (142.5): a surfer built on the BasicSurfer pattern matches a bullet that hit it to its wave by the speeds rounded to
@@ -146,7 +154,13 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     the orbit and the engine physics plus 0.075 µs per wave's hit range (Mac, C1 only as on the queue's worker). A
     surfing call costs about 8 µs with the three held ways, 15.5 µs with one switch turn a turn, 25 µs with the
     steeper ways and targeted stops too; all four switch turns every turn (31.7 µs) made the robot skip about 3 turns
-    a battle on the worker, the 25 µs about 0.7 (2026-10-12, against 0.1).
+    a battle on the worker, the 25 µs about 0.7 (2026-10-12, against 0.1). In battle a call predicts about 400 turns
+    and takes about 111 µs (Komarious, 35 rounds); three exact shortcuts brought that to about 94 µs: the wall
+    smoothing steps over headings whose stick end lies too far outside for the next steps to clear the walls
+    (`smoothed`; the failing headings tested per predicted turn fell from 10.3 to 1.8), `HitRange.observe` makes
+    its quick tests without allocating a box, and the full hit test skips the wall clipping when the box is more
+    than 120 px from every wall (`HitRange.WALL_CLEARANCE`). They return the same numbers; recorded battles replay
+    bit for bit.
   - **Two waves:** the next wave's hit range observes the same path, and from where each path ends the next wave is
     surfed the three ways (held) too. A path's danger is its expected damage from the nearest wave (the share of the
     wave's profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.
@@ -226,6 +240,10 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   6–13 µs, 99th percentile ~80 µs, the longest turns 0.7–1.7 ms at a battle's start (the JIT) and in garbage
   collections. Those numbers predate the shadow shots and the anti-ram ways; the queue's health has the current
   ones per job (e.g. the 1v1 rumble on 2026-10-11: a few hundred turns over the idle constant in 4572 battles).
+  In 35-round duels with the worker's JVM options (2026-10-12): mean 106–140 µs a turn, 99th percentile 357–392 µs,
+  about three quarters of it surfing; against light opponents that is most of the battle's CPU (Komarious: 3.2 of
+  4.3 s), so the queue's throughput follows it. Profile with timers in the bot: JFR, sampling the robot thread, kept a fifth of the samples
+  and gave the surfer under 1 % of the time against the timers' 65 %.
 - **The first call of a record's `equals` (also `hashCode`, `toString`) or of a lambda links an `invokedynamic`
   call site**, which in a fresh JVM takes long enough to skip a turn: the path search with a record `equals` and a
   sort lambda skipped 1–2 turns in the first battle of every `skeletonCheck` run (2026-10-11), and none with plain

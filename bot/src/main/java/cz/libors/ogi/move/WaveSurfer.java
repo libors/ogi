@@ -75,6 +75,8 @@ public final class WaveSurfer {
     private static final double WALL_STICK = 120;
     private static final double WALL_MARGIN = 25;
     private static final double SMOOTH_STEP = 0.05;
+    /** How far one smoothing step moves the stick's end. */
+    private static final double SMOOTH_CHORD = 2 * WALL_STICK * Math.sin(SMOOTH_STEP / 2);
     private static final double DRIVE_DISTANCE = 100;
     private static final int MAX_PREDICTED_TURNS = 120;
     private static final double MIN_CLOSING_DISTANCE = 36;
@@ -861,13 +863,7 @@ public final class WaveSurfer {
         double gain = retreat ? RETREAT_GAIN : 1;
         double limit = retreat ? RETREAT_TILT : MAX_TILT;
         double tilt = Math.max(-limit, Math.min(limit, gain * (PREFERRED_DISTANCE - distance) / PREFERRED_DISTANCE));
-        double heading = away + direction * (Math.PI / 2 - tilt);
-        for (int i = 0; i < Angles.TWO_PI / SMOOTH_STEP; i++) {
-            if (field.contains(x + WALL_STICK * Math.cos(heading), y + WALL_STICK * Math.sin(heading), WALL_MARGIN)) {
-                break;
-            }
-            heading -= direction * SMOOTH_STEP;
-        }
+        double heading = smoothed(field, x, y, away + direction * (Math.PI / 2 - tilt), direction);
         double turn = Angles.normalizeRelative(heading - Angles.fromRobocode(r.bodyHeading));
         double drive = DRIVE_DISTANCE;
         if (Math.abs(turn) > Math.PI / 2) {
@@ -875,6 +871,34 @@ public final class WaveSurfer {
             drive = -drive;
         }
         return new double[] {option == STOP ? 0 : drive, -turn};
+    }
+
+    /**
+     * Wall smoothing: the heading turned in steps of {@link #SMOOTH_STEP} against {@code direction} until a stick of
+     * {@link #WALL_STICK} along it ends {@link #WALL_MARGIN} inside the field, at most one turn round.
+     *
+     * <p>A step moves the stick's end by {@link #SMOOTH_CHORD} (6 px), so while the end lies further outside, the next
+     * headings fail too: they are stepped over without their sine and cosine. The headings tested and the one returned
+     * are the same numbers as with a test at every step.
+     */
+    static double smoothed(Field field, double x, double y, double heading, int direction) {
+        double steps = Angles.TWO_PI / SMOOTH_STEP;
+        for (int i = 0; i < steps; i++) {
+            double ex = x + WALL_STICK * Math.cos(heading);
+            double ey = y + WALL_STICK * Math.sin(heading);
+            if (field.contains(ex, ey, WALL_MARGIN)) {
+                break;
+            }
+            heading -= direction * SMOOTH_STEP;
+            double outside = Math.max(Math.max(WALL_MARGIN - ex, ex - (field.width() - WALL_MARGIN)),
+                    Math.max(WALL_MARGIN - ey, ey - (field.height() - WALL_MARGIN)));
+            // A pixel to spare against rounding.
+            for (int skip = (int) ((outside - 1) / SMOOTH_CHORD); skip > 0 && i + 1 < steps; skip--) {
+                heading -= direction * SMOOTH_STEP;
+                i++;
+            }
+        }
+        return heading;
     }
 
     private void addWave(DetectedShot shot) {
