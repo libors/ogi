@@ -10,7 +10,8 @@ import java.util.Arrays;
  * <p>The pattern is a string of our lateral velocity rounded to whole pixels per turn, one symbol per turn, over all
  * rounds. A match is the latest earlier occurrence of the newest symbols, the longest one found from
  * {@code maxLength} symbols down; its replay is the sum of the symbols that followed it, the angle a gun that replays
- * our movement leads by, times the distance.
+ * our movement leads by, times the distance. A second string truncates the velocity towards zero instead, as guns do
+ * that cast it to a whole number: 7.6 px/turn is 8 in one and 7 in the other.
  */
 public final class LateralHistory {
 
@@ -18,6 +19,7 @@ public final class LateralHistory {
 
     private double[] values = new double[1024];
     private byte[] symbols = new byte[1024];
+    private byte[] truncated = new byte[1024];
     private int size;
     private int roundStart;
     private long lastTime = Long.MIN_VALUE;
@@ -31,9 +33,11 @@ public final class LateralHistory {
         if (size == values.length) {
             values = Arrays.copyOf(values, 2 * size);
             symbols = Arrays.copyOf(symbols, 2 * size);
+            truncated = Arrays.copyOf(truncated, 2 * size);
         }
         values[size] = lateral;
         symbols[size] = (byte) Math.max(-8, Math.min(8, Math.round(lateral)));
+        truncated[size] = (byte) Math.max(-8, Math.min(8, (long) lateral));
         size++;
     }
 
@@ -67,6 +71,15 @@ public final class LateralHistory {
      * through the history, which compares a few symbols at most places; the latest of equally long matches wins.
      */
     public double replay(long time, int maxLength, int turns) {
+        return replay(symbols, time, maxLength, turns);
+    }
+
+    /** As {@link #replay}, on our lateral velocity truncated towards zero. */
+    public double replayTruncated(long time, int maxLength, int turns) {
+        return replay(truncated, time, maxLength, turns);
+    }
+
+    private double replay(byte[] symbols, long time, int maxLength, int turns) {
         int end = indexAt(time);
         if (end < 0) {
             return Double.NaN;

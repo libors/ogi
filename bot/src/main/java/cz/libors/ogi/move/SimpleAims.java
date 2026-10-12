@@ -7,13 +7,17 @@ import cz.libors.ogi.gun.RobotHistory;
 /**
  * Where simple guns aim at us: head-on, linear (iterated with the walls, and in closed form without them) and
  * circular targeting; linear with our lateral velocity averaged over the last 20 and 40 turns; and a pattern match on
- * our lateral velocity ({@link LateralHistory}). Such a gun aims in the turn before it fires, from its position and
- * its scan of us then. Measured on foreign robots (2026-10-09, full recordings): head-on bots match exactly, linear bots
- * one of the two linear aims within a few milliradians.
+ * our lateral velocity rounded and one on it truncated to whole pixels per turn ({@link LateralHistory}). Then guns
+ * that robots of the rumble use and the first ones miss: the linear lead without the arc sine, our lateral velocity
+ * averaged over 5 turns, and half, three quarters and five quarters of the linear lead. Such a gun aims in the turn
+ * before it fires, from its position and its scan of us then. Measured on foreign robots (2026-10-09, full
+ * recordings): head-on bots match exactly, linear bots one of the two linear aims within a few milliradians.
  *
  * <p>The windows and the match length are ours (2026-10-11, full recordings against foreign robots): of the windows
  * 5 … 60, 20 and 40 explained most of the bullets of the robots that average our lateral velocity; matches of at
- * most 20, 40 and 60 symbols explained about as many bullets of the robots that match its pattern, more than 10.
+ * most 20, 40 and 60 symbols explained about as many bullets of the robots that match its pattern, more than 10. The
+ * last five came from the danger bench on recordings against the whole rumble (2026-10-12): each explained more
+ * bullets of some bots than the others together, and the five together of 143 bots.
  */
 public final class SimpleAims {
 
@@ -24,9 +28,19 @@ public final class SimpleAims {
     public static final int AVERAGED_SHORT = 4;
     public static final int AVERAGED_LONG = 5;
     public static final int PATTERN = 6;
-    public static final int COUNT = 7;
+    public static final int PATTERN_TRUNCATED = 7;
+    /** Linear with our lateral velocity, the lead taken as lateral / speed without the arc sine. */
+    public static final int LINEAR_NO_ASIN = 8;
+    /** Linear with our lateral velocity averaged over the last 5 turns. */
+    public static final int AVERAGED_SHORTEST = 9;
+    /** Part of the linear lead or more: half, three quarters and five quarters of it. */
+    public static final int LINEAR_HALF = 10;
+    public static final int LINEAR_THREE_QUARTERS = 11;
+    public static final int LINEAR_FIVE_QUARTERS = 12;
+    public static final int COUNT = 13;
 
     private static final int MAX_TURNS = 200;
+    private static final int SHORTEST_WINDOW = 5;
     private static final int SHORT_WINDOW = 20;
     private static final int LONG_WINDOW = 40;
     private static final int MAX_MATCH = 40;
@@ -50,7 +64,15 @@ public final class SimpleAims {
         aims[AVERAGED_SHORT] = bearing;
         aims[AVERAGED_LONG] = bearing;
         aims[PATTERN] = bearing;
+        aims[PATTERN_TRUNCATED] = bearing;
+        double lateralNow = us.velocity() * Math.sin(us.heading() - bearing);
+        aims[LINEAR_NO_ASIN] = bearing + lateralNow / bulletSpeed;
+        aims[LINEAR_HALF] = lead(bearing, lateralNow / 2, bulletSpeed);
+        aims[LINEAR_THREE_QUARTERS] = lead(bearing, 0.75 * lateralNow, bulletSpeed);
+        aims[LINEAR_FIVE_QUARTERS] = lead(bearing, 1.25 * lateralNow, bulletSpeed);
+        aims[AVERAGED_SHORTEST] = bearing;
         if (lateral != null) {
+            aims[AVERAGED_SHORTEST] = lead(bearing, lateral.average(us.time(), SHORTEST_WINDOW), bulletSpeed);
             aims[AVERAGED_SHORT] = lead(bearing, lateral.average(us.time(), SHORT_WINDOW), bulletSpeed);
             aims[AVERAGED_LONG] = lead(bearing, lateral.average(us.time(), LONG_WINDOW), bulletSpeed);
             double distance = Math.hypot(us.x() - ex, us.y() - ey);
@@ -58,6 +80,10 @@ public final class SimpleAims {
             double replay = lateral.replay(us.time(), MAX_MATCH, turns);
             if (!Double.isNaN(replay)) {
                 aims[PATTERN] = bearing + replay / Math.max(distance, 1);
+            }
+            double truncated = lateral.replayTruncated(us.time(), MAX_MATCH, turns);
+            if (!Double.isNaN(truncated)) {
+                aims[PATTERN_TRUNCATED] = bearing + truncated / Math.max(distance, 1);
             }
         }
         return aims;

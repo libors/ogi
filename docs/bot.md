@@ -48,8 +48,14 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 - **Aim:** the nearest √n stored shots (at most 100), weighted by distance, vote with their whole hit ranges; the gun
   aims at the guess factor most weight covers. The search runs only once the gun heat is at most 4 cooling steps:
   the 4 turns before the gun is cool and the turns it stays cool.
+- **Bullet power** (`Ogi.bulletPower`): 3 within 200 px, else 23/12 and one unit in the last place (1.916666666666667),
+  at most the enemy's energy / 4 + 0.1 and our energy less 0.1. Ten times that bullet's speed lies just past a half
+  (142.5): a surfer built on the BasicSurfer pattern matches a bullet that hit it to its wave by the speeds rounded to
+  tenths, the wave's speed taken from our energy drop, whose floating-point noise rounds it the other way about four
+  times in five, and then it does not learn the hit (2026-10-12; 1.9, a whole 143, never failed the match). Powers of
+  2.2 lost a point on the population.
 - **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
-  the guess-factor gun searched for its plan (at power 1.9, 4 waves in 14: in the turn it fires, the gun heat already
+  the guess-factor gun searched for its plan (at power 1.92, 4 waves in 14: in the turn it fires, the gun heat already
   includes the new shot): would each aim have been inside the hit
   range? Per enemy, the gun with the better weighted record fires (a real bullet counts 1, a virtual wave 0.125);
   circular targeting until the guess-factor gun has a record.
@@ -90,40 +96,57 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     whose share
     grows with the data (`knnRamp`), so that guns whose aim follows our velocity become predictable;
   - the rest a histogram of all bullets plus a prior of a gun aiming straight at us (guess factor 0).
-  - **An ensemble:** that data profile is one estimator. The others are seven simple guns (`SimpleAims`: head-on,
+  - **An ensemble:** that data profile is one estimator. The others are thirteen simple guns (`SimpleAims`: head-on,
     linear with and without the walls, circular, linear with our lateral velocity averaged over the last 20 and 40
-    turns, and a pattern match on our lateral velocity; each aimed from the enemy's scanned position and our state of
-    the turn it aimed), each a narrow kernel at its aim, and a flattener: a KNN over where we ourselves were when this
-    enemy's waves passed us (`DangerModel.visit`, the middle of the wave's hit range on us; every wave, also those
-    whose bullet hit us or one of ours, which the surfer no longer surfs but follows until they pass), which is where
-    a gun that learns our movement aims. Every observed bullet scores each estimator by the share it gave the
-    bullet's bin; the weights go with the prior times `exp(temper · record)`, the record forgetting a part per bullet (`decay`). A simple
-    gun the enemy does not use loses its weight within a few bullets, so it costs no room against learning guns.
+    turns, two pattern matches on our lateral velocity, rounded and truncated, and five that rumble bots use: the linear
+    lead without the arc sine, the average over 5 turns, and 0.5, 0.75 and 1.25 times the linear lead; each aimed from
+    the enemy's scanned position and our state of the turn it aimed), each a narrow kernel at its aim, and a flattener:
+    a KNN over where we ourselves were when this enemy's waves passed us (`DangerModel.visit`, the middle of the wave's
+    hit range on us; every wave, also those whose bullet hit us or one of ours, which the surfer no longer surfs but
+    follows until they pass), which is where a gun that learns our movement aims. Every observed bullet scores each
+    estimator by the share it gave the bullet's bin; the weights go with the prior times `exp(temper · record)`, the
+    record forgetting a part per bullet (`decay`). A simple gun the enemy does not use loses its weight within a few
+    bullets, so it costs no room against learning guns.
   - **Lateral history** (`LateralHistory`, per enemy, for the battle): our lateral velocity as that enemy saw it, one
     value per turn in which we scanned it. The averaged guns take the mean of this round's last 20 or 40 values. The
     pattern gun finds the latest earlier occurrence of the longest run (3 to 40) of our newest lateral velocities
     rounded to whole pixels per turn, over the whole battle, in one backward pass, and leads by the sum of the rounded
     values that followed it over the bullet's flight time, divided by the distance; without a match it aims head-on.
+    The second pattern gun does the same on our lateral velocity truncated towards zero, as guns that cast it to a
+    whole number see it: 7.6 px/turn, an orbit tilted towards the preferred distance, is 8 rounded and 7 truncated.
+    Against the nano pattern matchers that truncate it explains about twice as many of their bullets (2026-10-12).
   - The numbers (`DangerParameters.DEFAULT`) are tuned on the danger bench
     ([harness.md](harness.md#danger-bench)) with the first four simple guns; the averaged and pattern guns came later
-    with the same prior, checked on the bench and in battles. `DangerParameters.HISTOGRAM` is the single histogram the
-    surfer used until 2026-10-09.
+    with the same prior, checked on the bench and in battles (the truncated one and the last five on 2026-10-12, found
+    by running the bench over recordings against the whole rumble and keeping guns that explain some bots' bullets
+    much better).
+    `DangerParameters.HISTOGRAM` is the single histogram the surfer used until 2026-10-09.
 - **A dead enemy's waves stay** until they pass us: its bullets keep flying (engine-model G-44).
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
   `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
   325 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
   until there is room, so near walls it drifts outwards and stays further than 325 px. `HitRange` gives the guess
   factors that would hit us on each path.
-  - **Paths:** besides the three ways held until the wave passes, paths that change once from one of them to another
-    after k turns: they drive past a point and come back, stop short, or wait and go, so they reach the points between
-    the held ways' ends and the same points at other times and speeds. k is one of 3, 6, 10 and 15 turns, a different
-    one each turn in rotation; the path chosen goes on a turn later (k − 1) as a candidate of its own and wins ties, so
-    a plan found on one turn is followed while it stays the best. Paths that share their first turns are predicted
-    together, and the next wave is surfed from the paths in the order of the nearest wave's danger until that alone
-    reaches the best total, which leaves the choice as it would be. Against a robot that drives at us the ways are
-    held, as below. CPU: a predicted turn costs about 0.25 µs for the orbit and the engine physics plus 0.075 µs per
-    wave's hit range (Mac, C1 only as on the queue's worker); one switch turn a turn costs about twice the held ways,
-    all four every turn about four times, which made the robot skip about 3 turns a battle on the worker (2026-10-11).
+  - **Steeper held ways:** two more ways held until the wave passes, the orbits that lean twice as steeply towards
+    the preferred distance (at most 1.2 rad; the anti-ram mode's retreats, here around the wave's origin): they change
+    where we can be in distance too, the hit range's width and the bullet's flight time.
+  - **Paths:** besides the ways held until the wave passes, paths that change once from one of the first three to
+    another after k turns: they drive past a point and come back, stop short, or wait and go, so they reach the points
+    between the held ways' ends and the same points at other times and speeds. k is one of 3, 6, 10 and 15 turns, a
+    different one each turn in rotation; the path chosen goes on a turn later (k − 1) as a candidate of its own and
+    wins ties, so a plan found on one turn is followed while it stays the best.
+  - **Targeted stops:** while each orbit is predicted, every turn's braking point (where we would stand if we braked
+    then, 12 px on from full speed) is scored by the wave's profile over the bins our box covers there seen from the
+    origin, each bin less its likeliest shadow; the turn with the least exposure gives one more path per orbit, orbit
+    then stop, predicted and weighed like the others. So the stopping paths reach the safest point of the reachable
+    span, not only the points a fixed k gives.
+  - Paths that share their first turns are predicted together, and the next wave is surfed from the paths in the
+    order of the nearest wave's danger until that alone reaches the best total, which leaves the choice as it would
+    be. Against a robot that drives at us the ways are held, as below. CPU: a predicted turn costs about 0.25 µs for
+    the orbit and the engine physics plus 0.075 µs per wave's hit range (Mac, C1 only as on the queue's worker). A
+    surfing call costs about 8 µs with the three held ways, 15.5 µs with one switch turn a turn, 25 µs with the
+    steeper ways and targeted stops too; all four switch turns every turn (31.7 µs) made the robot skip about 3 turns
+    a battle on the worker, the 25 µs about 0.7 (2026-10-12, against 0.1).
   - **Two waves:** the next wave's hit range observes the same path, and from where each path ends the next wave is
     surfed the three ways (held) too. A path's danger is its expected damage from the nearest wave (the share of the
     wave's profile inside the hit range, times the bullet's damage) plus the least expected damage from the next wave.

@@ -32,9 +32,11 @@ import java.util.Optional;
  * ({@link TargetingFeatures} of our own history). A new wave gets the model's profile for that situation.
  *
  * <p>For the nearest wave the surfer predicts three ways to move until the wave has passed: orbiting its origin either
- * way, or stopping. Paths that change once from one of them to another after a few turns (drive past a point and come
- * back, stop short, wait and go) reach the points between and the same points at other times and speeds; the path
- * chosen goes on a turn later as a candidate of its own. The prediction runs the engine's own rules
+ * way, or stopping; and two orbits that lean more steeply towards the preferred distance. Paths that change once from
+ * one of the first three to another after a few turns (drive past a point and come back, stop short, wait and go)
+ * reach the points between and the same points at other times and speeds; on each orbit, the path that stops where we
+ * would stand least exposed to the wave reaches its safest point. The path chosen goes on a turn later as a candidate
+ * of its own. The prediction runs the engine's own rules
  * ({@link RobotMotion}), and {@link HitRange} gives the guess factors that would hit us on each path. From where each
  * path leaves us, the next wave is surfed in its three ways, and the best of them counts too. The path with the least
  * expected damage (each wave's profile inside its hit range, times its bullet's damage) wins, and its first turn's
@@ -65,6 +67,8 @@ public final class WaveSurfer {
     private static final int[] OPTIONS = {ORBIT_LEFT, ORBIT_RIGHT, STOP};
     /** Against a robot that drives at us: the usual ways around it, and the ways that retreat from it. */
     private static final int[] RAM_OPTIONS = {ORBIT_LEFT, ORBIT_RIGHT, RETREAT_LEFT, RETREAT_RIGHT, STOP};
+    /** The ways path surfing holds: the usual three, and two that lean more steeply towards the preferred distance. */
+    private static final int[] HELD_OPTIONS = {ORBIT_LEFT, ORBIT_RIGHT, STOP, RETREAT_LEFT, RETREAT_RIGHT};
 
     static final double PREFERRED_DISTANCE = 325;
     private static final double MAX_TILT = 0.5;
@@ -373,25 +377,29 @@ public final class WaveSurfer {
     }
 
     /**
-     * The path with the least danger, while no robot drives at us: the three ways held until the nearest wave has
-     * passed, each changing once to another of them after this turn's one of {@link #SWITCH_TURNS} if that wave is
-     * still on its way then, and last turn's path a turn on, which wins ties. A path found goes on as last turn's
-     * path, so the switch turns of a few turns are all tried while one costs no more than a few more ways. Paths that
-     * share their first turns are predicted together; the next wave is surfed from the paths in the order of the
-     * nearest wave's danger, until that alone reaches the least total.
+     * The path with the least danger, while no robot drives at us: the ways held until the nearest wave has passed
+     * ({@link #HELD_OPTIONS}), the first three each changing once to another of them after this turn's one of
+     * {@link #SWITCH_TURNS} if that wave is still on its way then, each orbit stopping where braking would leave us
+     * least exposed ({@link #stopExposure}), and last turn's path a turn on, which wins ties. A path found goes on as
+     * last turn's path, so the switch turns of a few turns are all tried while one costs no more than a few more ways.
+     * Paths that share their first turns are predicted together; the next wave is surfed from the paths in the order
+     * of the nearest wave's danger, until that alone reaches the least total.
      */
     private Path surfPaths(EnemyWave w, EnemyWave next, EngineRobot me, long now) {
         Path best = lastPath != null ? lastPath.next() : Path.held(Integer.signum(lastOption));
         double bestDanger = danger(w, next, me, now, best, Double.POSITIVE_INFINITY);
         int switchTurn = SWITCH_TURNS[(int) (now % SWITCH_TURNS.length)];
         List<Predicted> predicted = new ArrayList<>();
-        for (int first : OPTIONS) {
+        double[] exposed = exposed(w);
+        for (int first : HELD_OPTIONS) {
             EngineRobot r = me.copy();
             HitRange range = w.range.copy();
             HitRange nextRange = next == null ? null : next.range.copy();
             long t = now + 1;
+            int stopTurn = 0;
+            double stopExposure = Double.POSITIVE_INFINITY;
             for (int turn = 0; t <= now + MAX_PREDICTED_TURNS && !range.passed(); t++, turn++) {
-                if (turn == switchTurn) {
+                if (turn == switchTurn && Math.abs(first) <= 1) {
                     for (int then : OPTIONS) {
                         if (then != first) {
                             predicted.add(predict(w, me, r.copy(), range.copy(),
@@ -404,9 +412,20 @@ public final class WaveSurfer {
                 if (nextRange != null) {
                     nextRange.observe(t, r.x, r.y);
                 }
+                if (Math.abs(first) == 1 && !range.passed()) {
+                    double e = stopExposure(w, r, exposed);
+                    if (e < stopExposure) {
+                        stopExposure = e;
+                        stopTurn = turn + 1;
+                    }
+                }
             }
             predicted.add(new Predicted(Path.held(first), damage(w, range) * closing(w, me, r, null, now), r,
                     nextRange, t));
+            if (stopTurn > 0 && stopTurn != switchTurn) {
+                predicted.add(predict(w, me, me.copy(), w.range.copy(), next == null ? null : next.range.copy(),
+                        now + 1, now, new Path(first, stopTurn, STOP)));
+            }
         }
         predicted.sort(null);
         for (Predicted p : predicted) {
@@ -424,6 +443,50 @@ public final class WaveSurfer {
             }
         }
         return best;
+    }
+
+    /**
+     * The wave's predicted aim per guess-factor bin, each bin less the likeliest collision at its middle with one of
+     * our bullets: how exposed a robot standing there would be.
+     */
+    private static double[] exposed(EnemyWave w) {
+        double[] profile = w.prediction.profile();
+        double[] exposed = Arrays.copyOf(profile, profile.length);
+        int middle = DangerModel.BINS / 2;
+        for (List<double[]> list : w.shadows.values()) {
+            for (double[] s : list) {
+                for (int i = DangerModel.bin(s[0]); i <= DangerModel.bin(s[1]); i++) {
+                    double gf = (double) (i - middle) / middle;
+                    if (s[0] <= gf && gf <= s[1]) {
+                        exposed[i] = Math.min(exposed[i], profile[i] * (1 - s[2]));
+                    }
+                }
+            }
+        }
+        return exposed;
+    }
+
+    /**
+     * About how exposed to the wave we would be if we braked now and stood where we stop: the bins our box covers
+     * there, seen from the wave's origin.
+     */
+    private double stopExposure(EnemyWave w, EngineRobot r, double[] exposed) {
+        double brake = 0;
+        for (double v = Math.abs(r.velocity) - RobotMotion.DECELERATION; v > 0; v -= RobotMotion.DECELERATION) {
+            brake += v;
+        }
+        double heading = Angles.fromRobocode(r.bodyHeading) + (r.velocity < 0 ? Math.PI : 0);
+        double x = field.clampX(r.x + brake * Math.cos(heading));
+        double y = field.clampY(r.y + brake * Math.sin(heading));
+        double distance = Math.hypot(x - w.wave.x(), y - w.wave.y());
+        double gf = w.direction * Angles.normalizeRelative(Angles.bearing(w.wave.x(), w.wave.y(), x, y)
+                - w.range.reference()) / w.escape;
+        double half = Math.atan(RobotMotion.HALF_SIZE / distance) / w.escape;
+        double sum = 0;
+        for (int i = DangerModel.bin(gf - half); i <= DangerModel.bin(gf + half); i++) {
+            sum += exposed[i];
+        }
+        return sum;
     }
 
     /** Goes on along {@code path} from turn {@code t} until the nearest wave has passed. */

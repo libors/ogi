@@ -50,7 +50,12 @@ public class Ogi extends TeamRobot {
     private static final long MAX_TEAMMATE_AGE = 16;
     private static final double AIM_TOLERANCE = 0.005;
     private static final double FRIENDLY_FIRE_CLEARANCE = 30;
-    private static final double DEFAULT_POWER = 1.9;
+    /**
+     * 23/12 and one unit in the last place more: 10 times its bullet speed lies just past a half (142.5), so a surfer
+     * that matches a bullet that hit it to its wave by the speed rounded to tenths, with the speed taken from our
+     * energy drop, often rounds the two differently and does not learn the hit.
+     */
+    private static final double DEFAULT_POWER = 1.916666666666667;
     private static final double CLOSE_RANGE = 200;
     /** The gun searches its data only this many turns before it can fire. */
     private static final int AIM_LEAD_TURNS = 4;

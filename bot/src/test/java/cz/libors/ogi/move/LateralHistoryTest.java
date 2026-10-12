@@ -26,6 +26,22 @@ class LateralHistoryTest {
         assertEquals(-8, h.replay(59, 40, 6), 1e-9);
     }
 
+    /**
+     * An orbit tilted towards the preferred distance crosses the line at 7.6 px/turn: 8 rounded, 7 truncated, as a gun
+     * that casts our lateral velocity to a whole number sees it.
+     */
+    @Test
+    void truncatesTowardsZeroForGunsThatCast() {
+        LateralHistory h = new LateralHistory();
+        for (int t = 0; t < 100; t++) {
+            int phase = t % 25;
+            h.add(t, phase < 10 ? 7.6 : phase < 15 ? 0 : -7.6);
+        }
+        assertEquals(48, h.replay(99, 40, 6), 1e-9);
+        assertEquals(42, h.replayTruncated(99, 40, 6), 1e-9);
+        assertEquals(-7, h.replayTruncated(59, 40, 6), 1e-9);
+    }
+
     @Test
     void noMatchWithoutHistory() {
         LateralHistory h = new LateralHistory();

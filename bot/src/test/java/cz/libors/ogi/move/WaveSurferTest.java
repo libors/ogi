@@ -122,7 +122,8 @@ class WaveSurferTest {
 
     /**
      * An enemy 150 px east of us drives at us at full speed, long enough to be taken for a rammer, and fires. The
-     * surfer does not stand in its way and leans away from it more steeply than from an enemy that stands there.
+     * surfer does not stand in its way and leans away from it at least as steeply as from an enemy that stands there
+     * (against which the steeper held ways retreat too).
      */
     @Test
     void movesAwayFromAnEnemyThatDrivesAtUs() {
@@ -143,7 +144,7 @@ class WaveSurferTest {
             assertTrue(-Math.cos(drive) > 0, name + ": drives towards the enemy: " + drive);
             away[driving] = -Math.cos(drive);
         }
-        assertTrue(away[1] > away[0], "the rammer's way leads away more: " + away[1] + " vs " + away[0]);
+        assertTrue(away[1] >= away[0] - 1e-9, "the rammer's way leads away less: " + away[1] + " vs " + away[0]);
     }
 
     /**
