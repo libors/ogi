@@ -92,7 +92,15 @@ th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--lin
 td.r, th.r { text-align: right; }
 th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
 th[title] { cursor: help; text-decoration: underline dotted; }
+th.sort { cursor: pointer; }
+th.sort:hover { color: var(--text); }
+th .arrow { font-size: 10px; margin-left: 3px; }
+/* A long table scrolls on its own and keeps its head in view. */
+.tablewrap.scroll { max-height: 70vh; overflow: auto; }
+.tablewrap.scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: none;
+  box-shadow: inset 0 -1px 0 var(--line); }
 tr:last-child td { border-bottom: none; }
+.list > button.more { align-self: flex-start; padding: 3px 12px; }
 button { font: inherit; font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 5px;
   background: var(--panel); color: var(--text); cursor: pointer; }
 button:hover { border-color: var(--accent); }
@@ -126,6 +134,11 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 
 // The job shown on the right: picked by a click (kept in the URL), else the running one.
 let selected = (location.hash.match(/job=([\w-]+)/) || [])[1] || null;
 let lastState = null;
+// The job on the right as last fetched, and the one whose page the panel holds now.
+let lastJob = null, detailShown = null;
+// The finished list shows the last FINISHED_SHOWN jobs until "Show all".
+const FINISHED_SHOWN = 20;
+let showAllFinished = false;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const fmt = (v, d = 2, sign = false) => v == null || isNaN(v) ? "–" : (sign && v > 0 ? "+" : "") + Number(v).toFixed(d);
@@ -145,7 +158,34 @@ function clock(t) {
 }
 const timeOfDay = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 
-/** The refresh redraws everything every 2 s; folded sections the viewer opened stay open. */
+/**
+ * Makes the children of `el` look like `html` and keeps every node that stays the same. The refresh redraws the
+ * page every 2 s this way, so a text selection, a tooltip, a scroll position or a click in progress survives it
+ * wherever the content did not change.
+ */
+function patch(el, html) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  patchChildren(el, t.content);
+}
+
+function patchChildren(cur, next) {
+  const old = [...cur.childNodes], now = [...next.childNodes];
+  now.forEach((n, i) => {
+    const o = old[i];
+    if (!o) cur.appendChild(n);
+    else if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) cur.replaceChild(n, o);
+    else if (o.nodeType !== Node.ELEMENT_NODE) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; }
+    else {
+      for (const a of [...o.attributes]) if (!n.hasAttribute(a.name)) o.removeAttribute(a.name);
+      for (const a of n.attributes) if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value);
+      patchChildren(o, n);
+    }
+  });
+  for (let i = old.length - 1; i >= now.length; i--) old[i].remove();
+}
+
+/** Folded sections the viewer opened stay open across the refresh. */
 function openKeys() {
   return new Set([...document.querySelectorAll("details[data-key]")].filter(d => d.open).map(d => d.dataset.key));
 }
@@ -239,8 +279,11 @@ async function load() {
     lastState = await r.json();
     render(lastState);
     const shown = shownJob(lastState);
-    if (shown) loadDetail(shown); else document.getElementById("detail").innerHTML =
-      '<div class="card empty">Click a job to see what it compares and how it went.</div>';
+    if (shown) loadDetail(shown); else {
+      detailShown = null;
+      patch(document.getElementById("detail"),
+        '<div class="card empty">Click a job to see what it compares and how it went.</div>');
+    }
   } catch (e) {
     document.getElementById("meta").textContent = "server not reachable – " + e;
   }
@@ -256,15 +299,24 @@ function render(s) {
   const keys = openKeys();
   document.getElementById("meta").textContent = "server up " + dur(s.now - s.startedAt) + " · updated "
     + timeOfDay(s.now);
-  document.getElementById("workers").innerHTML = s.workers.map(w => worker(w, s.now, keys)).join("")
-    || '<div class="empty">No workers configured.</div>';
+  patch(document.getElementById("workers"), s.workers.map(w => worker(w, s.now, keys)).join("")
+    || '<div class="empty">No workers configured.</div>');
   const shown = shownJob(s);
   const active = s.jobs.filter(j => j.state === "QUEUED" || j.state === "RUNNING");
   const done = s.jobs.filter(j => !(j.state === "QUEUED" || j.state === "RUNNING"));
-  document.getElementById("active").innerHTML = active.map((j, i) => jobCard(j, s.now, shown, i, active.length)).join("")
-    || '<div class="empty">Nothing waiting. Submit with ./gradlew submit -Pbaseline=HEAD "-Pnote=what changed"</div>';
-  document.getElementById("done").innerHTML = done.map(j => jobCard(j, s.now, shown)).join("")
-    || '<div class="empty">No finished jobs yet.</div>';
+  patch(document.getElementById("active"), active.map((j, i) => jobCard(j, s.now, shown, i, active.length)).join("")
+    || '<div class="empty">Nothing waiting. Submit with ./gradlew submit -Pbaseline=HEAD "-Pnote=what changed"</div>');
+  // The server sends the finished jobs newest first.
+  const more = done.length <= FINISHED_SHOWN ? ""
+    : `<button class="more" onclick="toggleFinished()">${showAllFinished ? `Show the last ${FINISHED_SHOWN} only`
+      : `Show all ${done.length} (${done.length - FINISHED_SHOWN} older)`}</button>`;
+  patch(document.getElementById("done"), (showAllFinished ? done : done.slice(0, FINISHED_SHOWN))
+    .map(j => jobCard(j, s.now, shown)).join("") + more || '<div class="empty">No finished jobs yet.</div>');
+}
+
+function toggleFinished() {
+  showAllFinished = !showAllFinished;
+  render(lastState);
 }
 
 function worker(w, now, keys) {
@@ -340,9 +392,14 @@ function select(id) {
 
 async function loadDetail(id) {
   const r = await fetch("/api/job?id=" + encodeURIComponent(id), {cache: "no-store"});
-  if (!r.ok) { document.getElementById("detail").innerHTML = ""; return; }
+  if (!r.ok) { document.getElementById("detail").innerHTML = ""; detailShown = null; return; }
   const j = await r.json();
   if (j.id !== shownJob(lastState)) return;
+  lastJob = j;
+  renderDetail(j);
+}
+
+function renderDetail(j) {
   const keys = openKeys();
   const p = j.progress || {};
   const d = j.detail || {};
@@ -387,7 +444,7 @@ async function loadDetail(id) {
     <tbody>${boards || '<tr><td colspan="7" class="empty">no pairs yet</td></tr>'}</tbody></table></div>` : "";
 
   // A compare job lists its opponents; a recording job gives only their number.
-  const rows = (Array.isArray(d.opponents) ? d.opponents : []).slice().sort((a, b) => (a.difference ?? 0) - (b.difference ?? 0)).map(o => {
+  const rows = sortedOpponents(Array.isArray(d.opponents) ? d.opponents : []).map(o => {
     const cls = o.difference > 0 ? "pos" : o.difference < 0 ? "neg" : "";
     return `<tr><td>${esc(o.opponent)}${o.strong ? ' <span class="muted" title="one of the strong opponents">★</span>' : ""}</td>
       <td class="r num">${o.pairs}</td><td class="r num">${fmt(o.baseline, 1)}</td><td class="r num">${fmt(o.candidate, 1)}</td>
@@ -397,11 +454,10 @@ async function loadDetail(id) {
   }).join("");
   const opponentTable = isCompare && rows ? `<div class="card">
     <details data-key="opponents-${esc(j.id)}"${openAttr(keys, "opponents-" + j.id)}>
-      <summary>Each opponent, worst change first</summary>
-      <div class="tablewrap" style="margin-top:8px"><table>
-        <thead><tr><th>Opponent</th><th class="r" title="Pairs of battles played: the old and the new version on the same seed.">Pairs</th>
-          <th class="r">Old</th><th class="r">New</th><th class="r" title="New minus old. A few pairs per opponent are noisy: ±7 points per pair is normal.">Change</th>
-          <th class="r">Hit by %</th><th class="r">Our hits %</th></tr></thead>
+      <summary>Each opponent, ${esc(OPPONENT_SORTS[opponentSort.key].words[opponentSort.worst ? 0 : 1])}</summary>
+      <div class="explain">Click a column's name to sort by it, again to reverse.</div>
+      <div class="tablewrap scroll" style="margin-top:8px"><table>
+        <thead><tr>${OPPONENT_COLUMNS.map(opponentHead).join("")}</tr></thead>
         <tbody>${rows}</tbody></table></div>
     </details></div>` : "";
 
@@ -426,7 +482,59 @@ async function loadDetail(id) {
       ${d.index && d.index.length ? `<div class="muted" style="margin-top:8px">Last recordings</div><pre>${esc(d.index.slice().reverse().join("\n"))}</pre>` : ""}
     </details></div>`;
 
-  document.getElementById("detail").innerHTML = head + boardTable + opponentTable + tech;
+  // Another job's page starts at the top of its tables.
+  const el = document.getElementById("detail");
+  if (detailShown === j.id) patch(el, head + boardTable + opponentTable + tech);
+  else el.innerHTML = head + boardTable + opponentTable + tech;
+  detailShown = j.id;
+}
+
+// ---- The opponent table's order ----
+
+/** The value each column sorts by and its order in words: worst first, then reversed. */
+const OPPONENT_SORTS = {
+  opponent: {value: o => o.opponent.toLowerCase(), worstFirst: 1, words: ["A to Z", "Z to A"]},
+  pairs: {value: o => o.pairs, worstFirst: 1, words: ["fewest pairs first", "most pairs first"]},
+  baseline: {value: o => o.baseline, worstFirst: 1, words: ["lowest Old first", "highest Old first"]},
+  candidate: {value: o => o.candidate, worstFirst: 1, words: ["lowest New first", "highest New first"]},
+  difference: {value: o => o.difference, worstFirst: 1, words: ["worst change first", "best change first"]},
+  hitBy: {value: o => o.hitByCandidate, worstFirst: -1, words: ["they hit us most first", "they hit us least first"]},
+  hitRate: {value: o => o.hitRateCandidate, worstFirst: 1, words: ["we hit them least first", "we hit them most first"]},
+};
+const OPPONENT_COLUMNS = [
+  {key: "opponent", label: "Opponent"},
+  {key: "pairs", label: "Pairs", help: "Pairs of battles played: the old and the new version on the same seed."},
+  {key: "baseline", label: "Old", help: METRIC_HELP + " Old version."},
+  {key: "candidate", label: "New", help: "The same for the new version."},
+  {key: "difference", label: "Change", help: "New minus old. A few pairs per opponent are noisy: ±7 points per pair is normal."},
+  {key: "hitBy", label: "Hit by %", help: "How often their bullets hit us, in %, old → new; sorts by new."},
+  {key: "hitRate", label: "Our hits %", help: "How often our bullets hit them, in %, old → new; sorts by new."},
+];
+// Kept across jobs and refreshes.
+let opponentSort = {key: "difference", worst: true};
+
+function sortOpponents(key) {
+  opponentSort = {key, worst: opponentSort.key === key ? !opponentSort.worst : true};
+  if (lastJob) renderDetail(lastJob);
+}
+
+/** Opponents without the value (no pairs yet) go last either way; equal values in name order. */
+function sortedOpponents(list) {
+  const s = OPPONENT_SORTS[opponentSort.key], dir = opponentSort.worst ? s.worstFirst : -s.worstFirst;
+  const missing = v => v == null || Number.isNaN(v);
+  return list.slice().sort((a, b) => {
+    const x = s.value(a), y = s.value(b);
+    const order = missing(x) || missing(y) ? missing(x) - missing(y) : x < y ? -dir : x > y ? dir : 0;
+    return order || a.opponent.localeCompare(b.opponent);
+  });
+}
+
+function opponentHead(c) {
+  const s = OPPONENT_SORTS[c.key], on = opponentSort.key === c.key;
+  const ascending = (opponentSort.worst ? s.worstFirst : -s.worstFirst) > 0;
+  return `<th class="sort${c.key === "opponent" ? "" : " r"}" onclick="sortOpponents('${c.key}')"`
+    + `${c.help ? ` title="${esc(c.help)}"` : ""}>${esc(c.label)}`
+    + `${on ? `<span class="arrow">${ascending ? "▲" : "▼"}</span>` : ""}</th>`;
 }
 
 const RUMBLE_HELP = "An estimate for the rumble: every opponent weighs the same within its group, and the groups "

@@ -728,23 +728,25 @@ comes from the run seed, the opponent and the pair's number, so B meets the same
 port on one of them; the server then stops with an error).
 
 It is written for a human watching the queue: words first, numbers in tooltips and in "Technical details". It
-refreshes every 2 s and keeps open the sections the viewer opened.
+refreshes every 2 s and changes only the parts of the page whose content changed, so an opened section, a text
+selection, a tooltip and a table's scroll position stay wherever the content stays the same.
 
 - **Workers:** state (offline, connecting, starting, ready, backoff, stopping), the slots (blue: playing a battle),
   battles and battles per second, failures and slot restarts, the last error with its time (grey once the worker has
   brought a battle back, run or stopped normally since); under "more" the CPU constant, Java and JVM options and the
   battles running.
-- **Jobs, on the left:** running and waiting, then finished. Each shows its note (`-Pnote`) as its title, the test
-  and the opponents in words (the set's `title`), and the result in words: "Better by" or "Worse by" only when the
-  whole 95 % interval of the estimate says so, otherwise "No clear difference"; the card is tinted green, red or grey
-  to match. A running job shows the evidence as a marker between the test's two answers (the LLR between its bounds),
-  its progress and the time left; a finished one how the test ended. Buttons move a waiting job up or down or cancel
-  it.
+- **Jobs, on the left:** running and waiting, then the last 20 finished ones (all of them after "Show all"). Each
+  shows its note (`-Pnote`) as its title, the test and the opponents in words (the set's `title`), and the result in
+  words: "Better by" or "Worse by" only when the whole 95 % interval of the estimate says so, otherwise "No clear
+  difference"; the card is tinted green, red or grey to match. A running job shows the evidence as a marker between
+  the test's two answers (the LLR between its bounds), its progress and the time left; a finished one how the test
+  ended. Buttons move a waiting job up or down or cancel it.
 - **The job on the right:** the clicked one (kept in the URL), else the running one. The result and the test in
   words, the scoreboards (all, the rumble estimate if the set has weights, strong, every other named group of the
   set: old and new score share, the change with its interval, how often they hit us, how often we hit them, wins),
-  each opponent (worst change first) and the technical details (job id, the job as submitted, the decision, LLR, noise, health, own turns, the directory, the
-  workers' environment, problems, the last battles).
+  each opponent (worst change first; a click on a column's name sorts by it, a second click reverses; the table
+  scrolls on its own and keeps its head in view) and the technical details (job id, the job as submitted, the
+  decision, LLR, noise, health, own turns, the directory, the workers' environment, problems, the last battles).
 - `./gradlew queueStatus` prints the same in a terminal; actions are POSTs
   (`/api/action?action=cancel|up|down&id=<job>`) that need the header `X-Requested-With: ogi`, so another web page
   cannot trigger them.
