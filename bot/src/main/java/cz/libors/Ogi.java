@@ -6,6 +6,7 @@ import cz.libors.ogi.gun.CircularAim;
 import cz.libors.ogi.gun.GuessFactorGun;
 import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunModel;
+import cz.libors.ogi.gun.HitRecord;
 import cz.libors.ogi.move.OrbitMovement;
 import cz.libors.ogi.move.WaveSurfer;
 import cz.libors.ogi.physics.EngineRobot;
@@ -57,6 +58,16 @@ public class Ogi extends TeamRobot {
      */
     private static final double DEFAULT_POWER = 1.916666666666667;
     private static final double CLOSE_RANGE = 200;
+    /**
+     * Against an enemy that our bullets hit at least this often over the battle, after this many of them ended, we
+     * fire at full power beyond close range too: we read its movement, so the slower bullet still hits, and the
+     * sooner it dies, the fewer turns it has to hit us. Lower thresholds lose: against an enemy we hit a third of the
+     * time the slower bullet misses so much more often that the rounds do not end sooner.
+     */
+    private static final double READ_HIT_RATE = 0.55;
+    private static final int READ_MIN_BULLETS = 20;
+    /** Our bullets at each enemy over the battle (statics last for the battle, as the gun's data do). */
+    private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
     /** The gun searches its data only this many turns before it can fire. */
     private static final int AIM_LEAD_TURNS = 4;
     /** How far past a disabled enemy we drive when ramming it, so that we do not stop short. */
@@ -292,10 +303,23 @@ public class Ogi extends TeamRobot {
         if (finishesByRamming(target)) {
             return 0;
         }
-        double power = distance < CLOSE_RANGE ? Rules.MAX_BULLET_POWER : DEFAULT_POWER;
+        double power = distance < CLOSE_RANGE || readsWell(target.name()) ? Rules.MAX_BULLET_POWER : DEFAULT_POWER;
         power = Math.min(power, target.energy() / 4 + Rules.MIN_BULLET_POWER);
         power = Math.min(power, getEnergy() - Rules.MIN_BULLET_POWER);
         return power >= Rules.MIN_BULLET_POWER ? power : 0;
+    }
+
+    /** Whether our bullets hit this enemy often enough over the battle for full power at any distance. */
+    private static boolean readsWell(String name) {
+        HitRecord record = HIT_RECORDS.get(name);
+        return record != null && record.ended() >= READ_MIN_BULLETS && record.rate() >= READ_HIT_RATE;
+    }
+
+    /** One of our bullets fired at {@code shot}'s target ended; it hit {@code victim}, or nobody if null. */
+    private static void bulletEnded(FiredShot shot, String victim) {
+        if (shot != null) {
+            HIT_RECORDS.computeIfAbsent(shot.target(), n -> new HitRecord()).ended(shot.target().equals(victim));
+        }
     }
 
     private boolean teammateInLineOfFire(double targetDistance, long now) {
@@ -313,7 +337,8 @@ public class Ogi extends TeamRobot {
 
     /**
      * Sets this turn's movement and returns where it takes us by the end of the next turn: surfing the nearest enemy
-     * wave, ramming a disabled enemy once none is in the air, or orbiting the target.
+     * wave, or in a duel the wave the enemy can fire next once its gun is cool, ramming a disabled enemy once none is
+     * in the air, or orbiting the target.
      */
     private double[] move(EnemyState target, long now) {
         Optional<double[]> surf = surfer.command(ourEngineState(), now);
@@ -323,6 +348,13 @@ public class Ogi extends TeamRobot {
             return predictNext(surf.get()[0], surf.get()[1]);
         }
         boolean ram = finishesByRamming(target);
+        Optional<double[]> next = ram || getOthers() != 1 ? Optional.empty()
+                : surfer.gunHeatCommand(ourEngineState(), target.name(), now);
+        if (next.isPresent()) {
+            setAhead(next.get()[0]);
+            setTurnRightRadians(next.get()[1]);
+            return predictNext(next.get()[0], next.get()[1]);
+        }
         Optional<double[]> evade = ram ? Optional.empty() : surfer.evade(ourEngineState(), target.name(), now);
         if (evade.isPresent()) {
             setAhead(evade.get()[0]);
@@ -397,7 +429,7 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletHit(BulletHitEvent e) {
-        inFlight.remove(e.getBullet());
+        bulletEnded(inFlight.remove(e.getBullet()), e.getName());
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
             surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
@@ -414,7 +446,7 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletMissed(BulletMissedEvent e) {
-        inFlight.remove(e.getBullet());
+        bulletEnded(inFlight.remove(e.getBullet()), null);
     }
 
     @Override

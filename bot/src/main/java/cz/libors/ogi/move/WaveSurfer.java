@@ -120,6 +120,10 @@ public final class WaveSurfer {
     private static final Map<String, RamDetector> RAM_DETECTORS = new HashMap<>();
     /** Our lateral velocity as each enemy saw it, for the battle: what averaged and pattern guns aim with. */
     private static final Map<String, LateralHistory> LATERAL = new HashMap<>();
+    /** The power of each enemy's last wave, for the battle: what its next shot is assumed to be. */
+    private static final Map<String, Double> LAST_POWERS = new HashMap<>();
+    /** The power assumed for an enemy's next shot before its first one. */
+    private static final double FIRST_POWER = 2;
 
     /** An enemy wave, the frame its guess factors are measured in, and where the enemy is likely to have aimed. */
     private static final class EnemyWave {
@@ -339,13 +343,26 @@ public final class WaveSurfer {
             lastPath = null;
             return Optional.empty();
         }
-        EnemyWave second = nearest(me, now, nearest);
+        return Optional.of(surf(nearest, nearest(me, now, nearest), me, now));
+    }
+
+    /**
+     * The commands for the next turn while no wave is in the air, if {@code name}'s gun is cool by the end of this turn
+     * as {@link FireDetector} models its heat: the wave it can fire next turn is surfed as if it were in the air, so
+     * that we dodge its bullet a turn or two before its energy drop shows the shot. Empty while its gun is hot.
+     */
+    public Optional<double[]> gunHeatCommand(EngineRobot me, String name, long now) {
+        EnemyWave next = nextWave(name, now);
+        return next == null ? Optional.empty() : Optional.of(surf(next, null, me, now));
+    }
+
+    private double[] surf(EnemyWave nearest, EnemyWave second, EngineRobot me, long now) {
         EngineRobot rammer = rammer(nearest.wave.shooter(), now);
         if (rammer == null) {
             Path best = surfPaths(nearest, second, me, now);
             lastOption = best.first();
             lastPath = best;
-            return Optional.of(orbit(me, nearest.wave.x(), nearest.wave.y(), best.first()));
+            return orbit(me, nearest.wave.x(), nearest.wave.y(), best.first());
         }
         // Ties keep the last way; a retreat left over from a robot that no longer drives at us becomes an orbit.
         int best = Arrays.stream(RAM_OPTIONS).anyMatch(o -> o == lastOption) ? lastOption : Integer.signum(lastOption);
@@ -362,7 +379,38 @@ public final class WaveSurfer {
         }
         lastOption = best;
         lastPath = null;
-        return Optional.of(orbit(me, rammer.x, rammer.y, best));
+        return orbit(me, rammer.x, rammer.y, best);
+    }
+
+    /**
+     * The wave {@code shooter} can fire next turn if its gun is cool by the end of this one: from where it is now, with
+     * the power of its last wave, aimed at us as we are now; null while its gun is hot. Rebuilt every turn, never kept.
+     */
+    private EnemyWave nextWave(String shooter, long now) {
+        FireDetector detector = detectors.get(shooter);
+        double[] enemy = enemyAt(shooter, now);
+        double[] us = ourStates.get(now);
+        RobotHistory seen = ours.until(now);
+        if (detector == null || enemy == null || us == null || seen.isEmpty() || seen.time() != now
+                || !detector.coolAt(now)) {
+            return null;
+        }
+        Wave wave = new Wave(shooter, enemy[0], enemy[1], now + 1, LAST_POWERS.getOrDefault(shooter, FIRST_POWER));
+        double reference = Angles.bearing(wave.x(), wave.y(), us[0], us[1]);
+        double[] features = new double[TargetingFeatures.COUNT];
+        int direction = TargetingFeatures.compute(wave.x(), wave.y(), seen, wave.speed(), field,
+                lastDirection.getOrDefault(shooter, 1), features);
+        double[] aims = SimpleAims.aims(enemy[0], enemy[1], seen, wave.speed(), field, LATERAL.get(shooter));
+        double[] simple = new double[SimpleAims.COUNT];
+        for (int g = 0; g < SimpleAims.COUNT; g++) {
+            simple[g] = direction * Angles.normalizeRelative(aims[g] - reference) / wave.maxEscapeAngle();
+        }
+        HitRange range = new HitRange(wave, reference, (int) field.width(), (int) field.height());
+        EnemyWave w = new EnemyWave(wave, range, direction, features, model(shooter).predict(features, simple));
+        for (BulletPath b : ourBullets) {
+            addShadows(w, b);
+        }
+        return w;
     }
 
     /**
@@ -915,6 +963,7 @@ public final class WaveSurfer {
         int direction = TargetingFeatures.compute(wave.x(), wave.y(), seen, wave.speed(), field,
                 lastDirection.getOrDefault(shot.shooter(), 1), features);
         lastDirection.put(shot.shooter(), direction);
+        LAST_POWERS.put(shot.shooter(), shot.power());
         double[] from = enemyPositions.getOrDefault(shot.shooter(), Map.of()).getOrDefault(aimed,
                 new double[] {wave.x(), wave.y()});
         double[] aims = SimpleAims.aims(from[0], from[1], seen, wave.speed(), field, LATERAL.get(shot.shooter()));

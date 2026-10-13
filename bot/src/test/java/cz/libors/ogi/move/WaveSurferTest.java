@@ -175,6 +175,27 @@ class WaveSurferTest {
     }
 
     /**
+     * Guns start hot and cool by 0.1 a turn (engine-model G-05): while no wave is in the air, the wave an enemy can
+     * fire next turn is surfed once its gun is cool, and not before.
+     */
+    @Test
+    void surfsTheWaveACoolGunCanFireNext() {
+        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        String enemy = "holds-fire";
+        for (long t = 0; t <= 35; t++) {
+            surfer.scanned(enemy, t, 650, 300, 0, 0, 100);
+            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+            surfer.update(t);
+            if (t == 20) {
+                assertTrue(surfer.gunHeatCommand(us(250, 300), enemy, t).isEmpty(), "its gun is still hot");
+            }
+        }
+        assertTrue(surfer.command(us(250, 300), 35).isEmpty(), "no wave is in the air");
+        assertTrue(surfer.gunHeatCommand(us(250, 300), enemy, 35).isPresent(), "its gun is cool");
+        assertTrue(surfer.gunHeatCommand(us(250, 300), "someone else", 35).isEmpty(), "an enemy we never saw");
+    }
+
+    /**
      * The engine reports a bullet our bullet hit one or two moves short of its wave's radius (engine-model G-04);
      * either way its wave is learned and goes.
      */

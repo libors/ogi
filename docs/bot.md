@@ -12,8 +12,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 1. **Our state** goes to the surfer, and the enemy waves advance to our position at the end of this turn.
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
 3. **Radar:** locked on the target in 1v1, spinning otherwise.
-4. **Movement:** the surfer's commands while an enemy wave is in the air; otherwise the surfer's ways around a target
-   that drives at us (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A disabled target in a duel
+4. **Movement:** the surfer's commands while an enemy wave is in the air; otherwise, in a duel, the wave the enemy can
+   fire next once its gun is cool (`WaveSurfer.gunHeatCommand`), the surfer's ways around a target that drives at us
+   (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A disabled target in a duel
    (energy 0: it can neither fire nor move) is rammed instead, once none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
    a bullet kill 20 % ([engine-model.md](engine-model.md) G-46). From these commands `RobotMotion` predicts our position at the end of the next turn, exactly
    unless we ram someone.
@@ -62,6 +63,11 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   tenths, the wave's speed taken from our energy drop, whose floating-point noise rounds it the other way about four
   times in five, and then it does not learn the hit (2026-10-12; 1.9, a whole 143, never failed the match). Powers of
   2.2 lost a point on the population.
+  - **Against an enemy we read** (`HitRecord`, `READ_HIT_RATE`): once 20 of our bullets at it have ended in the
+    battle (hit it or missed; shot down or still in the air at the round's end left out) and 55 % of them hit, the
+    power is 3 at any distance. Such enemies win almost no rounds and score only through their hits on us, so a
+    faster kill takes points from them; at 75 % a power-3 bullet still hits about 71 %. At 25 % or 35 % the rule lost
+    or gained nothing: the slower bullet missed a tenth more often and the rounds did not end sooner (2026-10-13).
 - **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
   the guess-factor gun searched for its plan (at power 1.92, 4 waves in 14: in the turn it fires, the gun heat already
   includes the new shot): would each aim have been inside the hit
@@ -205,10 +211,17 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
       of the way (the predicted enemy is pushed back, our robot is not stopped); at the way's end
       the enemy's next full-power bullet counts with the chance min(1, (50 / d)²), d the distance to the predicted
       enemy then; the close-fight factor uses the predicted enemy at any distance;
-    - while no wave is in the air (`WaveSurfer.evade`), the same five ways around the target, if it drives at us,
-      each predicted 20 turns and weighed by the contact and the enemy's next shot alone. At a round's start a
+    - while no wave is in the air and its gun is hot (`WaveSurfer.evade`), the same five ways around the target, if
+      it drives at us, each predicted 20 turns and weighed by the contact and the enemy's next shot alone. At a round's start a
       rammer's gun is still hot for about 30 turns, and the orbit below closed in on it from beyond 325 px meanwhile.
-- **Without an enemy wave** (and no target that drives at us) the bot orbits the target and changes direction at
+- **The wave a cool gun can fire next** (`WaveSurfer.gunHeatCommand`, in a duel, rammers included): while no enemy
+  wave is in the air and `FireDetector`'s heat model says the enemy's gun is cool by the end of this turn, the surfer
+  surfs the wave it could fire next turn as if it were in the air: from the enemy's position now, with the power of
+  its last wave (2 before its first), aimed at us as we are now, with the same danger model and our bullets' shadows.
+  It is rebuilt every turn and replaced by the real wave once the energy drop shows the shot, so we start dodging a
+  turn or two sooner. Close up this matters most: within 150 px about four of five enemy shots leave while no wave
+  of theirs is in the air, beyond 350 px fewer than one in ten.
+- **Without an enemy wave** (while the enemy's gun is hot, and no target that drives at us) the bot orbits the target and changes direction at
   random intervals, from its own seeded generator. It also steers towards 325 px, but turns towards the target at
   walls, so it stays closer than the surfer.
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
