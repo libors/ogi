@@ -66,6 +66,20 @@ public class Ogi extends TeamRobot {
      */
     private static final double READ_HIT_RATE = 0.55;
     private static final int READ_MIN_BULLETS = 20;
+    /**
+     * In a duel, against an enemy that our bullets hit less often than this over the battle, after this many of them
+     * ended, the surfer keeps the nearer distance for the round: against the enemies we hit least a nearer fight
+     * raises our hit rate more than theirs; against the rest it changes little or costs.
+     */
+    private static final double NEAR_HIT_RATE = 0.18;
+    private static final int NEAR_MIN_BULLETS = 30;
+    private static final double NEAR_DISTANCE = 275;
+    /**
+     * Beyond close range, in a duel, against an enemy that our bullets hit less often than this over the battle,
+     * after {@link #NEAR_MIN_BULLETS} of them ended: more, faster bullets.
+     */
+    private static final double RARE_HIT_RATE = 0.25;
+    private static final double RARE_HIT_POWER = 1.45;
     /** Our bullets at each enemy over the battle (statics last for the battle, as the gun's data do). */
     private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
     /** The gun searches its data only this many turns before it can fire. */
@@ -104,6 +118,8 @@ public class Ogi extends TeamRobot {
     private final TurnClock clock = new TurnClock();
     /** Whether last turn's plan for this turn is a shot we can afford. */
     private boolean plannedShot;
+    /** Whether this round's preferred distance is chosen: once, in the round's first turn with a target. */
+    private boolean distanceChosen;
 
     @Override
     public void run() {
@@ -156,6 +172,12 @@ public class Ogi extends TeamRobot {
             return;
         }
         EnemyState t = target.get();
+        if (!distanceChosen) {
+            distanceChosen = true;
+            if (getOthers() == 1 && hitsRarely(t.name())) {
+                surfer.preferredDistance(NEAR_DISTANCE);
+            }
+        }
         double[] next = move(t, now);
         boolean fired = fire(t, now);
         if (fired) {
@@ -303,7 +325,8 @@ public class Ogi extends TeamRobot {
         if (finishesByRamming(target)) {
             return 0;
         }
-        double power = distance < CLOSE_RANGE || readsWell(target.name()) ? Rules.MAX_BULLET_POWER : DEFAULT_POWER;
+        double power = distance < CLOSE_RANGE || readsWell(target.name()) ? Rules.MAX_BULLET_POWER
+                : getOthers() == 1 && hitsBelow(target.name(), RARE_HIT_RATE) ? RARE_HIT_POWER : DEFAULT_POWER;
         power = Math.min(power, target.energy() / 4 + Rules.MIN_BULLET_POWER);
         power = Math.min(power, getEnergy() - Rules.MIN_BULLET_POWER);
         return power >= Rules.MIN_BULLET_POWER ? power : 0;
@@ -313,6 +336,17 @@ public class Ogi extends TeamRobot {
     private static boolean readsWell(String name) {
         HitRecord record = HIT_RECORDS.get(name);
         return record != null && record.ended() >= READ_MIN_BULLETS && record.rate() >= READ_HIT_RATE;
+    }
+
+    /** Whether our bullets hit this enemy rarely enough over the battle for the nearer distance. */
+    private static boolean hitsRarely(String name) {
+        return hitsBelow(name, NEAR_HIT_RATE);
+    }
+
+    /** Whether our bullets hit this enemy less often than {@code rate} over the battle, once enough of them ended. */
+    private static boolean hitsBelow(String name, double rate) {
+        HitRecord record = HIT_RECORDS.get(name);
+        return record != null && record.ended() >= NEAR_MIN_BULLETS && record.rate() < rate;
     }
 
     /** One of our bullets fired at {@code shot}'s target ended; it hit {@code victim}, or nobody if null. */

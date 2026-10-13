@@ -68,6 +68,12 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     power is 3 at any distance. Such enemies win almost no rounds and score only through their hits on us, so a
     faster kill takes points from them; at 75 % a power-3 bullet still hits about 71 %. At 25 % or 35 % the rule lost
     or gained nothing: the slower bullet missed a tenth more often and the rounds did not end sooner (2026-10-13).
+  - **Against an enemy we hit rarely** (`RARE_HIT_POWER`, `RARE_HIT_RATE`): in a duel, beyond close range, 1.45
+    instead of 1.92 while our bullets at it hit less than 25 % of the time after 30 of them ended (the record that
+    also sets the nearer distance, with its own threshold of 18 %). The faster bullet leaves the enemy a narrower escape
+    angle: against the strong bots that gained about 1.5 points of score share and against the medium tier about 0.7,
+    while 1.15 gained nothing (more hits do not make up for half the damage); 18 % instead of 25 % gave the medium tier
+    0.55 less. Ten times the speed of 1.45 is 156.5, so the BasicSurfers' rounding misses its hits too (2026-10-13).
 - **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
   the guess-factor gun searched for its plan (at power 1.92, 4 waves in 14: in the turn it fires, the gun heat already
   includes the new shot): would each aim have been inside the hit
@@ -157,6 +163,11 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   drift out (at 400–500 px the orbit closed in about 1 px/turn in the open and backed off about as fast within 50 px
   of a wall). `HitRange` gives the
   guess factors that would hit us on each path.
+  - **A nearer distance against enemies we hit rarely:** in a duel, once per round at its first turn with a target,
+    `Ogi` sets the surfer's preferred distance to 275 px instead of 325 when our bullets at that enemy over the battle
+    hit it less than 18 % of the time, after at least 30 of them ended (the same `HitRecord` that sets full power);
+    within a round it does not change. A nearer fight raises our hit rate more than theirs against such enemies, while
+    against the enemies we hit often it changes little or costs. The orbit without waves keeps 325 px.
   - **Steeper held ways:** two more ways held until the wave passes, the orbits that lean twice as steeply towards
     the preferred distance (at most 1.2 rad; the anti-ram mode's retreats, here around the wave's origin): they change
     where we can be in distance too, the hit range's width and the bullet's flight time.

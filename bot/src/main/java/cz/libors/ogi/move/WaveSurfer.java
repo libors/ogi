@@ -200,10 +200,17 @@ public final class WaveSurfer {
     private int lastOption = ORBIT_LEFT;
     /** The path chosen last turn, while no robot drives at us; null otherwise. */
     private Path lastPath;
+    /** The distance the orbit leans towards and the wall smoothing turns towards. */
+    private double preferredDistance = PREFERRED_DISTANCE;
 
     public WaveSurfer(Field field, double coolingRate) {
         this.field = field;
         this.coolingRate = coolingRate;
+    }
+
+    /** The distance to keep from now on, instead of {@link #PREFERRED_DISTANCE}. */
+    public void preferredDistance(double distance) {
+        preferredDistance = distance;
     }
 
     /** Our state at the end of turn {@code time}; call it every turn before {@link #update}. Heading mathematical. */
@@ -910,11 +917,11 @@ public final class WaveSurfer {
         boolean retreat = option == RETREAT_LEFT || option == RETREAT_RIGHT;
         double gain = retreat ? RETREAT_GAIN : 1;
         double limit = retreat ? RETREAT_TILT : MAX_TILT;
-        double tilt = Math.max(-limit, Math.min(limit, gain * (PREFERRED_DISTANCE - distance) / PREFERRED_DISTANCE));
+        double tilt = Math.max(-limit, Math.min(limit, gain * (preferredDistance - distance) / preferredDistance));
         // At a wall the smoothing turns towards the preferred distance: away from the centre when nearer, towards it
         // when further. Turning away from it at any distance let an enemy that backs off set the distance.
         double heading = smoothed(field, x, y, away + direction * (Math.PI / 2 - tilt),
-                distance > PREFERRED_DISTANCE ? -direction : direction);
+                distance > preferredDistance ? -direction : direction);
         double turn = Angles.normalizeRelative(heading - Angles.fromRobocode(r.bodyHeading));
         double drive = DRIVE_DISTANCE;
         if (Math.abs(turn) > Math.PI / 2) {
