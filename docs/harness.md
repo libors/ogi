@@ -474,6 +474,10 @@ never sees. The bench replays each battle through the bot's own `DangerModel`, `
   until 2026-10-09), then `weights` (10, in the order of `TargetingFeatures`), `neighbourScale`, `maxNeighbours`,
   `bandwidth`, `knnShare`, `knnRamp`, `priorWeight`, and the ensemble's `simplePrior`, `simpleBandwidth`, `temper`,
   `decay`, `share`, `flatPrior`, `flatWindow`.
+- **`-Pbullets=<tsv>`:** also writes every bullet's score with where it was aimed, one row per bullet: the recording,
+  the opponent, the round, the turn it was fired in, its origin, our position when the enemy aimed and our lateral
+  velocity then (positive counter-clockwise around the origin), its guess factor, half our width, whether it hit us,
+  the share and its logarithm (`DangerBench.BULLET_COLUMNS`). Reports by situation (walls, distance) group these rows.
 - **Simple guns and the flattener:** a shot also carries where the `SimpleAims` would have aimed, from the enemy's
   recorded position of turn f − 2. A wave that passes us (`HitRange` over our recorded positions, as the surfer
   advances it) teaches the flattener where we were, also when the surfer learned its bullet before.

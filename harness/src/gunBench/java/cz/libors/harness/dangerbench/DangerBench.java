@@ -24,17 +24,23 @@ import java.util.stream.Stream;
  *
  * <p>Usage: {@code DangerBench recordings=<dir>,... [robot=<name prefix>] [selection=<tsv>] [preset=default|histogram]
  * [weights=w,...] [neighbourScale=x] [maxNeighbours=n] [bandwidth=x] [knnShare=x] [knnRamp=x] [priorWeight=x]
- * [simplePrior=x] [simpleBandwidth=x] [temper=x] [decay=x] [share=x] [flatPrior=x] [flatWindow=n] [tune=<passes>]}
+ * [simplePrior=x] [simpleBandwidth=x] [temper=x] [decay=x] [share=x] [flatPrior=x] [flatWindow=n] [tune=<passes>]
+ * [bullets=<tsv>]}
  *
  * <p>{@code selection} is a tab-separated file with the columns {@code stratum} and {@code name}; the report then
  * gives a mean per stratum. {@code tune} runs a coordinate search from the given parameters on the recordings of pair
- * 0 and reports the result on the others (other seeds).
+ * 0 and reports the result on the others (other seeds). {@code bullets} writes every bullet's score with where it was
+ * aimed ({@link #BULLET_COLUMNS}), for reports by situation.
  */
 public final class DangerBench {
 
     private static final List<String> NAMES = List.of("w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9",
             "neighbourScale", "maxNeighbours", "bandwidth", "knnShare", "knnRamp", "priorWeight", "simplePrior",
             "simpleBandwidth", "temper", "decay", "share", "flatPrior", "flatWindow");
+
+    /** The columns of {@code bullets}: positions in px, the lateral velocity in px/turn, the score as in the report. */
+    static final List<String> BULLET_COLUMNS = List.of("file", "opponent", "round", "fireTurn", "originX", "originY",
+            "x", "y", "lateral", "guessFactor", "halfWidth", "hitUs", "mass", "ln");
 
     private DangerBench() {
     }
@@ -87,6 +93,9 @@ public final class DangerBench {
             }
             return;
         }
+        if (options.containsKey("bullets")) {
+            writeBullets(Path.of(options.get("bullets")), battles, parameters);
+        }
         Map<String, DangerReplay.Tally> byOpponent = evaluate(battles, parameters);
         System.out.println("Parameters: " + parameters);
         System.out.printf(Locale.ROOT, "%-40s %-6s %7s %7s %9s %8s %8s%n", "opponent", "stratum", "shots", "learned",
@@ -109,6 +118,28 @@ public final class DangerBench {
             byOpponent.merge(battles.get(i).opponent(), tallies.get(i), DangerReplay.Tally::plus);
         }
         return byOpponent;
+    }
+
+    /** Every bullet's row of {@link #BULLET_COLUMNS}, in the order of the battles and their bullets. */
+    private static void writeBullets(Path file, List<DangerBattle> battles, DangerParameters parameters)
+            throws IOException {
+        List<List<String>> rows = battles.parallelStream().map(b -> {
+            List<String> lines = new ArrayList<>();
+            String name = b.file().getFileName().toString();
+            DangerReplay.replay(b, parameters, (shot, mass) -> {
+                DangerBattle.Where w = shot.where();
+                lines.add(String.format(Locale.ROOT,
+                        "%s\t%s\t%d\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.3f\t%.4f\t%.4f\t%d\t%.6g\t%.4f", name, b.opponent(),
+                        w.round(), w.fireTurn(), w.originX(), w.originY(), w.x(), w.y(), w.lateral(),
+                        shot.guessFactor(), shot.halfWidth(), shot.hitUs() ? 1 : 0, mass, DangerReplay.logScore(mass)));
+            });
+            return lines;
+        }).toList();
+        List<String> out = new ArrayList<>();
+        out.add(String.join("\t", BULLET_COLUMNS));
+        rows.forEach(out::addAll);
+        Files.write(file, out, StandardCharsets.UTF_8);
+        System.out.printf(Locale.ROOT, "%d bullets written to %s%n", out.size() - 1, file);
     }
 
     /**
@@ -292,7 +323,7 @@ public final class DangerBench {
         System.err.println("Usage: DangerBench recordings=<dir>,... [robot=<name prefix>] [selection=<tsv>] "
                 + "[preset=default|histogram] [weights=w,...] [neighbourScale=x] [maxNeighbours=n] [bandwidth=x] "
                 + "[knnShare=x] [knnRamp=x] [priorWeight=x] [simplePrior=x] [simpleBandwidth=x] [temper=x] [decay=x] "
-                + "[share=x] [flatPrior=x] [flatWindow=n] [tune=<passes>]");
+                + "[share=x] [flatPrior=x] [flatWindow=n] [tune=<passes>] [bullets=<tsv>]");
         System.exit(2);
     }
 }

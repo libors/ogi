@@ -437,12 +437,16 @@ tasks.register<JavaExec>("dangerBench") {
     val recordings = providers.gradleProperty("recordings").orElse("harness/build/battle-recordings/$botVersion")
     val passed = listOf("robot", "selection", "preset", "weights", "neighbourScale", "maxNeighbours", "bandwidth",
         "knnShare", "knnRamp", "priorWeight", "simplePrior", "simpleBandwidth", "temper", "decay", "share", "flatPrior",
-        "flatWindow", "tune")
+        "flatWindow", "tune", "bullets")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val root = rootDir
+    val paths = listOf("selection=", "bullets=")
     argumentProviders.add(CommandLineArgumentProvider {
         listOf("recordings=" + recordings.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) +
-            passed.map { if (it.startsWith("selection=")) "selection=" + root.resolve(it.substringAfter('=')).absolutePath else it }
+            passed.map { arg ->
+                paths.firstOrNull { arg.startsWith(it) }?.let { it + root.resolve(arg.substringAfter('=')).absolutePath }
+                    ?: arg
+            }
     })
 }
 

@@ -151,9 +151,12 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 - **A dead enemy's waves stay** until they pass us: its bullets keep flying (engine-model G-44).
 - **Surfing** (`WaveSurfer`): for the wave that reaches us first, three ways to move are predicted with
   `RobotMotion` until the wave has passed: orbiting its origin either way, or stopping. The orbit steers towards
-  325 px, and drives backwards rather than turning around. Where a wall is ahead it turns away from the wave's origin
-  until there is room, so near walls it drifts outwards and stays further than 325 px. `HitRange` gives the guess
-  factors that would hit us on each path.
+  325 px, and drives backwards rather than turning around. Where a wall is ahead it turns until there is room, towards
+  the preferred distance: away from the wave's origin when nearer than 325 px, towards it further out. Against an
+  enemy that keeps further away and backs off when we come nearer, turning away at any distance let the distance
+  drift out (at 400–500 px the orbit closed in about 1 px/turn in the open and backed off about as fast within 50 px
+  of a wall). `HitRange` gives the
+  guess factors that would hit us on each path.
   - **Steeper held ways:** two more ways held until the wave passes, the orbits that lean twice as steeply towards
     the preferred distance (at most 1.2 rad; the anti-ram mode's retreats, here around the wave's origin): they change
     where we can be in distance too, the hit range's width and the bullet's flight time.
@@ -223,7 +226,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   of theirs is in the air, beyond 350 px fewer than one in ten.
 - **Without an enemy wave** (while the enemy's gun is hot, and no target that drives at us) the bot orbits the target and changes direction at
   random intervals, from its own seeded generator. It also steers towards 325 px, but turns towards the target at
-  walls, so it stays closer than the surfer.
+  walls at any distance (the surfer only beyond 325 px).
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
   up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
 

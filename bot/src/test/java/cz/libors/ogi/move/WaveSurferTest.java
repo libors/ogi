@@ -314,6 +314,26 @@ class WaveSurferTest {
         assertTrue(Math.sin(driveHeading) < 0.5, "turned away from the top wall: " + driveHeading);
     }
 
+    @Test
+    void beyondThePreferredDistanceTheWallSmoothingTurnsTowardsTheOrigin() {
+        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        Wave wave = new Wave("e", 650, 300, 0, 2);
+        // 520 px from the origin, under the top wall: orbiting right (clockwise) heads for the wall.
+        EngineRobot me = us(200, 560);
+        double[] right = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
+        double heading = Angles.fromRobocode(me.bodyHeading + right[1]);
+        double driveHeading = right[0] < 0 ? heading + Math.PI : heading;
+        double towards = Math.cos(driveHeading - Angles.bearing(me.x, me.y, wave.x(), wave.y()));
+        assertTrue(towards > 0.5, "turned towards the origin, not away from it: " + driveHeading);
+        // Nearer than the preferred distance, it turns away from the origin.
+        me = us(480, 560);
+        right = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
+        heading = Angles.fromRobocode(me.bodyHeading + right[1]);
+        driveHeading = right[0] < 0 ? heading + Math.PI : heading;
+        towards = Math.cos(driveHeading - Angles.bearing(me.x, me.y, wave.x(), wave.y()));
+        assertTrue(towards < 0, "turned away from the origin: " + driveHeading);
+    }
+
     /** The wall smoothing steps over headings that cannot clear the walls; it must land on the same number. */
     @Test
     void wallSmoothingReturnsTheHeadingOfATestAtEveryStep() {

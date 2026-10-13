@@ -50,9 +50,18 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
      * @param simple      the guess factors at which the {@link SimpleAims} would have aimed
      * @param halfWidth   half our width seen from its origin, in guess factors
      * @param hitUs       whether it hit us
+     * @param where       where the wave came from and where we were when the enemy aimed
      */
     public record Shot(int id, double[] features, double guessFactor, double[] simple, double halfWidth,
-                       boolean hitUs) {
+                       boolean hitUs, Where where) {
+    }
+
+    /**
+     * Where a shot was aimed, for reports by situation: the round, the turn it was fired in, its origin, our position
+     * when the enemy aimed and our lateral velocity then (the surfer's convention: positive counter-clockwise around
+     * the origin).
+     */
+    public record Where(int round, int fireTurn, double originX, double originY, double x, double y, double lateral) {
     }
 
     /** The surfer learns a bullet: it hit us or one of our bullets after its wave was detected. */
@@ -138,7 +147,11 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
                     }
                     double distance = Math.hypot(aim.x() - wave.x(), aim.y() - wave.y());
                     boolean hitUs = b.end().equals("HIT_VICTIM") && b.victim() == subject.index();
-                    events.add(new Shot(id, features, gf, simple, Field.ROBOT_HALF_SIZE / distance / escape, hitUs));
+                    double lateralVelocity = aim.velocity() * Math.sin(Angles.fromRobocode(aim.bodyHeading())
+                            - Angles.bearing(wave.x(), wave.y(), aim.x(), aim.y()));
+                    Where where = new Where(round, t - 1, wave.x(), wave.y(), aim.x(), aim.y(), lateralVelocity);
+                    events.add(new Shot(id, features, gf, simple, Field.ROBOT_HALF_SIZE / distance / escape, hitUs,
+                            where));
                     // The surfer learns a bullet that ends after its wave appeared: by hitting us or our bullet.
                     boolean learns = (hitUs || b.end().equals("HIT_BULLET")) && b.endTurn() > t;
                     if (learns) {

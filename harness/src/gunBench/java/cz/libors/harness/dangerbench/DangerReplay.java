@@ -51,7 +51,22 @@ public final class DangerReplay {
     private DangerReplay() {
     }
 
+    /** A bullet's contribution to {@code logMass}: the logarithm of its share, floored. */
+    static double logScore(double mass) {
+        return Math.log(Math.max(mass, FLOOR));
+    }
+
+    /** One bullet's score: the profile's share over its window ({@link Tally}'s {@code mass}). */
+    public interface Scored {
+        void shot(DangerBattle.Shot shot, double mass);
+    }
+
     public static Tally replay(DangerBattle battle, DangerParameters parameters) {
+        return replay(battle, parameters, (shot, mass) -> { });
+    }
+
+    /** As {@link #replay(DangerBattle, DangerParameters)}, telling {@code scored} each bullet's score in turn. */
+    public static Tally replay(DangerBattle battle, DangerParameters parameters, Scored scored) {
         DangerModel model = new DangerModel(parameters);
         Map<Integer, DangerBattle.Shot> shots = new HashMap<>();
         Map<Integer, DangerModel.Prediction> predictions = new HashMap<>();
@@ -68,9 +83,10 @@ public final class DangerReplay {
                 predictions.put(s.id(), prediction);
                 double m = DangerModel.mass(prediction.profile(), s.guessFactor() - s.halfWidth(),
                         s.guessFactor() + s.halfWidth());
+                scored.shot(s, m);
                 n++;
                 mass += m;
-                logMass += Math.log(Math.max(m, FLOOR));
+                logMass += logScore(m);
                 if (s.hitUs()) {
                     hits++;
                     hitMass += m;

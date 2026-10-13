@@ -898,8 +898,8 @@ public final class WaveSurfer {
 
     /**
      * One turn of orbiting ({@code cx}, {@code cy}) in {@code option}'s direction, keeping a preferred distance and
-     * sliding along walls; {@link #STOP} brakes. The retreats lean away from the centre more steeply, against a robot
-     * that drives at us. Returns {distance, right turn} in the engine's convention.
+     * sliding along walls towards it; {@link #STOP} brakes. The retreats lean away from the centre more steeply,
+     * against a robot that drives at us. Returns {distance, right turn} in the engine's convention.
      */
     double[] orbit(EngineRobot r, double cx, double cy, int option) {
         double x = r.x;
@@ -911,7 +911,10 @@ public final class WaveSurfer {
         double gain = retreat ? RETREAT_GAIN : 1;
         double limit = retreat ? RETREAT_TILT : MAX_TILT;
         double tilt = Math.max(-limit, Math.min(limit, gain * (PREFERRED_DISTANCE - distance) / PREFERRED_DISTANCE));
-        double heading = smoothed(field, x, y, away + direction * (Math.PI / 2 - tilt), direction);
+        // At a wall the smoothing turns towards the preferred distance: away from the centre when nearer, towards it
+        // when further. Turning away from it at any distance let an enemy that backs off set the distance.
+        double heading = smoothed(field, x, y, away + direction * (Math.PI / 2 - tilt),
+                distance > PREFERRED_DISTANCE ? -direction : direction);
         double turn = Angles.normalizeRelative(heading - Angles.fromRobocode(r.bodyHeading));
         double drive = DRIVE_DISTANCE;
         if (Math.abs(turn) > Math.PI / 2) {
