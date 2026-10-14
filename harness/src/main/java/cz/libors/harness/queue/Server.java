@@ -58,6 +58,8 @@ public final class Server {
 
     private final Path stateDir;
     private final BattleCache battleCache;
+    /** Every battle the workers played to its end, over all jobs on disk (the dashboard's totals). */
+    private final BattleTotals battleTotals;
     private final Path jobsDir;
     private final Path jarsDir;
     private final Path localBundle;
@@ -152,6 +154,7 @@ public final class Server {
         Files.createDirectories(jarsDir);
         logFile = new PrintStream(Files.newOutputStream(this.stateDir.resolve("server.log"), StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND), true, StandardCharsets.UTF_8);
+        battleTotals = BattleTotals.read(jobsDir);
         battleCache = new BattleCache(this.stateDir.resolve("battle-cache.jsonl"), new BattleCache.Workers() {
             @Override
             public Optional<Map<String, String>> environment(String worker) {
@@ -840,13 +843,16 @@ public final class Server {
         String header = Files.exists(file) ? ""
                 : "finished\tworker\tslot\tbattle\twaitedSeconds\tbattleSeconds\toutcome\n";
         long waited = (f.startedAt > 0 ? f.startedAt : now) - f.sentAt;
-        String line = String.join("\t", TIME.format(LocalDateTime.ofInstant(Instant.ofEpochMilli(now),
-                        ZoneId.systemDefault())), link.name(), Integer.toString(f.slot),
+        String finished = TIME.format(LocalDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault()));
+        String line = String.join("\t", finished, link.name(), Integer.toString(f.slot),
                 f.work.key().replace('\t', ' '), String.format(Locale.ROOT, "%.1f", waited / 1000.0),
                 battleMillis < 0 ? "" : String.format(Locale.ROOT, "%.1f", battleMillis / 1000.0),
                 outcome.replace('\t', ' ').replace('\n', ' '));
         Files.writeString(file, header + line + "\n", StandardCharsets.UTF_8, StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND);
+        if (outcome.startsWith("ok")) {
+            battleTotals.add(f.work.job().dir(), link.name(), Math.max(0, battleMillis) / 1000.0, finished);
+        }
     }
 
     /** For the summaries: the workers that have run battles in this session. */
@@ -889,7 +895,8 @@ public final class Server {
             w.put("detail", link.detail);
             w.put("since", link.since);
             w.put("busy", link.inFlight.size());
-            w.put("battles", link.battles);
+            w.put("battles", battleTotals.battles(link.name()));
+            w.put("battlesThisRun", link.battles);
             double rate = link.completions.size() < 2 ? Double.NaN : (link.completions.size() - 1) * 1000.0
                     / Math.max(1, link.completions.peekLast() - link.completions.peekFirst());
             w.put("battlesPerSecond", Double.isFinite(rate) && now - link.completions.peekLast() < 30_000 ? rate
@@ -913,6 +920,7 @@ public final class Server {
             workers.add(w);
         }
         m.put("workers", workers);
+        m.put("totals", battleTotals.toMap());
         List<QueueJob> active = activeJobs();
         List<QueueJob> done = jobs.values().stream().filter(j -> !j.state().active())
                 .sorted(Comparator.comparingLong(QueueJob::finishedAt).reversed()).toList();

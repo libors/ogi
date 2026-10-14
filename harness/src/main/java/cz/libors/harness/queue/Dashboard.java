@@ -164,6 +164,18 @@ final class Dashboard {
                         .append(": ").append(w.get("lastError")).append('\n');
             }
         }
+        Object totals = state.get("totals");
+        if (totals instanceof Map<?, ?> t && ((Number) t.get("battles")).longValue() > 0) {
+            sb.append(String.format(Locale.ROOT, "  all jobs   %d battles played, %.0f slot hours, since %s%n",
+                    ((Number) t.get("battles")).longValue(), ((Number) t.get("slotHours")).doubleValue(),
+                    String.valueOf(t.get("since")).split(" ")[0]));
+            for (Object o : (List<Object>) t.get("formats")) {
+                Map<String, Object> f = (Map<String, Object>) o;
+                sb.append(String.format(Locale.ROOT, "             %-6s %d battles, %.0f slot hours %s%n",
+                        f.get("format"), ((Number) f.get("battles")).longValue(),
+                        ((Number) f.get("slotHours")).doubleValue(), f.get("kinds")));
+            }
+        }
         sb.append("\nJobs\n");
         for (Object o : (List<Object>) state.get("jobs")) {
             Map<String, Object> j = (Map<String, Object>) o;

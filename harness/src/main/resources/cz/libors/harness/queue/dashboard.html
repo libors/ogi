@@ -118,6 +118,7 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 
 <main>
   <h2>Workers</h2>
   <div class="workers" id="workers"></div>
+  <div class="muted" id="totals" style="font-size:13px; margin-top:8px"></div>
 
   <div class="layout">
     <div>
@@ -301,6 +302,7 @@ function render(s) {
     + timeOfDay(s.now);
   patch(document.getElementById("workers"), s.workers.map(w => worker(w, s.now, keys)).join("")
     || '<div class="empty">No workers configured.</div>');
+  patch(document.getElementById("totals"), totals(s.totals));
   const shown = shownJob(s);
   const active = s.jobs.filter(j => j.state === "QUEUED" || j.state === "RUNNING");
   const done = s.jobs.filter(j => !(j.state === "QUEUED" || j.state === "RUNNING"));
@@ -319,6 +321,18 @@ function toggleFinished() {
   render(lastState);
 }
 
+/** Every battle the workers played to its end over all jobs on disk, per format; cached battles are not played. */
+function totals(t) {
+  if (!t || !t.battles) return "";
+  const n = v => Number(v).toLocaleString("en-US");
+  const formats = t.formats.map(f => {
+    const kinds = Object.entries(f.kinds).map(([k, v]) => `${k} ${n(v)}`).join(", ");
+    return `<span title="${esc(kinds)}">${esc(f.format)} ${n(f.battles)} battles, ${fmt(f.slotHours, 0)} slot hours</span>`;
+  }).join(" · ");
+  const since = String(t.since).split(" ")[0];
+  return `<span title="Battles taken from the cache are not counted: they were played once, by the job that first needed them">All jobs since ${esc(since)}: ${n(t.battles)} battles played, ${fmt(t.slotHours, 0)} slot hours</span> · ${formats}`;
+}
+
 function worker(w, now, keys) {
   const i = w.info || {};
   const slots = Array.from({length: w.slots}, (_, k) => `<div class="slot ${k < w.busy ? "busy" : ""}"></div>`).join("");
@@ -329,7 +343,7 @@ function worker(w, now, keys) {
     <div class="slots" title="Battle slots: blue ones are playing a battle now">${slots}</div>
     <div class="kv">
       <div>Playing</div><div class="num">${w.busy} of ${w.slots} slots</div>
-      <div>Battles</div><div class="num">${w.battles}${w.battlesPerSecond != null ? " · " + fmt(w.battlesPerSecond) + " per second" : ""}</div>
+      <div title="Played to their end over all jobs on disk; ${w.battlesThisRun} since the server started">Battles</div><div class="num" title="${w.battlesThisRun} since the server started">${Number(w.battles).toLocaleString("en-US")}${w.battlesPerSecond != null ? " · " + fmt(w.battlesPerSecond) + " per second" : ""}</div>
       ${w.failures || w.restarts ? `<div>Failures · restarts</div><div class="num">${w.failures} · ${w.restarts}</div>` : ""}
     </div>
     ${w.lastError ? errorLine(w, now) : ""}

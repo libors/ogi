@@ -279,7 +279,10 @@ team per line as Robocode lists it, including its version. A line `[name]` start
 `[strong]` form a scoreboard after the overall one (and after the rumble estimate, if there are weights), every other
 group but `[other]` a scoreboard of its own (e.g. rumble tiers); `[all]` and `[rumble]` are reserved;
 a group may start again further down. Lines `weight [name] n` say how many robots of the rumble each group stands
-for (e.g. a tier's size); with them every group needs a weight, and the report adds a rumble estimate (below). Only trusted robots are in the repository: `sample-1v1.txt` and
+for (e.g. a tier's size); with them every group needs a weight, and the report adds a rumble estimate (below). The
+estimate weighs only the set's own groups, so a set that holds some of the rumble's tiers (the strong and medium
+bots of a population, say) has no weights: with them its "rumble estimate" would be those tiers' mix, shown as the
+rumble's. Only trusted robots are in the repository: `sample-1v1.txt` and
 `sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes; their lines
 carry `botVersion` and must be edited when it changes), for gun and movement work. Sets of rumble bots stay out of
 git, in `.robocode/foreign/` on this machine (`-Popponents=.robocode/foreign/<set>.txt`); the jars they name must be
@@ -384,6 +387,18 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   `virtualWeight`, `minTries`; the rest come from `GunParameters.DEFAULT`. They are the main gun's: the anti-surfer
   gun keeps its own fixed copy (`GunParameters.ANTI_SURFER`). `-Probot=<prefix>` picks the logged robot by name
   prefix (default `cz.libors.Ogi`).
+- **A change of aim needs the bench both ways.** The recorded paths answered the logged gun: a target that reacts
+  to being hit (it reverses, steps aside, or, as a surfer, avoids where it was hit) did so after the logged gun's
+  hits and never after another gun's, so any other gun looks better on the replay. Queue `submitGunLogs` for both
+  versions on the same seeds and replay each with the other's parameters: the candidate's gain on the baseline's
+  logs is effect + bias, the baseline's gain on the candidate's logs is −effect + bias, so half their difference is
+  the effect and half their sum the bias. Measured twice on the population, the bias was larger than the effects:
+  - 2026-10-10, a retuned gun: +2.32 points of `fired %` on the old logs, −0.54 on the new ones, so about +0.9 real
+    and 1.4 bias; the battles agreed with the +0.9.
+  - 2026-10-13, a gun change: +0.86 on the old logs, +1.26 for the old gun on the new ones, so −0.20 real and 1.06
+    bias (1.8 against the strong tier, 0.8 against the weak one); the battles' hit rate moved −0.24, and the
+    one-way +0.86 had sent the change to battles.
+  A random offset of the aim does not show the bias: it hits where the logged gun hit.
 - **`-Pselection=<tsv>`** (columns `stratum` and `name`) adds the mean `fired %` per stratum.
 - **`-Ptune=<passes>`:** a coordinate search from the given parameters that maximises the mean over opponents of
   `fired %` on half of the opponents, and reports both halves with the start and the tuned parameters: per stratum
@@ -431,12 +446,10 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 
   Against the lab set the bench's `fired %` is therefore 1–4 points lower.
 - **Limits:**
-  - Against a target that reacts to our aim the replay is optimistic: the recorded movement dodged the logged
-    gun, not the replayed one. So any change looks better than it is. Measured on 2026-10-10 with logs of both
-    versions of a tuned gun: +2.32 points of `fired %` on the old version's logs, −0.54 on the new one's, about +0.9
-    real and 1.4 bias; the battles agreed with the +0.9. The bias is largest against wave surfers and smallest
-    against simple movers. Against robots that move without regard to our bullets the bench is about right. To size a change, replay
-    the logs of both versions and take half the sum of the two changes.
+  - Against a target that reacts to our aim or our hits the replay is optimistic: the recorded movement answered
+    the logged gun, not the replayed one, so any change looks better than it is, by about a point of `fired %` on
+    the population; see "A change of aim needs the bench both ways" above. The bias is largest against wave surfers
+    and smallest against simple movers.
   - A replayed aim the turret could not have reached in time would not have been fired that turn; the replay fires
     it anyway.
   - A recording can lose a turn's debug properties, and with them a plan: after a skipped turn, and rarely without
@@ -651,7 +664,8 @@ configuration line, so its `battles.tsv` reads like a local one:
   ignores).
 - `dispatch.tsv`: one line per battle: when it ended, the worker and slot, the battle, how long it waited for a slot,
   how long it took, and how it ended (`ok`, with our robots' longest own turn and the turns over half the idle
-  constant and over it; `failed: …`; `lost: …`). `problems.log` as in `compare`.
+  constant and over it; `failed: …`; `lost: …`). A battle in `battles.tsv` with no `ok` line here came from the
+  battle cache. `problems.log` as in `compare`.
 - The job's health on the dashboard adds the versions' own turn times from the battles of the current server
   run; they are not in the log, so a restarted server starts counting anew.
 - Checked on 2026-10-09: a job of 2 pairs per opponent on four local slots gave, battle for battle, the same seeds,
@@ -736,9 +750,14 @@ refreshes every 2 s and changes only the parts of the page whose content changed
 selection, a tooltip and a table's scroll position stay wherever the content stays the same.
 
 - **Workers:** state (offline, connecting, starting, ready, backoff, stopping), the slots (blue: playing a battle),
-  battles and battles per second, failures and slot restarts, the last error with its time (grey once the worker has
-  brought a battle back, run or stopped normally since); under "more" the CPU constant, Java and JVM options and the
-  battles running.
+  battles over all jobs (those since the server started in a tooltip) and battles per second, failures and slot
+  restarts, the last error with its time (grey once the worker has brought a battle back, run or stopped normally
+  since); under "more" the CPU constant, Java and JVM options and the battles running.
+- **Totals, under the workers** (`queue.BattleTotals`): every battle a worker played to its end over all the jobs on
+  disk, with its slot hours, per battle format (the set's `format` line) and, in a tooltip, per kind of job
+  (comparisons, recordings); a worker's card shows its own share. The server reads the jobs' `dispatch.tsv` once at
+  its start and adds each battle it logs there, so a restart does not reset them. A battle taken from the [battle cache](#battle-cache-queuebattlecache) is
+  in no dispatch log and counts only in the job that played it; a deleted job takes its battles with it.
 - **Jobs, on the left:** running and waiting, then the last 20 finished ones (all of them after "Show all"). Each
   shows its note (`-Pnote`) as its title, the test and the opponents in words (the set's `title`), and the result in
   words: "Better by" or "Worse by" only when the whole 95 % interval of the estimate says so, otherwise "No clear
