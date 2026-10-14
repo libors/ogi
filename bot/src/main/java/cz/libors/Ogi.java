@@ -7,6 +7,8 @@ import cz.libors.ogi.gun.GuessFactorGun;
 import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.gun.HitRecord;
+import cz.libors.ogi.gun.MirrorAim;
+import cz.libors.ogi.gun.RacePower;
 import cz.libors.ogi.move.OrbitMovement;
 import cz.libors.ogi.move.WaveSurfer;
 import cz.libors.ogi.physics.EngineRobot;
@@ -80,6 +82,19 @@ public class Ogi extends TeamRobot {
      */
     private static final double RARE_HIT_RATE = 0.25;
     private static final double RARE_HIT_POWER = 1.45;
+    /**
+     * Below this energy, in a duel, our power is the energy race's ({@link RacePower}): the round goes to whoever runs
+     * out last, and a weak bullet costs us almost nothing while the enemy's misses run it down.
+     */
+    private static final double RACE_ENERGY = 20;
+    /** The prior of our hit rate in the race: this many hits in {@link #RACE_PRIOR_BULLETS} bullets. */
+    private static final double RACE_PRIOR_HITS = 1.5;
+    private static final double RACE_PRIOR_BULLETS = 10;
+    /**
+     * The race is on too while the enemy is below {@link #RACE_ENERGY} and we are below this: a close race, which the
+     * strong bots often start with both of us in this band.
+     */
+    private static final double RACE_CLOSE_ENERGY = 40;
     /** Our bullets at each enemy over the battle (statics last for the battle, as the gun's data do). */
     private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
     /** The gun searches its data only this many turns before it can fire. */
@@ -100,11 +115,19 @@ public class Ogi extends TeamRobot {
     private static final double SHADOW_MIN_SHARE = 0.7;
     private static final int SHADOW_CANDIDATES = 3;
     private static final double SHADOW_SPACING = 0.15;
+    /**
+     * How many turns of the surfer's planned path the mirror gun reads: about the flight of our bullet across 700 px.
+     * Against a mirror a few turns late the target's position at the bullet's arrival is the map of ours then.
+     */
+    private static final int MIRROR_PLANNED_TURNS = 50;
+    /** How much further than the target is now the mirror gun's planned path reaches: the target may move away. */
+    private static final double MIRROR_REACH = 100;
 
     private World world;
     private Field field;
     private OrbitMovement movement;
     private GuessFactorGun gun;
+    private MirrorAim mirror;
     private WaveSurfer surfer;
     private Random aimSpread;
     /**
@@ -127,6 +150,7 @@ public class Ogi extends TeamRobot {
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
         movement = new OrbitMovement(field, new Random(roundSeed()));
         gun = new GuessFactorGun(field);
+        mirror = new MirrorAim(field);
         aimSpread = new Random(~roundSeed());
         randomAim = new Random(roundSeed() * 31 + 17);
         randomDraw = randomAim.nextDouble();
@@ -164,6 +188,7 @@ public class Ogi extends TeamRobot {
         long now = getTime();
         surfer.ourState(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getVelocity());
         surfer.update(now);
+        mirror.ours(now, getX(), getY());
         Optional<EnemyState> target = world.closestEnemy(getX(), getY(), now, MAX_TARGET_AGE);
         steerRadar(target.orElse(null), now);
         if (target.isEmpty()) {
@@ -172,6 +197,9 @@ public class Ogi extends TeamRobot {
             return;
         }
         EnemyState t = target.get();
+        if (getOthers() == 1 && t.time() == now) {
+            mirror.scanned(t.name(), now, t.x(), t.y());
+        }
         if (!distanceChosen) {
             distanceChosen = true;
             if (getOthers() == 1 && hitsRarely(t.name())) {
@@ -267,13 +295,38 @@ public class Ogi extends TeamRobot {
         double circular = CircularAim.aim(nextX, nextY, target, Rules.getBulletSpeed(planned), now + 1, field);
         boolean soon = getGunHeat() <= AIM_LEAD_TURNS * getGunCoolingRate();
         double offset = (2 * aimSpread.nextDouble() - 1) * AIM_SPREAD / Math.max(distance, 1);
-        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset, randomDraw);
+        double mirrorAim = soon && getOthers() == 1
+                ? mirrorAim(target.name(), nextX, nextY, distance, now + 1, planned) : Double.NaN;
+        double aim = gun.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset, randomDraw,
+                mirrorAim);
         if (plannedShot && getOthers() == 1 && getGunHeat() <= getGunCoolingRate() + 1e-9 && !Double.isNaN(aim)) {
             aim = shadowingAim(target.name(), now, nextX, nextY, planned, aim, offset);
         }
         if (!Double.isNaN(aim)) {
             setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
         }
+    }
+
+    /**
+     * The mirror gun's aim for a shot fired in turn {@code fireTime} from ({@code nextX}, {@code nextY}) at a target
+     * {@code distance} away, NaN unless the target's position follows ours ({@link MirrorAim}); our later positions
+     * come from the surfer's planned path.
+     */
+    private double mirrorAim(String name, double nextX, double nextY, double distance, long fireTime, double power) {
+        MirrorAim.Fit fit = mirror.fit(name);
+        if (fit == null) {
+            return Double.NaN;
+        }
+        // Only the turns the aim can reach: the bullet's flight, a little beyond the target's distance, less the lag.
+        double speed = Rules.getBulletSpeed(power);
+        int turns = Math.min(MIRROR_PLANNED_TURNS, (int) Math.ceil((distance + MIRROR_REACH) / speed) - fit.lag());
+        double[][] planned = turns > 1 ? surfer.plannedPositions(ourEngineState(), turns) : null;
+        double[][] future = new double[planned == null ? 1 : planned.length][];
+        future[0] = new double[] {nextX, nextY};
+        for (int i = 1; i < future.length; i++) {
+            future[i] = planned[i];
+        }
+        return mirror.aim(fit, fireTime, speed, future);
     }
 
     /**
@@ -327,6 +380,14 @@ public class Ogi extends TeamRobot {
         }
         double power = distance < CLOSE_RANGE || readsWell(target.name()) ? Rules.MAX_BULLET_POWER
                 : getOthers() == 1 && hitsBelow(target.name(), RARE_HIT_RATE) ? RARE_HIT_POWER : DEFAULT_POWER;
+        if (getOthers() == 1 && (getEnergy() < RACE_ENERGY
+                || target.energy() < RACE_ENERGY && getEnergy() < RACE_CLOSE_ENERGY)) {
+            HitRecord record = HIT_RECORDS.get(target.name());
+            double hits = record == null ? 0 : record.hits();
+            double ended = record == null ? 0 : record.ended();
+            power = RacePower.choose((hits + RACE_PRIOR_HITS) / (ended + RACE_PRIOR_BULLETS),
+                    surfer.hitRateOnUs(target.name()), surfer.lastPower(target.name()), power);
+        }
         power = Math.min(power, target.energy() / 4 + Rules.MIN_BULLET_POWER);
         power = Math.min(power, getEnergy() - Rules.MIN_BULLET_POWER);
         return power >= Rules.MIN_BULLET_POWER ? power : 0;

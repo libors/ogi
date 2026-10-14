@@ -6,10 +6,10 @@ import cz.libors.ogi.geom.Angles;
  * What the guess-factor gun knows about one enemy for the whole battle, and the arithmetic of its decisions: the
  * stored shots, each gun's virtual score, which gun aims, and how a passed wave is learned.
  *
- * <p>Four guns: the guess-factor gun over every wave (a wave without a bullet counts
+ * <p>Five guns: the guess-factor gun over every wave (a wave without a bullet counts
  * {@link GunParameters#virtualWeight()}), circular targeting, the anti-surfer gun over the waves of our bullets
- * only, and a random gun. The anti-surfer gun takes a few nearest neighbours from each of several views, the latest
- * 30 and 150 bullets and all of them, their kernels summed. A surfer dodges our bullets, not our waves, and keeps
+ * only, a random gun, and a mirror gun ({@link MirrorAim}). The anti-surfer gun takes a few nearest neighbours from
+ * each of several views, the latest 30 and 150 bullets and all of them, their kernels summed. A surfer dodges our bullets, not our waves, and keeps
  * going where our bullets missed it until one hits it there, so the latest bullets say where it goes now (most of what
  * a bullet says about that is gone after about a round's worth of bullets); the longer views keep what does not
  * change. The random gun aims uniformly inside the target's {@link EscapeRange}, which a surfer cannot learn; it is
@@ -17,6 +17,8 @@ import cz.libors.ogi.geom.Angles;
  * circular targeting by the whole battle's record; against an enemy that is hard to hit the anti-surfer gun replaces
  * the chosen gun when it has the better record over the battle's bullets, and the random gun replaces either when its
  * record over them is better still (DrussGT's idea: a surfer that learned our aim is hit less often than at random).
+ * The mirror gun aims only at a robot whose position follows ours ({@link MirrorAim}); it replaces the guess-factor
+ * or circular gun once it has {@link #MIRROR_MIN_TRIES} weighted tries and the better record.
  *
  * <p>The bot runs it inside {@link GuessFactorGun}; the offline gun bench runs it on the {@link GunLog} lines of a
  * recorded battle. With the bot's parameters the bench therefore decides exactly as the bot did.
@@ -27,7 +29,8 @@ public final class GunModel {
     public static final int CIRCULAR = 1;
     public static final int ANTI_SURFER = 2;
     public static final int RANDOM = 3;
-    public static final int GUNS = 4;
+    public static final int MIRROR = 4;
+    public static final int GUNS = 5;
 
     /** The anti-surfer gun's views: {the latest bullets it keeps (0: all), the neighbours it takes}. */
     private static final int[][] ANTI_SURFER_VIEWS = {{30, 4}, {150, 4}, {0, 4}};
@@ -39,6 +42,11 @@ public final class GunModel {
      */
     static final double HARD_TO_HIT = 0.2;
     private static final double HARD_TO_HIT_Z = 1;
+    /**
+     * The weighted tries the mirror gun needs before it may replace the guess-factor or circular gun: about fifteen
+     * bullets' worth, so that a robot whose position follows ours only by chance for a while is not taken for a mirror.
+     */
+    static final double MIRROR_MIN_TRIES = 20;
 
     /**
      * The inputs of the shot planned in turn {@code time} for the turn after.
@@ -52,15 +60,24 @@ public final class GunModel {
      * @param randomLow   the lowest guess factor of the target's {@link EscapeRange}, NaN without one
      * @param randomHigh  its highest guess factor
      * @param randomDraw  a number drawn uniformly from [0, 1): where in that range the random gun aims
+     * @param mirrorAim   the mirror gun's aim, NaN if it has none
      */
     public record Shot(String target, long time, double[] features, int direction, double reference, double escape,
-                       boolean search, double circularAim, double randomLow, double randomHigh, double randomDraw) {
+                       boolean search, double circularAim, double randomLow, double randomHigh, double randomDraw,
+                       double mirrorAim) {
 
         /** A shot without a random gun's range. */
         public Shot(String target, long time, double[] features, int direction, double reference, double escape,
                     boolean search, double circularAim) {
             this(target, time, features, direction, reference, escape, search, circularAim, Double.NaN, Double.NaN,
                     Double.NaN);
+        }
+
+        /** A shot without a mirror gun's aim. */
+        public Shot(String target, long time, double[] features, int direction, double reference, double escape,
+                    boolean search, double circularAim, double randomLow, double randomHigh, double randomDraw) {
+            this(target, time, features, direction, reference, escape, search, circularAim, randomLow, randomHigh,
+                    randomDraw, Double.NaN);
         }
     }
 
@@ -130,8 +147,9 @@ public final class GunModel {
      * Each gun's aim for a shot and the gun to follow: the guess-factor gun once it has
      * {@link GunParameters#minTries()} weighted tries and the better record, or when the circular gun has no aim;
      * the anti-surfer gun instead against an enemy that is hard to hit, once it has {@link #MIN_BULLETS} bullets and
-     * the better record over them, and the random gun instead of either on the same terms. A chosen gun without an
-     * aim aims at the reference.
+     * the better record over them, and the random gun instead of either on the same terms. The mirror gun replaces
+     * the guess-factor or circular gun before that, once it has {@link #MIRROR_MIN_TRIES} weighted tries and the
+     * better weighted record. A chosen gun without an aim aims at the reference.
      */
     public Aim aim(Shot shot) {
         double gf = shot.search() ? data.bestGuessFactor(shot.features()) : Double.NaN;
@@ -142,6 +160,7 @@ public final class GunModel {
         aims[ANTI_SURFER] = Double.isNaN(as) ? Double.NaN : shot.reference() + shot.direction() * as * shot.escape();
         double random = shot.randomLow() + shot.randomDraw() * (shot.randomHigh() - shot.randomLow());
         aims[RANDOM] = shot.search() ? shot.reference() + shot.direction() * random * shot.escape() : Double.NaN;
+        aims[MIRROR] = shot.mirrorAim();
         int gun = choose(aims);
         if (Double.isNaN(aims[gun])) {
             aims[gun] = shot.reference();
@@ -180,6 +199,11 @@ public final class GunModel {
                 && gf[0] / gf[1] > circular[0] / Math.max(circular[1], 1e-9);
         int gun = Double.isNaN(aims[CIRCULAR]) || (gfBetter && !Double.isNaN(aims[GUESS_FACTOR])) ? GUESS_FACTOR
                 : CIRCULAR;
+        double[] mirror = scores[MIRROR];
+        if (!Double.isNaN(aims[MIRROR]) && mirror[1] >= MIRROR_MIN_TRIES
+                && mirror[0] / mirror[1] > scores[gun][0] / Math.max(scores[gun][1], 1e-9)) {
+            gun = MIRROR;
+        }
         if (replaces(ANTI_SURFER, gun, aims)) {
             gun = ANTI_SURFER;
         }
@@ -208,8 +232,8 @@ public final class GunModel {
 
     /**
      * Learns the passed wave of a shot: it scores the guess-factor and circular guns if both aimed and the
-     * anti-surfer and the random gun each if it aimed, a bullet's wave also scores the bullet records if the
-     * guess-factor and the anti-surfer gun both aimed, and the wave becomes data if any heading would have hit (the
+     * anti-surfer, the random and the mirror gun each if it aimed, a bullet's wave also scores the bullet records if
+     * the guess-factor and the anti-surfer gun both aimed, and the wave becomes data if any heading would have hit (the
      * anti-surfer gun's only with a bullet). The random gun scores the share of its range that would have hit. Returns
      * the guns whose aim would have hit, as bits {@code 1 << gun}.
      */
@@ -232,7 +256,7 @@ public final class GunModel {
         }
         boolean mainScored = !Double.isNaN(aims[GUESS_FACTOR]) && !Double.isNaN(aims[CIRCULAR]);
         for (int g = 0; g < GUNS; g++) {
-            if (g == ANTI_SURFER || g == RANDOM ? !Double.isNaN(aims[g]) : mainScored) {
+            if (g == ANTI_SURFER || g == RANDOM || g == MIRROR ? !Double.isNaN(aims[g]) : mainScored) {
                 scores[g][1] += weight;
                 scores[g][0] += weight * credit[g];
             }

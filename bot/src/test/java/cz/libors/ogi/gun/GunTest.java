@@ -132,6 +132,30 @@ class GunTest {
     }
 
     @Test
+    void theMirrorGunReplacesTheMainGunOnceItHitsMoreOften() {
+        // A target the mirror gun's aim always hits, wherever the learned guns aim.
+        GunModel model = new GunModel(GunParameters.DEFAULT);
+        double escape = 0.6;
+        Random random = new Random(5);
+        GunModel.Aim aim = null;
+        int tries = 0;
+        for (int i = 0; i < 60; i++) {
+            GunModel.Shot base = shot(i, random, escape);
+            double mirror = (random.nextDouble() * 2 - 1) * escape;
+            GunModel.Shot shot = new GunModel.Shot("t", i, base.features(), 1, 0, escape, true, 0.9 * escape,
+                    Double.NaN, Double.NaN, Double.NaN, mirror);
+            aim = model.aim(shot);
+            if (tries < GunModel.MIRROR_MIN_TRIES) {
+                assertTrue(aim.gun() != GunModel.MIRROR, "chosen after " + tries + " tries");
+            }
+            model.learn(shot, aim, new GunModel.Pass("t", i, true, 0, escape, true, mirror - 0.01, mirror + 0.01));
+            tries++;
+        }
+        assertEquals(1, model.hitRate(GunModel.MIRROR), 1e-9);
+        assertEquals(GunModel.MIRROR, aim.gun());
+    }
+
+    @Test
     void withoutARangeTheRandomGunNeverAims() {
         GunModel model = new GunModel(GunParameters.DEFAULT);
         GunModel.Aim aim = model.aim(shot(0, new Random(1), 0.6));

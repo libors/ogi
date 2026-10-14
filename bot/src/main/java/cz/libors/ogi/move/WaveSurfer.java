@@ -124,6 +124,11 @@ public final class WaveSurfer {
     private static final Map<String, Double> LAST_POWERS = new HashMap<>();
     /** The power assumed for an enemy's next shot before its first one. */
     private static final double FIRST_POWER = 2;
+    /** Per enemy, for the battle: {its shots we detected, its hits on us, its bullets ours shot down}. */
+    private static final Map<String, int[]> FIRE_RECORDS = new HashMap<>();
+    /** The prior of an enemy's hit rate on us: this many hits in {@link #PRIOR_SHOTS} shots. */
+    private static final double PRIOR_HITS = 1;
+    private static final double PRIOR_SHOTS = 10;
 
     /** An enemy wave, the frame its guess factors are measured in, and where the enemy is likely to have aimed. */
     private static final class EnemyWave {
@@ -200,6 +205,8 @@ public final class WaveSurfer {
     private int lastOption = ORBIT_LEFT;
     /** The path chosen last turn, while no robot drives at us; null otherwise. */
     private Path lastPath;
+    /** The wave {@link #lastPath} was chosen against: the centre its ways orbit. */
+    private Wave lastSurfed;
     /** The distance the orbit leans towards and the wall smoothing turns towards. */
     private double preferredDistance = PREFERRED_DISTANCE;
 
@@ -263,6 +270,7 @@ public final class WaveSurfer {
 
     /** An enemy bullet hit us at the end of its move in turn {@code time}; heading mathematical. */
     public void hitByBullet(String shooter, long time, double x, double y, double heading, double power) {
+        fireRecord(shooter)[1]++;
         detector(shooter).hitUs(power);
         learn(shooter, time, x, y, heading, power, 0);
     }
@@ -273,6 +281,7 @@ public final class WaveSurfer {
      * one that had not moved yet (engine-model G-04).
      */
     public void bulletHitBullet(String shooter, long time, double x, double y, double heading, double power) {
+        fireRecord(shooter)[2]++;
         learn(shooter, time, x, y, heading, power, 1.5);
     }
 
@@ -294,6 +303,24 @@ public final class WaveSurfer {
         for (EnemyWave w : waves) {
             w.shadows.remove(id);
         }
+    }
+
+    /**
+     * The enemy's hits on us per shot over the battle, its bullets that ours shot down left out, starting from a prior
+     * of {@link #PRIOR_HITS} in {@link #PRIOR_SHOTS}. Its shots still in the air at a round's end count as misses.
+     */
+    public double hitRateOnUs(String name) {
+        int[] r = FIRE_RECORDS.getOrDefault(name, new int[3]);
+        return (r[1] + PRIOR_HITS) / (Math.max(0, r[0] - r[2]) + PRIOR_SHOTS);
+    }
+
+    /** The power of the enemy's last shot in the battle, or {@link #FIRST_POWER} before its first. */
+    public double lastPower(String name) {
+        return LAST_POWERS.getOrDefault(name, FIRST_POWER);
+    }
+
+    private static int[] fireRecord(String name) {
+        return FIRE_RECORDS.computeIfAbsent(name, n -> new int[3]);
     }
 
     /** Whether this enemy drives at us, to ram us or to fight at point blank ({@link RamDetector}). */
@@ -369,6 +396,7 @@ public final class WaveSurfer {
             Path best = surfPaths(nearest, second, me, now);
             lastOption = best.first();
             lastPath = best;
+            lastSurfed = nearest.wave;
             return orbit(me, nearest.wave.x(), nearest.wave.y(), best.first());
         }
         // Ties keep the last way; a retreat left over from a robot that no longer drives at us becomes an orbit.
@@ -387,6 +415,26 @@ public final class WaveSurfer {
         lastOption = best;
         lastPath = null;
         return orbit(me, rammer.x, rammer.y, best);
+    }
+
+    /**
+     * Where the path chosen in this turn takes us at the end of each of the next {@code turns} turns, from the next one
+     * on, its last way held once its turns are over; null if this turn chose no path (no wave in the air, or a robot
+     * that drives at us). The surfer chooses again every turn as waves come and pass, so the later turns are a guess.
+     *
+     * @param me our state at the end of this turn, in the engine's convention, without commands
+     */
+    public double[][] plannedPositions(EngineRobot me, int turns) {
+        if (lastPath == null) {
+            return null;
+        }
+        EngineRobot r = me.copy();
+        double[][] positions = new double[turns][];
+        for (int i = 0; i < turns; i++) {
+            step(r, lastSurfed, null, lastPath.at(i));
+            positions[i] = new double[] {r.x, r.y};
+        }
+        return positions;
     }
 
     /**
@@ -960,6 +1008,7 @@ public final class WaveSurfer {
     }
 
     private void addWave(DetectedShot shot) {
+        fireRecord(shot.shooter())[0]++;
         // The enemy aimed with what it saw at the end of the turn before the shot.
         long aimed = ourStates.containsKey(shot.fireTime() - 1) ? shot.fireTime() - 1 : shot.fireTime();
         double[] us = ourStates.get(aimed);

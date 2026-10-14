@@ -65,6 +65,32 @@ class GunLogTest {
     }
 
     @Test
+    void theMirrorGunsAimParsesBack() {
+        double[] features = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1};
+        GunModel.Shot shot = new GunModel.Shot("a.B 1.0, beta", 17, features, 1, 0.5, 0.6, true, 0.25,
+                -0.7300000000000001, 0.9, 0.123456789, -2.0000000000000004);
+        GunModel.Aim aim = new GunModel.Aim(0.3, new double[] {0.1, 0.25, 0.2, 0.4, -2.0000000000000004},
+                GunModel.MIRROR);
+        GunLog.LoggedShot logged = GunLog.shot(GunLog.line(shot, aim));
+        assertEquals(shot.target(), logged.shot().target());
+        assertEquals(shot.randomDraw(), logged.shot().randomDraw());
+        assertEquals(shot.mirrorAim(), logged.shot().mirrorAim());
+        assertEquals(GunModel.MIRROR, logged.gun());
+        GunModel.Shot none = new GunModel.Shot("x", 3, features, 1, 0.5, 0.6, false, Double.NaN);
+        assertTrue(Double.isNaN(GunLog.shot(GunLog.line(none, aim)).shot().mirrorAim()));
+    }
+
+    @Test
+    void aLineFromBeforeTheMirrorGunIsReadWithoutItsAim() {
+        String old = "17,1,-1,0.5,0.6,NaN,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.3,3,-0.7,0.9,0.12,a.B 1.0, beta";
+        GunLog.LoggedShot logged = GunLog.shot(old);
+        assertEquals("a.B 1.0, beta", logged.shot().target());
+        assertEquals(GunModel.RANDOM, logged.gun());
+        assertEquals(0.12, logged.shot().randomDraw());
+        assertTrue(Double.isNaN(logged.shot().mirrorAim()));
+    }
+
+    @Test
     void aLineFromBeforeTheRandomGunIsReadWithoutItsRange() {
         String old = "17,1,-1,0.5,0.6,NaN,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.3,2,a.B 1.0, beta";
         GunLog.LoggedShot logged = GunLog.shot(old);

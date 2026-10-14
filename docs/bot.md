@@ -62,7 +62,11 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   (142.5): a surfer built on the BasicSurfer pattern matches a bullet that hit it to its wave by the speeds rounded to
   tenths, the wave's speed taken from our energy drop, whose floating-point noise rounds it the other way about four
   times in five, and then it does not learn the hit (2026-10-12; 1.9, a whole 143, never failed the match). Powers of
-  2.2 lost a point on the population.
+  2.2 lost a point on the population. Against the enemies we hit 25–55 % of the time, one power for all of them from
+  1.48 to 2.48 (2026-10-14): the score is flat from 2.0 to 2.5 and falls below 2.0. A lower power hits more often,
+  but deals less damage a turn, so the rounds last longer and the enemy hits us more; a higher one, below a hit rate
+  of a third, costs us energy with every shot (a shot costs its power and a hit returns three times it) and loses
+  rounds. Our hit rate alone does not tell which power scores more.
   - **Against an enemy we read** (`HitRecord`, `READ_HIT_RATE`): once 20 of our bullets at it have ended in the
     battle (hit it or missed; shot down or still in the air at the round's end left out) and 55 % of them hit, the
     power is 3 at any distance. Such enemies win almost no rounds and score only through their hits on us, so a
@@ -74,6 +78,23 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     angle: against the strong bots that gained about 1.5 points of score share and against the medium tier about 0.7,
     while 1.15 gained nothing (more hits do not make up for half the damage); 18 % instead of 25 % gave the medium tier
     0.55 less. Ten times the speed of 1.45 is 156.5, so the BasicSurfers' rounding misses its hits too (2026-10-13).
+  - **In an energy race** (`RacePower`, `RACE_ENERGY`, `RACE_CLOSE_ENERGY`): in a duel, while our energy is below
+    20, or the enemy's is below 20 and ours below 40, the round goes to whoever runs out last. Each robot loses
+    energy through its own shots (a shot costs p, a hit returns 3p) and through the other's hits; with each gun firing as soon as it is cool (a shot every 10 + 2p turns), our hit rate h,
+    the enemy's hit rate on us g and its power q, we lose p(1 − 3h)/(10 + 2p) + g · damage(q)/(10 + 2q) a turn and it
+    loses q(1 − 3g)/(10 + 2q) + h · damage(p)/(10 + 2p). The power is the one of 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.45 and
+    the normal one (never above it) with the largest ratio of its loss to ours, which makes the time we last longest
+    against the time it lasts, whatever the two energies are. h is our bullets' record against it over the battle,
+    scaled for p by the maximum escape angles (a faster bullet hits more often); g is its hits per detected shot over
+    the battle (`WaveSurfer.hitRateOnUs`), q its last shot's power. Against an enemy that hits us rarely and keeps
+    firing, a weak bullet costs us almost nothing while its misses run it down; against one that hits us often, our
+    damage has to end the round, and the power stays. The model predicts how long we last below 20 energy (about 155
+    turns at 1.65, measured 130) and how long Diamond lasts with its 0.1 below 20 (440, measured 450). Against the
+    strong and medium population it gained 0.4 points of score share below 20 alone (half a round won more a battle,
+    the damage kept) and 0.5 with the close races (against the strong tier 1.25, a round and a half won more a
+    battle); 0.1 below 20 for every enemy won the same rounds but lost the damage, the model below 30 whatever the
+    enemy's energy lost damage too, and keeping 450 px while firing weak bullets cost our hit rate against the strong
+    bots; against the weak tier, where few rounds become races, nothing changed (2026-10-14).
 - **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
   the guess-factor gun searched for its plan (at power 1.92, 4 waves in 14: in the turn it fires, the gun heat already
   includes the new shot): would each aim have been inside the hit
@@ -101,6 +122,22 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   the gun that would fire (the anti-surfer gun's or the main gun's choice) once it has been scored on 30 bullets and
   its record over them is the better one (DrussGT's idea). The range costs two predicted runs of the target, only in
   the turns the guns search.
+- **Mirror gun** (`MirrorAim`): some robots drive to where a fixed map sends our own position some turns earlier, most
+  of them to its point mirror through the field's centre, 2 to 46 turns late (16 such bots in the rumble, found on
+  its recordings of 2026-10-11). They move as well as we do against a gun that reads their own movement: our main gun
+  hit them 14–22 %. In a duel, for every lag from 0 to 60 turns, the enemy's position at the end of a turn is fitted
+  on ours that many turns earlier by least squares, as an affine map (any mirror, any centre, the shrink at the walls);
+  the sums last for the battle, and the lag with the least residual counts once it has 200 pairs and its map explains
+  half the variance of the enemy's position. The aim then follows the bullet: the target at the end of each turn is
+  the map of our position a lag before, and the bullet aims at the first such point it can reach. A short lag needs
+  our own position after the shot: the surfer's planned path stands for it (`WaveSurfer.plannedPositions`, its last
+  way held after its turns), only as many turns as the flight less the lag, so robots with a long lag cost nothing
+  more than the fit. The gun aims only in the turns the guns search and replaces the guess-factor or circular gun once
+  it has 20 weighted tries and the better weighted record. Against the closest mirrors (2–12 turns late) its aims
+  would hit 19–22 %, where a replay with our real later positions hits 37–59 %: our planned path is the limit, not
+  the map; against the one 46 turns late they would hit 30 %, and our hit rate on it rose from 22 to 37 %. Score +2.8
+  points of share on the 16 (2026-10-14); against the 63 robots that drive at us, which fit a map too, it changed
+  nothing.
 - **Shadow shots:** in a duel, in the turn before a shot of the anti-surfer gun, its peaks with at least 70 % of the
   best one's weight compete with its aim (at most three, 0.15 guess factors apart, and only those the turret can
   reach in one turn, 20°): the turret takes the heading
@@ -249,7 +286,7 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   drawn as they are; arcs are polylines, never `Arc2D`.
 - **What is drawn:** our gun waves (grey, a fired one orange) with their hit ranges on the target (green), enemy waves
   (red) with their hit range on us (yellow), the gun's reference and escape angles, each gun's aim (guess factor
-  green, circular blue, anti-surfer orange, random violet; the chosen one thick), and per target the
+  green, circular blue, anti-surfer orange, random violet, mirror pink; the chosen one thick), and per target the
   guns' virtual hit rates and the data size.
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
@@ -262,9 +299,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   `gunpass` property per gun wave that passed its target in this turn (the plan's turn, whether it carried a bullet,
   the wave's reference and escape angle, the lowest and highest hitting offset from the reference), then `gunshot`
   with the turn's plan (the features, the direction, the reference, the escape angle, whether the guess-factor gun
-  searched, the circular aim, the guess factor found, the chosen gun, and the random gun's range and draw; lines
-  logged before 2026-10-12 lack the last three and are read without a random gun). That is everything `GunModel`
-  needs to replay the battle.
+  searched, the circular aim, the guess factor found, the chosen gun, the random gun's range and draw, and the mirror
+  gun's aim; lines logged before 2026-10-12 lack the random gun's three fields and lines logged before 2026-10-14 the
+  mirror gun's aim, and are read without those guns). That is everything `GunModel` needs to replay the battle.
   - `OgiGunLog` also logs `gunshield` when an enemy bullet destroys one of its bullets (the plan's turn and the
     shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
     that shoot bullets down would otherwise look easy to hit on the bench. The log keeps the guns' aims, not the

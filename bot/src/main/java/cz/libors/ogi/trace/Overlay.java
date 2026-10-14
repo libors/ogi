@@ -23,9 +23,11 @@ public final class Overlay {
     private static final Color HIT_RANGE = new Color(90, 220, 90, 220);
     private static final Color REFERENCE = new Color(200, 200, 200, 120);
     private static final Color ESCAPE = new Color(120, 120, 120, 120);
-    /** Per gun, in GunModel's order: guess factor green, circular blue, anti-surfer orange. */
+    /**
+     * Per gun, in GunModel's order: guess factor green, circular blue, anti-surfer orange, random violet, mirror pink.
+     */
     private static final Color[] GUN_COLORS = {new Color(90, 220, 90), new Color(80, 170, 255),
-            new Color(255, 160, 60), new Color(200, 120, 255)};
+            new Color(255, 160, 60), new Color(200, 120, 255), new Color(240, 90, 160)};
     private static final Color TEXT = new Color(230, 230, 230);
     private static final int CIRCLE_SEGMENTS = 72;
     private static final int ARC_SEGMENTS = 12;

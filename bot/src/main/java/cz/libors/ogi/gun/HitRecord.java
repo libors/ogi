@@ -22,6 +22,10 @@ public final class HitRecord {
         return ended;
     }
 
+    public int hits() {
+        return hits;
+    }
+
     /** Hits per bullet ended; NaN before the first one ended. */
     public double rate() {
         return ended == 0 ? Double.NaN : (double) hits / ended;
