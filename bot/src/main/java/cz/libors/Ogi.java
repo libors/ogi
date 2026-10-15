@@ -8,6 +8,7 @@ import cz.libors.ogi.gun.GuessFactorGun;
 import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.gun.HitRecord;
+import cz.libors.ogi.gun.MeleeGun;
 import cz.libors.ogi.gun.MirrorAim;
 import cz.libors.ogi.gun.RacePower;
 import cz.libors.ogi.move.MeleeMovement;
@@ -113,6 +114,8 @@ public class Ogi extends TeamRobot {
     private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
     /** The gun searches its data only this many turns before it can fire. */
     private static final int AIM_LEAD_TURNS = 4;
+    /** In a melee the melee gun aims ({@link MeleeGun}) in this many turns before the gun is cool, and while it is. */
+    private static final int MELEE_AIM_TURNS = 2;
     /** How far past a disabled enemy we drive when ramming it, so that we do not stop short. */
     private static final double RAM_OVERSHOOT = 50;
     /**
@@ -199,6 +202,10 @@ public class Ogi extends TeamRobot {
     private int teammatesAlive;
     private GuessFactorGun gun;
     private MirrorAim mirror;
+    private MeleeGun meleeGun;
+    /** The melee gun's aim planned for the next turn's shot (mathematical), and the turn it was planned in. */
+    private double meleeAim;
+    private long meleeAimTime = -1;
     private WaveSurfer surfer;
     private Shield shield;
     /** The enemy we shielded against in the last turn, or null. */
@@ -238,6 +245,7 @@ public class Ogi extends TeamRobot {
         teammatesAlive = getTeammates() == null ? 0 : getTeammates().length;
         gun = new GuessFactorGun(field);
         mirror = new MirrorAim(field);
+        meleeGun = new MeleeGun(field);
         aimSpread = new Random(~roundSeed());
         randomAim = new Random(roundSeed() * 31 + 17);
         randomDraw = randomAim.nextDouble();
@@ -557,7 +565,8 @@ public class Ogi extends TeamRobot {
             return false;
         }
         double gunHeading = Angles.fromRobocode(getGunHeadingRadians());
-        if (Math.abs(Angles.normalizeRelative(plan.get().aim() - gunHeading)) >= AIM_TOLERANCE
+        double planned = meleeAimTime == now - 1 ? meleeAim : plan.get().aim();
+        if (Math.abs(Angles.normalizeRelative(planned - gunHeading)) >= AIM_TOLERANCE
                 || teammateInLineOfFire(target.distanceTo(getX(), getY()), now)) {
             return false;
         }
@@ -566,7 +575,9 @@ public class Ogi extends TeamRobot {
         if (bullet != null) {
             surfer.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
                     Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
-            inFlight.put(bullet, new FiredShot(target.name(), plan.get().time()));
+            String aimedAt = meleeAimTime == now - 1 && meleeGun.aimedAt() != null ? meleeGun.aimedAt()
+                    : target.name();
+            inFlight.put(bullet, new FiredShot(aimedAt, plan.get().time()));
         }
         fired(bullet, plan.get());
         return true;
@@ -601,6 +612,15 @@ public class Ogi extends TeamRobot {
                 mirrorAim);
         if (plannedShot && getOthers() == 1 && getGunHeat() <= getGunCoolingRate() + 1e-9 && !Double.isNaN(aim)) {
             aim = shadowingAim(target.name(), now, nextX, nextY, planned, aim, offset);
+        }
+        meleeAimTime = -1;
+        if (getOthers() - teammatesAlive > 1 && getGunHeat() <= MELEE_AIM_TURNS * getGunCoolingRate() + 1e-9) {
+            double melee = meleeGun.aim(now + 1, nextX, nextY, Rules.getBulletSpeed(planned));
+            if (!Double.isNaN(melee)) {
+                aim = melee;
+                meleeAim = melee;
+                meleeAimTime = now;
+            }
         }
         if (!Double.isNaN(aim)) {
             setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
@@ -828,6 +848,26 @@ public class Ogi extends TeamRobot {
         EnemySighting sighting = new EnemySighting(e.getName(), x, y, Angles.fromRobocode(e.getHeadingRadians()),
                 e.getVelocity(), e.getEnergy(), e.getTime(), getRoundNum());
         world.observeEnemy(sighting);
+        int enemies = getOthers() - teammatesAlive;
+        if (enemies > 1) {
+            // The robot closest to it, as far as we know: us, or another robot where we saw it last.
+            double cx = getX();
+            double cy = getY();
+            for (EnemyState other : world.enemies()) {
+                if (!other.name().equals(e.getName())
+                        && Math.hypot(other.x() - x, other.y() - y) < Math.hypot(cx - x, cy - y)) {
+                    cx = other.x();
+                    cy = other.y();
+                }
+            }
+            for (World.Teammate t : world.recentTeammates(e.getTime(), MAX_TEAMMATE_AGE)) {
+                if (Math.hypot(t.x() - x, t.y() - y) < Math.hypot(cx - x, cy - y)) {
+                    cx = t.x();
+                    cy = t.y();
+                }
+            }
+            meleeGun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), cx, cy, enemies);
+        }
         gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
         shield.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
         Optional<DetectedShot> shot = surfer.scanned(e.getName(), e.getTime(), x, y, sighting.heading(),
@@ -932,6 +972,7 @@ public class Ogi extends TeamRobot {
         }
         world.robotDied(e.getName());
         gun.robotDied(e.getName());
+        meleeGun.robotDied(e.getName());
         surfer.robotDied(e.getName());
     }
 }

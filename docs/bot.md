@@ -25,7 +25,8 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading; the surfer follows
    the bullet for its shadows on the enemy waves (from the next turn's move on).
 6. **Gun waves** advance; last turn's plan becomes this turn's wave.
-7. **Aim:** the plan for the next turn's shot, from the predicted position, with the turret's random spread.
+7. **Aim:** the plan for the next turn's shot, from the predicted position, with the turret's random spread; in a
+   melee, before a shot, the melee gun's aim at all enemies at once.
 
 ## Waves and hit ranges (`cz.libors.ogi.wave`)
 
@@ -152,6 +153,25 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   distance, drawn every turn from a seeded generator of its own (`Plan.offset`). The guns learn and are scored on
   their own aims. Against a robot that stands still the gun would otherwise aim exactly at its centre, which a bullet
   shielder predicts to a fraction of a pixel and shoots down; a few pixels off the centre hit as often.
+- **Melee gun** (`MeleeGun`): while more than one enemy lives, in the two turns before the gun is cool and while it
+  is, the turret aims where the melee gun says, and the shot fires on that plan; the guns above still plan and learn
+  from their waves. A melee robot moves relative to its own closest enemy, not to us, so the melee gun learns each
+  enemy's movement in the enemy's own frame:
+  - **Records:** every scan of an enemy starts one, with its situation then: speed, acceleration and turn rate since
+    its previous scan (up to 8 turns back), the room to the wall along its way of travel (up to 400 px), the distance
+    to its closest robot (us included, the others where we saw them last; up to 600 px) and that robot's bearing
+    from its way of travel (cosine and sine), and the number of enemies alive. Its later scans, up to 70 turns on, add
+    where it had got to, forward and to the left in its frame at the start. The records last for the battle, at most
+    1500 per enemy.
+  - **Aim:** for every enemy scanned in the last 8 turns, the 12 records nearest its situation now (plain Euclidean
+    distance over the features) each give where it will be when the bullet arrives: its last scan plus the record's
+    displacement after the turns since that scan plus the flight (interpolated between the record's samples,
+    iterated three times for the flight), turned into its way of travel now. Positions outside the field, and records
+    that end before, are left out. Each position is a bearing from the bullet's origin with a triangle over a robot's
+    width, weighted 1 / (feature distance + 0.05) and 1 / the enemy's distance; the gun aims at the bearing with the
+    most weight, over all enemies at once, and the bullet's record goes to the enemy that weighed most there.
+  - Measured on the melee rumble's population (2026-10-15): 2.2 points of APS more than the duel's guns at the
+    closest enemy, rounds won 51 → 64 %, our hit rate 25 → 28 %.
 - **One model for the bot and the bench:** what the gun knows about an enemy and how it decides (the data, the
   virtual scores, the choice of gun, learning a passed wave) is `GunModel`. The tunable numbers (feature weights,
   the neighbour count, the virtual weight, the tries before switching) are `GunParameters`; the bot plays with
