@@ -30,7 +30,8 @@ import java.util.Set;
  *
  * <p>A line {@code weight [name] n} says how many robots of the rumble the group stands for, e.g. a rumble tier's
  * size. With weights, every group needs one, and the report adds a rumble estimate: each opponent weighs the same
- * within its group, and the groups weigh as their robots in the rumble.
+ * within its group, and the groups weigh as their robots in the rumble. A {@code melee} set needs weights: its
+ * battles draw their opponents from the groups by them ({@link MeleeDraws}).
  *
  * @param title   the set's {@code title} line, or empty
  * @param weights per group, the robots of the rumble it stands for; empty without {@code weight} lines
@@ -44,6 +45,8 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
     /** The rumble's battle settings. */
     enum Format {
         DUEL("1v1", 800, 600, 35),
+        /** Ten robots: the subject and nine opponents of the set ({@link MeleeDraws}). */
+        MELEE("melee", 1000, 1000, 35),
         TEAM("team", 1200, 1200, 10);
 
         final String label;
@@ -130,6 +133,10 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
         }
         if (format == null || opponents.isEmpty()) {
             throw new IllegalArgumentException(name + ": needs a format line and at least one opponent");
+        }
+        if (format == Format.MELEE && weights.isEmpty()) {
+            throw new IllegalArgumentException(name + ": a melee set needs a weight for each group: its battles draw "
+                    + "their opponents by the weights");
         }
         if (!weights.isEmpty()) {
             for (Opponent o : opponents) {

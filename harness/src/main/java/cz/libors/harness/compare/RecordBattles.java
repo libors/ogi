@@ -61,6 +61,9 @@ public final class RecordBattles {
         }
         OpponentSet set = OpponentSet.read(Path.of(options.get("opponents")));
         Format format = set.format();
+        if (format == Format.MELEE) {
+            usage(set.name() + " is a melee set: recordings are of one opponent at a time");
+        }
         List<String> only = options.get("only").isEmpty() ? List.of()
                 : Arrays.stream(options.get("only").split(",")).map(String::trim).toList();
         List<String> names = set.opponents().stream().map(OpponentSet.Opponent::name).toList();

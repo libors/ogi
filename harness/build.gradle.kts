@@ -773,7 +773,7 @@ tasks.register<JavaExec>("submit") {
     classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
     val baseline = providers.gradleProperty("baseline")
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "note",
+    val passed = listOf("bounds", "maxPairs", "pairsPerOpponent", "draws", "starts", "seed", "rounds", "metric", "note",
         "timeout", "reuse").mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val versionFile = snapshotVersionFile
     val port = providers.gradleProperty("port").orElse("8765")

@@ -49,6 +49,14 @@ h2:first-child { margin-top: 4px; }
 .err.past { color: var(--muted); }
 details summary { cursor: pointer; color: var(--muted); }
 
+/* One tab per battle format: its jobs and its battles */
+.tabs { display: flex; gap: 4px; margin-top: 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+button.tab { font-size: 14px; padding: 6px 14px; border: 1px solid transparent; border-bottom: none;
+  border-radius: 8px 8px 0 0; background: none; color: var(--muted); margin-bottom: -1px; }
+button.tab:hover { color: var(--text); border-color: var(--line); }
+button.tab.on { color: var(--text); background: var(--panel); border-color: var(--line); font-weight: 600; }
+button.tab .tsub { font-size: 12px; font-weight: normal; color: var(--muted); margin-left: 6px; }
+
 /* Jobs left, detail right */
 .layout { display: grid; grid-template-columns: minmax(380px, 5fr) 7fr; gap: 16px; align-items: start; }
 @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
@@ -119,6 +127,7 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 
   <h2>Workers</h2>
   <div class="workers" id="workers"></div>
   <div class="muted" id="totals" style="font-size:13px; margin-top:8px"></div>
+  <nav class="tabs" id="tabs"></nav>
 
   <div class="layout">
     <div>
@@ -134,6 +143,9 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 
 "use strict";
 // The job shown on the right: picked by a click (kept in the URL), else the running one.
 let selected = (location.hash.match(/job=([\w-]+)/) || [])[1] || null;
+// The battle format whose jobs the lists show (kept in the URL); jobs of other formats have tabs of their own.
+const FORMATS = ["1v1", "melee", "team"];
+let tab = (location.hash.match(/tab=([\w-]+)/) || [])[1] || FORMATS[0];
 let lastState = null;
 // The job on the right as last fetched, and the one whose page the panel holds now.
 let lastJob = null, detailShown = null;
@@ -206,6 +218,7 @@ const METRIC_HELP = "Score share: our part of both robots' points in a battle, i
 /** What the test looks for, in words. */
 function testWords(p) {
   if (p.metric === "recordings") return "Recordings for debugging and the benches";
+  if (p.bounds === "fixed" && p.draws) return `Fixed ${p.draws} draws of nine opponents, no stopping test`;
   if (p.bounds === "fixed") return `Fixed ${p.pairsPerOpponent ?? ""} pairs per opponent, no stopping test`;
   const d0 = p.delta0, d1 = p.delta1, m = METRIC[p.metric] || p.metric;
   if (p.bounds === "gainer") return `Looking for a gain of ${fmt(d1, 1, true)} ${m} or more`;
@@ -292,8 +305,46 @@ async function load() {
 
 function shownJob(s) {
   if (selected) return selected;
-  const running = s.jobs.find(j => j.state === "RUNNING");
+  const running = s.jobs.find(j => j.state === "RUNNING" && formatOf(j) === tab);
   return running ? running.id : null;
+}
+
+const formatOf = j => j.format || FORMATS[0];
+const isActive = j => j.state === "QUEUED" || j.state === "RUNNING";
+
+function writeHash() {
+  const parts = [];
+  if (tab !== FORMATS[0]) parts.push("tab=" + tab);
+  if (selected) parts.push("job=" + selected);
+  location.hash = parts.join("&");
+}
+
+function selectTab(format) {
+  if (format === tab) return;
+  tab = format;
+  if (selected && lastState && !lastState.jobs.some(j => j.id === selected && formatOf(j) === tab)) selected = null;
+  writeHash();
+  load();
+}
+
+/** A tab per format: its battles over all jobs, and its jobs running or waiting. */
+function tabs(s) {
+  const n = v => Number(v).toLocaleString("en-US");
+  const byFormat = new Map(((s.totals || {}).formats || []).map(f => [f.format, f]));
+  const known = FORMATS.concat([...byFormat.keys()].filter(f => !FORMATS.includes(f)))
+    .concat([...new Set(s.jobs.map(formatOf))].filter(f => !FORMATS.includes(f) && !byFormat.has(f)));
+  return known.map(f => {
+    const t = byFormat.get(f);
+    const active = s.jobs.filter(j => formatOf(j) === f && isActive(j));
+    const running = active.filter(j => j.state === "RUNNING").length;
+    const waiting = active.length - running;
+    const queue = [running ? running + " running" : "", waiting ? waiting + " waiting" : ""].filter(x => x).join(", ");
+    const kinds = t ? Object.entries(t.kinds).map(([k, v]) => `${k} ${n(v)}`).join(", ") : "";
+    const help = t ? `${n(t.battles)} battles played over all ${f} jobs, ${fmt(t.slotHours, 0)} slot hours (${kinds})`
+      : `No ${f} battles played yet`;
+    return `<button class="tab${f === tab ? " on" : ""}" title="${esc(help)}" onclick="selectTab('${esc(f)}')">${esc(f)}`
+      + `<span class="tsub">${t ? n(t.battles) + " battles" : "no battles"}${queue ? " · " + queue : ""}</span></button>`;
+  }).join("");
 }
 
 function render(s) {
@@ -303,17 +354,20 @@ function render(s) {
   patch(document.getElementById("workers"), s.workers.map(w => worker(w, s.now, keys)).join("")
     || '<div class="empty">No workers configured.</div>');
   patch(document.getElementById("totals"), totals(s.totals));
+  patch(document.getElementById("tabs"), tabs(s));
   const shown = shownJob(s);
-  const active = s.jobs.filter(j => j.state === "QUEUED" || j.state === "RUNNING");
-  const done = s.jobs.filter(j => !(j.state === "QUEUED" || j.state === "RUNNING"));
+  const jobs = s.jobs.filter(j => formatOf(j) === tab);
+  const active = jobs.filter(isActive);
+  const done = jobs.filter(j => !isActive(j));
   patch(document.getElementById("active"), active.map((j, i) => jobCard(j, s.now, shown, i, active.length)).join("")
-    || '<div class="empty">Nothing waiting. Submit with ./gradlew submit -Pbaseline=HEAD "-Pnote=what changed"</div>');
+    || `<div class="empty">No ${esc(tab)} job waiting. Submit with ./gradlew submit -Pbaseline=HEAD "-Pnote=what changed"`
+      + ` and an opponent set of this format (-Popponents=…).</div>`);
   // The server sends the finished jobs newest first.
   const more = done.length <= FINISHED_SHOWN ? ""
     : `<button class="more" onclick="toggleFinished()">${showAllFinished ? `Show the last ${FINISHED_SHOWN} only`
       : `Show all ${done.length} (${done.length - FINISHED_SHOWN} older)`}</button>`;
   patch(document.getElementById("done"), (showAllFinished ? done : done.slice(0, FINISHED_SHOWN))
-    .map(j => jobCard(j, s.now, shown)).join("") + more || '<div class="empty">No finished jobs yet.</div>');
+    .map(j => jobCard(j, s.now, shown)).join("") + more || `<div class="empty">No finished ${esc(tab)} jobs yet.</div>`);
 }
 
 function toggleFinished() {
@@ -321,16 +375,12 @@ function toggleFinished() {
   render(lastState);
 }
 
-/** Every battle the workers played to its end over all jobs on disk, per format; cached battles are not played. */
+/** Every battle the workers played to its end over all jobs on disk; cached battles are not played. Per format in the tabs. */
 function totals(t) {
   if (!t || !t.battles) return "";
   const n = v => Number(v).toLocaleString("en-US");
-  const formats = t.formats.map(f => {
-    const kinds = Object.entries(f.kinds).map(([k, v]) => `${k} ${n(v)}`).join(", ");
-    return `<span title="${esc(kinds)}">${esc(f.format)} ${n(f.battles)} battles, ${fmt(f.slotHours, 0)} slot hours</span>`;
-  }).join(" · ");
   const since = String(t.since).split(" ")[0];
-  return `<span title="Battles taken from the cache are not counted: they were played once, by the job that first needed them">All jobs since ${esc(since)}: ${n(t.battles)} battles played, ${fmt(t.slotHours, 0)} slot hours</span> · ${formats}`;
+  return `<span title="Battles taken from the cache are not counted: they were played once, by the job that first needed them">All jobs since ${esc(since)}: ${n(t.battles)} battles played, ${fmt(t.slotHours, 0)} slot hours</span>`;
 }
 
 function worker(w, now, keys) {
@@ -400,7 +450,7 @@ function jobCard(j, now, shown, index, count) {
 
 function select(id) {
   selected = selected === id ? null : id;
-  location.hash = selected ? "job=" + selected : "";
+  writeHash();
   load();
 }
 
@@ -424,7 +474,10 @@ function renderDetail(j) {
   const head = `<div class="card">
     <div class="top"><span class="name">${esc(titleOf(j))}</span><span class="badge s-${j.state}">${j.state.toLowerCase()}</span></div>
     <div class="big ${res.cls}">${esc(res.text)}</div>
-    ${isCompare ? `<div class="explain">Change in ${esc(METRIC[p.metric] || p.metric)}, new version minus old, averaged over
+    ${isCompare && p.unit === "draws" ? `<div class="explain">Change in ${esc(METRIC[p.metric] || p.metric)} against
+      each of a battle's nine opponents, new version minus old, averaged over the draws (both versions meet the same
+      field on the same seed); ± is the 95 % interval. Better or worse only when the whole interval says so.</div>`
+    : isCompare ? `<div class="explain">Change in ${esc(METRIC[p.metric] || p.metric)}, new version minus old, averaged over
       the opponents; ± is the 95 % interval. Better or worse only when the whole interval says so.</div>` : ""}
     ${active ? evidenceBar(p) : `<div style="margin-top:6px">${esc(verdictWords(j))}</div>`}
     <div class="kv">
@@ -439,7 +492,8 @@ function renderDetail(j) {
   const boards = (d.scoreboards || []).map(b => {
     const diff = b.difference, h = b.halfWidth;
     const cls = diff - h > 0 ? "pos" : diff + h < 0 ? "neg" : "";
-    const help = b.name === "rumble" ? ` title="${esc(RUMBLE_HELP)}"` : "";
+    const text = BOARD_HELP[b.name] || (b.name === "all" && p.unit === "draws" ? MELEE_ALL_HELP : "");
+    const help = text ? ` title="${esc(text)}"` : "";
     return `<tr><td${help}>${esc(boardName(b.name))} <span class="muted">(${b.opponents})</span></td>
       <td class="r num">${fmt(b.baseline, 1)}</td><td class="r num">${fmt(b.candidate, 1)}</td>
       <td class="r num ${cls}">${fmt(diff, 2, true)} ± ${fmt(h)}</td>
@@ -553,6 +607,14 @@ function opponentHead(c) {
 
 const RUMBLE_HELP = "An estimate for the rumble: every opponent weighs the same within its group, and the groups "
   + "weigh as many robots as they stand for in the rumble (the set's weight lines). The test decides on All.";
+const MELEE_ALL_HELP = "The melee rumble's APS estimate of each version: our share of the points against each of a "
+  + "battle's nine opponents, averaged over the draws. The draws give every group of the set its share of the "
+  + "rumble's participants, so no weights are needed. The test decides on this row.";
+const BOARD_HELP = {
+  rumble: RUMBLE_HELP,
+  survival: "Survival: our first places in % of the rounds, as the melee rumble's second column; the number is the "
+    + "draws. The other rows' wins are pairwise: more points than that opponent in the battle.",
+};
 
 function boardName(name) {
   if (name === "all") return "All";

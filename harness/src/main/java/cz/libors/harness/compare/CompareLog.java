@@ -167,7 +167,7 @@ final class CompareLog implements Closeable {
         out.close();
     }
 
-    private static String configLine(Map<String, String> config) {
+    static String configLine(Map<String, String> config) {
         StringJoiner j = new StringJoiner("\t");
         j.add("config");
         config.forEach((k, v) -> {

@@ -35,6 +35,16 @@ class OpponentSetTest {
     }
 
     @Test
+    void aMeleeSetNeedsWeights() {
+        OpponentSet set = OpponentSet.parse("melee", List.of("format melee", "weight [a] 415", "[a]", "a.A 1"));
+        assertEquals(OpponentSet.Format.MELEE, set.format());
+        assertEquals(1000, set.format().width);
+        assertEquals(35, set.format().rounds);
+        assertThrows(IllegalArgumentException.class,
+                () -> OpponentSet.parse("melee", List.of("format melee", "[a]", "a.A 1")));
+    }
+
+    @Test
     void theTitleIsOptional() {
         OpponentSet set = OpponentSet.parse("plain", List.of("format team", "sampleteam.MyFirstTeam"));
         assertTrue(set.title().isEmpty());

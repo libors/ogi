@@ -1,6 +1,7 @@
 package cz.libors.harness.queue;
 
 import cz.libors.harness.compare.CompareJob;
+import cz.libors.harness.compare.MeleeJob;
 import cz.libors.harness.queue.Protocol.Channel;
 import cz.libors.harness.queue.Protocol.Message;
 import cz.libors.harness.queue.QueueJob.State;
@@ -313,6 +314,9 @@ public final class Server {
                 if (job instanceof CompareJob c) {
                     c.environment(this::environment);
                     c.cache(battleCache);
+                } else if (job instanceof MeleeJob m) {
+                    m.environment(this::environment);
+                    m.cache(battleCache);
                 }
                 jobs.put(id, job);
                 if (job.state().active()) {

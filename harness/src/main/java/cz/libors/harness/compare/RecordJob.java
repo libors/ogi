@@ -226,6 +226,11 @@ public final class RecordJob extends QueueJob {
     }
 
     @Override
+    public String format() {
+        return format.label;
+    }
+
+    @Override
     public String title() {
         return String.format(Locale.ROOT, "%s %s · recordings · %s · %d pairs%s%s", robot, version, set.name(), pairs,
                 keys == null ? "" : " · " + String.join(",", keys), debug ? "" : " · no debug mode");

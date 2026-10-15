@@ -95,6 +95,11 @@ public final class BattleCache {
      * robots), or empty if the battle is not to be cached.
      */
     public Optional<String> key(String worker, BattleSpec spec, String subjectJar) {
+        return key(worker, spec, 0, subjectJar);
+    }
+
+    /** The same for a battle whose subject is robot {@code subjectIndex} (a melee battle's subject joins anywhere). */
+    public Optional<String> key(String worker, BattleSpec spec, int subjectIndex, String subjectJar) {
         if (spec.record() || spec.debug()) {
             return Optional.empty();
         }
@@ -108,10 +113,8 @@ public final class BattleCache {
         fields.put("seed", Long.toString(spec.seed()));
         fields.put("starts", spec.startsSeed() == null ? "random" : "fixed " + spec.startsSeed());
         List<String> robots = spec.robots();
-        fields.put("robot 0", robots.get(0));
-        fields.put("jar 0", subjectJar);
-        for (int i = 1; i < robots.size(); i++) {
-            Optional<String> jar = workers.robotJar(worker, robots.get(i));
+        for (int i = 0; i < robots.size(); i++) {
+            Optional<String> jar = i == subjectIndex ? Optional.of(subjectJar) : workers.robotJar(worker, robots.get(i));
             if (jar.isEmpty()) {
                 return Optional.empty();
             }

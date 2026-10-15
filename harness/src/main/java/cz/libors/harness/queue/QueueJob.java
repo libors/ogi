@@ -165,6 +165,9 @@ public abstract class QueueJob {
     /** A one-line description: what is compared with what, against what. */
     public abstract String title();
 
+    /** The battle format of its opponent set ({@code 1v1}, {@code melee}, {@code team}): the dashboard's tab. */
+    public abstract String format();
+
     /** For the dashboard's queue table. */
     public abstract Map<String, Object> progress();
 
@@ -177,6 +180,7 @@ public abstract class QueueJob {
         m.put("id", id());
         m.put("type", type());
         m.put("title", title());
+        m.put("format", format());
         m.put("note", note());
         m.put("state", state().name());
         m.put("reason", reason());
@@ -196,6 +200,10 @@ public abstract class QueueJob {
         }
         String type = spec.getProperty("type");
         if ("compare".equals(type)) {
+            // A comparison against a melee set plays draws of nine opponents instead of one opponent at a time.
+            if (cz.libors.harness.compare.MeleeJob.melee(Files.readAllLines(dir.resolve("opponents.txt")))) {
+                return cz.libors.harness.compare.MeleeJob.open(dir, spec);
+            }
             return cz.libors.harness.compare.CompareJob.open(dir, spec);
         }
         if ("record".equals(type)) {

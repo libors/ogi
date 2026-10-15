@@ -1,6 +1,7 @@
 package cz.libors.harness.queue;
 
 import cz.libors.harness.compare.CompareJob;
+import cz.libors.harness.compare.MeleeJob;
 import cz.libors.harness.compare.RecordJob;
 
 import java.io.IOException;
@@ -22,7 +23,8 @@ import java.util.Properties;
  *
  * <p>Usage: {@code Submit state=<dir> type=compare robot=<class> team=<class> baseline=<version>
  * candidate=<version> opponents=<file> jar=<path>... [bounds=..] [maxPairs=n] [pairsPerOpponent=n] [starts=..]
- * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>] [reuse=false]}, or {@code type=record robot=<class>
+ * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>] [reuse=false]} (against a melee set
+ * {@code [draws=n]} instead of {@code pairsPerOpponent}), or {@code type=record robot=<class>
  * version=<version> opponents=<file> [jar=<path>] [pairs=n] [keys=<debug key>,...] [seed=n] [rounds=n] [starts=..]
  * [timeout=..] [debug=false] [note=..]}; a recording without the subject's jar plays a foreign robot the worker has.
  */
@@ -30,7 +32,7 @@ public final class Submit {
 
     private static final List<String> PASSED = List.of("robot", "team", "baseline", "candidate", "bounds",
             "maxPairs", "pairsPerOpponent", "starts", "seed", "rounds", "metric", "timeout", "note", "version", "pairs",
-            "keys", "reuse", "debug");
+            "keys", "reuse", "debug", "draws");
 
     private Submit() {
     }
@@ -74,7 +76,8 @@ public final class Submit {
             }
             spec.setProperty("jar." + name, sha);
         }
-        String what = type.equals("compare") ? CompareJob.check(spec, lines) : RecordJob.check(spec, lines);
+        String what = !type.equals("compare") ? RecordJob.check(spec, lines)
+                : MeleeJob.melee(lines) ? MeleeJob.check(spec, lines) : CompareJob.check(spec, lines);
 
         String id = new SimpleDateFormat("yyMMdd-HHmmss").format(new Date(now)) + "-"
                 + Integer.toHexString(0x100 + new SecureRandom().nextInt(0xf00));

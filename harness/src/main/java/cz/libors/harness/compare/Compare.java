@@ -170,6 +170,9 @@ public final class Compare {
         }
         Path home = Path.of(args[0]);
         OpponentSet set = OpponentSet.read(Path.of(options.get("opponents")));
+        if (set.format() == Format.MELEE) {
+            usage(set.name() + " is a melee set: melee comparisons run on the queue (submit)");
+        }
         try (BattleRunner runner = new BattleRunner(home)) {
             new Compare(options, set, runner).run(home);
         }

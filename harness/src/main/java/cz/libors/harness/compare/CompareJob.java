@@ -159,6 +159,9 @@ public final class CompareJob extends QueueJob {
      */
     public static String check(Properties spec, List<String> opponentLines) {
         OpponentSet set = OpponentSet.parse(spec.getProperty("opponentSet"), opponentLines);
+        if (set.format() == Format.MELEE) {
+            throw new IllegalArgumentException(set.name() + " is a melee set: its comparison is a MeleeJob");
+        }
         Bounds.parse(spec.getProperty("bounds", "gainer"));
         Measure.parse(spec.getProperty("metric", "score"));
         Compare.fixedStarts(spec.getProperty("starts", "random"));
@@ -226,6 +229,11 @@ public final class CompareJob extends QueueJob {
     @Override
     public boolean needsForeign() {
         return !cz.libors.harness.Sandbox.foreign(opponents()).isEmpty();
+    }
+
+    @Override
+    public String format() {
+        return format.label;
     }
 
     @Override

@@ -31,6 +31,7 @@ results. Every score claim about the bot must come from here.
 | `queue.Executor`, `queue.Slot` | The worker side: slots, each a JVM with a Robocode home of its own, driven over standard input and output |
 | `queue.Submit`, `queue.QueueClient`, `queue.Remote` | Queue a job; the queue from a terminal; run one main class on a Windows worker |
 | `queue.QueueJob`, `compare.CompareJob`, `compare.RecordJob` | A job in the queue; a comparison run as one, with pairs on many slots at once; recordings as one |
+| `compare.MeleeJob`, `compare.MeleeDraws`, `compare.MeleeLog` | A comparison against a melee set: draws of nine opponents, their log; see [A melee comparison](#a-melee-comparison-comparemeleejob) |
 | `queue.BattleCache` | Battles already played or being played, shared between jobs; see [Battle cache](#battle-cache-queuebattlecache) |
 | `queue.Protocol`, `queue.BattleSpec`, `queue.Ssh`, `queue.WorkerConfig` | Line protocol, a battle and its outcome on the wire, ssh and scp to Windows, where things are on a worker |
 
@@ -274,7 +275,8 @@ compares uncommitted changes with `HEAD`:
 ### Opponent sets
 
 A text file per set in `harness/opponents/`: an optional `title` line that says in words what the set is (the
-dashboard shows it), a `format` line (`1v1`: 800×600, 35 rounds; `team`: 1200×1200, 10 rounds), then one robot or
+dashboard shows it), a `format` line (`1v1`: 800×600, 35 rounds; `melee`: 1000×1000, 35 rounds, ten robots, see
+[A melee comparison](#a-melee-comparison-comparemeleejob); `team`: 1200×1200, 10 rounds), then one robot or
 team per line as Robocode lists it, including its version. A line `[name]` starts a group: opponents under
 `[strong]` form a scoreboard after the overall one (and after the rumble estimate, if there are weights), every other
 group but `[other]` a scoreboard of its own (e.g. rumble tiers); `[all]` and `[rumble]` are reserved;
@@ -674,6 +676,58 @@ configuration line, so its `battles.tsv` reads like a local one:
   and with 12 slots Ogi skipped a few turns in the short lab battles, so that 5 of 30 pairs of identical code
   differed. A restarted server and a dropped connection both resumed with every pair counted once.
 
+### A melee comparison (`compare.MeleeJob`)
+
+`submit` with a set whose format is `melee` queues a melee comparison: the same command and versions, but each battle
+puts the subject among nine opponents of the set, as the melee rumble does. Only the queue runs it; `compare`,
+`recordBattles` and the recording jobs refuse melee sets.
+
+```sh
+./gradlew submit -Pbaseline=HEAD -Popponents=.robocode/foreign/rumble-melee-2026-10.txt -Pbounds=nonregression
+./gradlew submit -Pbaseline=HEAD -Popponents=.robocode/foreign/rumble-melee-2026-10.txt -Pdraws=60
+```
+
+- **What the rumble measures:** a melee battle is ten robots drawn uniformly from all participants. For every pair of
+  robots in it the rumble takes 100·S_a/(S_a + S_b) of their battle totals; a pairing's score is the mean over the
+  battles the two shared, and APS the mean over a robot's pairings. So the mean over uniform random fields of the
+  subject's mean pairwise share in its battle estimates its APS, with no weights.
+- **Draws** (`MeleeDraws`): draw d of the run seed gives nine opponents, the subject's place among the ten robots and
+  the battle's seed. Both versions play the same draw, so a draw is a pair, and in later jobs the baseline's battles
+  come from the [battle cache](#battle-cache-queuebattlecache) as in 1v1 (the cache key takes the robots in the
+  battle's order).
+  - A melee set needs a `weight` for each group: the rumble's participants the group stands for (e.g. ranks 1–30,
+    31–100, ...). A draw gives each group a quota of the nine places, 9·w_g/W on average: the whole part of it, and
+    the places left by systematic sampling over the fractional parts, so a group's count is exact on average and
+    varies by one at most. Within a group the opponents are drawn uniformly without repeats.
+  - Each participant of a group thus appears with probability 9·w_g/(W·n_g), the rumble's 9/W when the set holds the
+    whole group; participants the set lacks (jars denied) are stood in for by the rest of their group.
+  - The quotas take out the noise of how many strong opponents a field happens to hold; the estimate stays the
+    rumble's.
+  - The subject joins the opponents at a random place, since the engine places the robots of a round in index order
+    (engine-model G-41).
+- **Starts:** random only. The two battles of a draw share round 1's starts and then diverge, because the engine's one
+  generator also serves the robots (G-33); fixed starts would repeat one layout in every round, which the rumble does
+  not do.
+- **Measure and test:** a battle's measure is the subject's mean pairwise share against its nine opponents. The test
+  is the sequential test of [Method](#method) on one stratum, the draws (a decision needs 21 draws), on the
+  difference new minus old per draw; `-Pdraws=n` instead plays n draws with no test. `bounds`, `maxPairs` (draws),
+  `seed`, `rounds`, `timeout` (default 1800 s per battle), `reuse` and `note` work as in 1v1; `metric` is `score`.
+- **Scoreboards**, in the shapes of 1v1, so the dashboard shows them alike:
+  - *All*: each version's mean measure over the draws, its rumble APS estimate, and the difference with the test's
+    interval.
+  - One row per group: the pairwise share against the group's opponents over all their appearances, a ratio of sums
+    over the draws; its interval treats the draws as clusters, because the opponents of one battle share its luck.
+  - *Survival*: the subject's first places in % of the rounds (the melee rumble's second column), per draw.
+  - Wins are pairwise (more points than that opponent in the battle). A melee battle does not tell who hit whom, so
+    only the overall row has hit rates (the subject's over all its bullets) and none has "hit by".
+- **Each opponent:** every opponent that appeared, with its appearances as pairs; a few each, so a diagnostic, not a
+  test.
+- **Log:** `battles.tsv` (`MeleeLog`): one line per battle with the draw, the side, the seed, the subject's place and
+  score components, shots, skipped turns, problems and time, then every opponent's name, score, firsts and skipped
+  turns. The
+  configuration line adds the draw scheme. A battle whose results lack one of the ten robots is played again, like a
+  failed one.
+
 ### Recordings as a job (`compare.RecordJob`)
 
 `./gradlew submitGunLogs -Popponents=<set> -Ppairs=2` queues the gun's logs of the working tree (a snapshot's
@@ -754,17 +808,20 @@ selection, a tooltip and a table's scroll position stay wherever the content sta
   restarts, the last error with its time (grey once the worker has brought a battle back, run or stopped normally
   since); under "more" the CPU constant, Java and JVM options and the battles running.
 - **Totals, under the workers** (`queue.BattleTotals`): every battle a worker played to its end over all the jobs on
-  disk, with its slot hours, per battle format (the set's `format` line) and, in a tooltip, per kind of job
-  (comparisons, recordings); a worker's card shows its own share. The server reads the jobs' `dispatch.tsv` once at
+  disk, with its slot hours; per battle format (the set's `format` line) on the format's tab and, in its tooltip,
+  per kind of job (comparisons, recordings); a worker's card shows its own share. The server reads the jobs' `dispatch.tsv` once at
   its start and adds each battle it logs there, so a restart does not reset them. A battle taken from the [battle cache](#battle-cache-queuebattlecache) is
   in no dispatch log and counts only in the job that played it; a deleted job takes its battles with it.
+- **A tab per battle format** (1v1, melee, team; the format of the job's opponent set, kept in the URL): the lists
+  below show that format's jobs only, and each tab says how many of its jobs run or wait. The queue itself is one:
+  jobs of all formats wait in one order and share the workers' slots.
 - **Jobs, on the left:** running and waiting, then the last 20 finished ones (all of them after "Show all"). Each
   shows its note (`-Pnote`) as its title, the test and the opponents in words (the set's `title`), and the result in
   words: "Better by" or "Worse by" only when the whole 95 % interval of the estimate says so, otherwise "No clear
   difference"; the card is tinted green, red or grey to match. A running job shows the evidence as a marker between
   the test's two answers (the LLR between its bounds), its progress and the time left; a finished one how the test
   ended. Buttons move a waiting job up or down or cancel it.
-- **The job on the right:** the clicked one (kept in the URL), else the running one. The result and the test in
+- **The job on the right:** the clicked one (kept in the URL), else the running one of the tab's format. The result and the test in
   words, the scoreboards (all, the rumble estimate if the set has weights, strong, every other named group of the
   set: old and new score share, the change with its interval, how often they hit us, how often we hit them, wins),
   each opponent (worst change first; a click on a column's name sorts by it, a second click reverses; the table
