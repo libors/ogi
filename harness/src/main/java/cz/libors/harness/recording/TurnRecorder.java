@@ -44,6 +44,7 @@ import java.util.zip.GZIPOutputStream;
  * r       round  turn  robot  state  x  y  bodyHeading  velocity  energy  gunHeat  gunHeading  radarHeading
  * b       round  turn  owner  bulletId  state  power  x  y  heading  victim
  * d       round  turn  robot  key  value
+ * p       round  turn  robot  x  y
  * end     round  turns
  * </pre>
  *
@@ -53,13 +54,18 @@ import java.util.zip.GZIPOutputStream;
  * robot's last turn, so they would race with the snapshot.
  *
  * <p>A recording can be limited to some debug properties: then it has no {@code r} and {@code b} records and only
- * the {@code d} records with those keys, e.g. the gun's log for the gun bench.
+ * the {@code d} records with those keys, e.g. the gun's log for the gun bench. If the keys include
+ * {@value #POSITIONS}, it also has a {@code p} record for every robot alive in every turn: its position only, a
+ * fraction of an {@code r} record, which a melee battle of ten robots needs (the melee bench scores bullets against
+ * them).
  *
  * <p>The engine swallows listener exceptions, so failures are kept and rethrown by {@link #close()}.
  */
 public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
 
     public static final String MAGIC = "#ogi-recording";
+    /** Not a debug property: in a limited recording's keys, it asks for the robots' positions ({@code p}). */
+    public static final String POSITIONS = "@positions";
     public static final int VERSION = 1;
 
     /**
@@ -153,6 +159,12 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
         int turn = snapshot.getTurn();
         if (debugKeys == null) {
             writeRobotsAndBullets(snapshot, round, turn);
+        } else if (debugKeys.contains(POSITIONS)) {
+            for (IRobotSnapshot r : snapshot.getRobots()) {
+                if (r.getState() != RobotState.DEAD) {
+                    start("p").field(round).field(turn).field(r.getRobotIndex()).field(r.getX()).field(r.getY()).end();
+                }
+            }
         }
         for (IRobotSnapshot r : snapshot.getRobots()) {
             IDebugProperty[] properties = r.getDebugProperties();

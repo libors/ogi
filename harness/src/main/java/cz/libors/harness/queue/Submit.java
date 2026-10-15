@@ -26,7 +26,8 @@ import java.util.Properties;
  * [seed=n] [rounds=n] [metric=..] [timeout=<seconds per battle>] [note=<text>] [reuse=false]} (against a melee set
  * {@code [draws=n]} instead of {@code pairsPerOpponent}), or {@code type=record robot=<class>
  * version=<version> opponents=<file> [jar=<path>] [pairs=n] [keys=<debug key>,...] [seed=n] [rounds=n] [starts=..]
- * [timeout=..] [debug=false] [note=..]}; a recording without the subject's jar plays a foreign robot the worker has.
+ * [timeout=..] [debug=false] [note=..]} (against a melee set {@code [draws=n]} instead of {@code pairs}); a recording
+ * without the subject's jar plays a foreign robot the worker has.
  */
 public final class Submit {
 

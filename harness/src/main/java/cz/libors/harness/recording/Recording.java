@@ -24,6 +24,7 @@ public record Recording(
         List<RobotTick> robotTicks,
         List<BulletTick> bulletTicks,
         List<DebugEntry> debug,
+        List<Position> positions,
         List<RoundEnd> roundEnds) {
 
     public record RobotInfo(int index, String name, int teamIndex, String teamName, boolean droid) {
@@ -41,6 +42,10 @@ public record Recording(
     public record DebugEntry(int round, int turn, int robot, String key, String value) {
     }
 
+    /** A live robot's position in a recording limited to some debug properties ({@link TurnRecorder#POSITIONS}). */
+    public record Position(int round, int turn, int robot, double x, double y) {
+    }
+
     public record RoundEnd(int round, int turns) {
     }
 
@@ -50,6 +55,7 @@ public record Recording(
         List<RobotTick> robotTicks = new ArrayList<>();
         List<BulletTick> bulletTicks = new ArrayList<>();
         List<DebugEntry> debug = new ArrayList<>();
+        List<Position> positions = new ArrayList<>();
         List<RoundEnd> roundEnds = new ArrayList<>();
         try (BufferedReader in = new BufferedReader(new InputStreamReader(
                 new GZIPInputStream(Files.newInputStream(file), 1 << 16), StandardCharsets.UTF_8), 1 << 16)) {
@@ -69,6 +75,7 @@ public record Recording(
                         case "b" -> bulletTicks.add(new BulletTick(i(f[1]), i(f[2]), i(f[3]), i(f[4]), f[5],
                                 d(f[6]), d(f[7]), d(f[8]), d(f[9]), i(f[10])));
                         case "d" -> debug.add(new DebugEntry(i(f[1]), i(f[2]), i(f[3]), f[4], f[5]));
+                        case "p" -> positions.add(new Position(i(f[1]), i(f[2]), i(f[3]), d(f[4]), d(f[5])));
                         case "robot" -> robots.add(new RobotInfo(i(f[1]), f[2], i(f[3]), f[4],
                                 Boolean.parseBoolean(f[5])));
                         case "end" -> roundEnds.add(new RoundEnd(i(f[1]), i(f[2])));
@@ -85,7 +92,7 @@ public record Recording(
                 }
             }
         }
-        return new Recording(battle, robots, robotTicks, bulletTicks, debug, roundEnds);
+        return new Recording(battle, robots, robotTicks, bulletTicks, debug, positions, roundEnds);
     }
 
     private static int i(String s) {

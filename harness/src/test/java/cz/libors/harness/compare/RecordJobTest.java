@@ -222,4 +222,76 @@ class RecordJobTest {
         assertEquals(State.DONE, job.state());
         assertTrue(job.reason().contains("given up after 3 failures: [sample.Walls pair 0]"), job.reason());
     }
+
+    @Test
+    void aMeleeSetRecordsTheDrawsOfAMeleeComparison(@TempDir Path tmp) throws IOException {
+        String set = "format melee\nweight [strong] 30\nweight [weak] 60\n[strong]\ns.A 1\ns.B 1\ns.C 1\ns.D 1\n"
+                + "[weak]\nw.A 1\nw.B 1\nw.C 1\nw.D 1\nw.E 1\nw.F 1\nw.G 1\n";
+        Path dir = tmp.resolve("j");
+        Files.createDirectories(dir);
+        Properties spec = new Properties();
+        spec.setProperty("type", "record");
+        spec.setProperty("submittedAt", "1");
+        spec.setProperty("robot", "cz.libors.OgiGunLog");
+        spec.setProperty("version", "w1234567");
+        spec.setProperty("opponentSet", "melee-test");
+        spec.setProperty("draws", "2");
+        spec.setProperty("keys", "meleescan,@positions");
+        spec.setProperty("jar.cz.libors.OgiGunLog_w1234567.jar", "c".repeat(64));
+        try (OutputStream out = Files.newOutputStream(dir.resolve("job.properties"))) {
+            spec.store(out, null);
+        }
+        Files.writeString(dir.resolve("opponents.txt"), set);
+        Files.writeString(dir.resolve("status.properties"), "state=QUEUED\norder=1\n");
+        assertTrue(RecordJob.check(spec, List.of(set.split("\n"))).contains("2 melee draws"));
+        spec.setProperty("pairs", "2");
+        assertThrows(IllegalArgumentException.class, () -> RecordJob.check(spec, List.of(set.split("\n"))));
+
+        RecordJob job = open(dir);
+        assertEquals("melee", job.format());
+        List<Work> works = new ArrayList<>(job.next("w"));
+        works.addAll(job.next("w"));
+        assertTrue(job.next("w").isEmpty());
+        // The fields of the melee comparison's draws 0 and 1, the subject at the draw's place.
+        MeleeDraws draws = new MeleeDraws(OpponentSet.parse("melee-test", List.of(set.split("\n"))));
+        for (int d = 0; d < 2; d++) {
+            MeleeDraws.Draw draw = draws.draw(1, d);
+            BattleSpec battle = works.get(d).spec();
+            assertEquals(draw.robots("cz.libors.OgiGunLog w1234567"), battle.robots());
+            assertEquals(draw.seed(), battle.seed());
+            assertEquals(1000, battle.width());
+            assertEquals(List.of("meleescan", "@positions"), battle.recordKeys());
+            // Without debug mode: among ten robots, one that never stops would hold a battle in debug mode.
+            assertTrue(battle.record() && !battle.debug());
+        }
+
+        Work w = works.get(1);
+        List<ContestantResult> results = new ArrayList<>();
+        Map<String, BattleOutcome.Shots> shots = new java.util.HashMap<>();
+        for (String robot : w.spec().robots()) {
+            boolean ours = robot.startsWith("cz.libors");
+            results.add(new ContestantResult(robot, ours ? 1 : 2, ours ? 3000 : 1000, 0, 0, 0, 0, 0, 0, ours ? 20 : 1));
+        }
+        shots.put("cz.libors.OgiGunLog w1234567", new BattleOutcome.Shots(2000, 600));
+        BattleOutcome o = new BattleOutcome(w.spec().setup(), w.spec().seed(), results, Map.of(), List.of(), 0, shots,
+                36000, Map.of());
+        Map<String, Object> m = BattleSpec.outcomeToMap(o);
+        m.put("recording", Base64.getEncoder().encodeToString(gzip("#ogi-recording\t1\nend\t0\t900\n")));
+        job.completed(w, m, "w");
+        List<String> lines = Files.readAllLines(dir.resolve("recordings/w1234567/battles.tsv"));
+        assertEquals(RecordJob.MELEE_INDEX_COLUMNS, List.of(lines.get(0).split("\t")));
+        String[] f = lines.get(1).split("\t", -1);
+        assertEquals(RecordJob.MELEE_INDEX_COLUMNS.size(), f.length);
+        assertEquals("draw1.rec.gz", f[0]);
+        assertEquals("1", f[1]);
+        assertEquals("600", f[5]);
+        assertEquals("75.0", f[RecordJob.MELEE_INDEX_COLUMNS.indexOf("share")]);
+        assertEquals("900", f[RecordJob.MELEE_INDEX_COLUMNS.indexOf("roundTurns")]);
+        assertTrue(Files.exists(dir.resolve("recordings/w1234567/draw1.rec.gz")));
+
+        // A restarted server plays only the draw that is missing.
+        RecordJob resumed = open(dir);
+        List<Work> rest = resumed.next("w");
+        assertEquals(List.of("draw\t0"), rest.stream().map(Work::key).toList());
+    }
 }

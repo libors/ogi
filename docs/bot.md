@@ -158,20 +158,34 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   from their waves. A melee robot moves relative to its own closest enemy, not to us, so the melee gun learns each
   enemy's movement in the enemy's own frame:
   - **Records:** every scan of an enemy starts one, with its situation then: speed, acceleration and turn rate since
-    its previous scan (up to 8 turns back), the room to the wall along its way of travel (up to 400 px), the distance
-    to its closest robot (us included, the others where we saw them last; up to 600 px) and that robot's bearing
-    from its way of travel (cosine and sine), and the number of enemies alive. Its later scans, up to 70 turns on, add
-    where it had got to, forward and to the left in its frame at the start. The records last for the battle, at most
-    1500 per enemy.
-  - **Aim:** for every enemy scanned in the last 8 turns, the 12 records nearest its situation now (plain Euclidean
-    distance over the features) each give where it will be when the bullet arrives: its last scan plus the record's
-    displacement after the turns since that scan plus the flight (interpolated between the record's samples,
-    iterated three times for the flight), turned into its way of travel now. Positions outside the field, and records
-    that end before, are left out. Each position is a bearing from the bullet's origin with a triangle over a robot's
-    width, weighted 1 / (feature distance + 0.05) and 1 / the enemy's distance; the gun aims at the bearing with the
-    most weight, over all enemies at once, and the bullet's record goes to the enemy that weighed most there.
-  - Measured on the melee rumble's population (2026-10-15): 2.2 points of APS more than the duel's guns at the
-    closest enemy, rounds won 51 → 64 %, our hit rate 25 → 28 %.
+    its previous scan (up to 8 turns back), the room to the wall along its way of travel (up to 560 px), the distance
+    to its closest robot (us included, the others where we saw them last; up to 1680 px) and that robot's bearing
+    from its way of travel (cosine and sine), and the number of enemies alive, each scaled to about [0, 1]. Its later
+    scans, up to 140 turns on, add where it had got to, forward and to the left in its frame at the start. The
+    records last for the battle, at most 1500 per enemy.
+  - **Aim:** for every enemy scanned in the last 32 turns, the 24 records nearest its situation now each give where it
+    will be when the bullet arrives: its last scan plus the record's displacement after the turns since that scan
+    plus the flight (interpolated between the record's samples, iterated three times for the flight), turned into its
+    way of travel now. The distance between two situations is the square root of the weighted sum of the squared
+    differences: the wall ahead weighs 11.2, the turn rate 7.84, the speed 2, the acceleration 1.4, the closest
+    robot's distance 0.98, its cosine 0.5, its sine 0.25 and the enemies alive 0.5. Only records whose displacements
+    reach the bullet's arrival take part, from every earlier round and from this round before the last scan.
+    Positions outside the field are left out. Each position is a bearing from the bullet's origin with a triangle over
+    two robot half-widths on each side, weighted 1 / (feature distance + 0.8), so the neighbours weigh almost alike,
+    and 1 / the enemy's distance to the power 0.245; the gun aims at the bearing with the most weight, over all
+    enemies at once, and the bullet's record goes to the enemy that weighed most there.
+  - **Numbers:** the counts, ranges and weights above are `MeleeGunParameters.DEFAULT`, tuned on the melee bench
+    ([harness.md](harness.md#melee-bench)): a coordinate search over half of 99 rumble draws, checked on the other
+    half, with the counts then cut back for the gun's time (the search's 67 neighbours, 6000 records, a horizon of 196
+    and an age of 128 turns took 12 times the gun's time of the first guess for 1.7 points of hit rate more; the
+    defaults take 3.3 times). The records live in a `MeleeGun.Memory` that Ogi keeps in a static; what the neighbour
+    search reads of each record (its features, its scan's turn, its last sample's turn) lies side by side in a ring
+    per enemy (`MeleeGun.Store`), oldest first: the search runs over every record for every aim, and records scattered
+    over the heap made it wait for memory (2.3 times slower with the same results).
+  - Measured on the melee rumble's population (2026-10-15): the first guess (12 neighbours of equal features, only
+    records scanned at an earlier turn of their round) gave 2.2 points of APS more than the duel's guns at the
+    closest enemy, rounds won 51 → 64 %, our hit rate 25 → 28 %; the tuned numbers 1.2 points more again, our hit
+    rate 28 → 30 %, with own turns over the idle CPU constant about 9 → 30 per battle and no skipped turn.
 - **One model for the bot and the bench:** what the gun knows about an enemy and how it decides (the data, the
   virtual scores, the choice of gun, learning a passed wave) is `GunModel`. The tunable numbers (feature weights,
   the neighbour count, the virtual weight, the tries before switching) are `GunParameters`; the bot plays with
@@ -439,6 +453,11 @@ become predictable to the last bits; anything that makes us move spoils that.
     shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
     that shoot bullets down would otherwise look easy to hit on the bench. The log keeps the guns' aims, not the
     turret's offset (aim spread, shadow shots), so the bench scores the aims, as the guns learn them.
+  - **For the melee bench** `OgiGunLog` also logs the melee gun (`MeleeGunLog`): `meleescan` for each scan it
+    learns from (the arguments of `MeleeGun.scanned`), `meleedeath` for each robot's death, `meleeaim` for each aim
+    (its arguments, the heading found and the robot aimed at), `meleefire` for each bullet fired on the melee gun's
+    aim (the aim's turn, the bullet's heading, power and position) and `meleeend` for how such a bullet ended (hit,
+    wall or bullet, and whom). The recording adds every robot's position ([harness.md](harness.md#melee-bench)).
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).

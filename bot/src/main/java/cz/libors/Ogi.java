@@ -9,6 +9,8 @@ import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.gun.HitRecord;
 import cz.libors.ogi.gun.MeleeGun;
+import cz.libors.ogi.gun.MeleeGunLog;
+import cz.libors.ogi.gun.MeleeGunParameters;
 import cz.libors.ogi.gun.MirrorAim;
 import cz.libors.ogi.gun.RacePower;
 import cz.libors.ogi.move.MeleeMovement;
@@ -112,6 +114,8 @@ public class Ogi extends TeamRobot {
     private static final double RACE_CLOSE_ENERGY = 40;
     /** Our bullets at each enemy over the battle (statics last for the battle, as the gun's data do). */
     private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
+    /** What the melee gun learned in this battle. */
+    private static final MeleeGun.Memory MELEE_MEMORY = new MeleeGun.Memory();
     /** The gun searches its data only this many turns before it can fire. */
     private static final int AIM_LEAD_TURNS = 4;
     /** In a melee the melee gun aims ({@link MeleeGun}) in this many turns before the gun is cool, and while it is. */
@@ -245,7 +249,7 @@ public class Ogi extends TeamRobot {
         teammatesAlive = getTeammates() == null ? 0 : getTeammates().length;
         gun = new GuessFactorGun(field);
         mirror = new MirrorAim(field);
-        meleeGun = new MeleeGun(field);
+        meleeGun = new MeleeGun(field, MELEE_MEMORY, MeleeGunParameters.DEFAULT);
         aimSpread = new Random(~roundSeed());
         randomAim = new Random(roundSeed() * 31 + 17);
         randomDraw = randomAim.nextDouble();
@@ -575,16 +579,21 @@ public class Ogi extends TeamRobot {
         if (bullet != null) {
             surfer.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
                     Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
-            String aimedAt = meleeAimTime == now - 1 && meleeGun.aimedAt() != null ? meleeGun.aimedAt()
-                    : target.name();
-            inFlight.put(bullet, new FiredShot(aimedAt, plan.get().time()));
+            boolean melee = meleeAimTime == now - 1;
+            String aimedAt = melee && meleeGun.aimedAt() != null ? meleeGun.aimedAt() : target.name();
+            inFlight.put(bullet, new FiredShot(aimedAt, plan.get().time(), melee));
+            if (melee && logsGun()) {
+                setDebugProperty(MeleeGunLog.FIRE, MeleeGunLog.fireLine(meleeAimTime,
+                        Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower(), bullet.getX(),
+                        bullet.getY()));
+            }
         }
         fired(bullet, plan.get());
         return true;
     }
 
-    /** A bullet of ours in the air: at whom, from the plan of which turn. */
-    private record FiredShot(String target, long planTime) {
+    /** A bullet of ours in the air: at whom, from the plan of which turn, and whether the melee gun aimed it. */
+    private record FiredShot(String target, long planTime, boolean melee) {
     }
 
     /** Our bullets in the air, until they hit, miss or are shot down. */
@@ -616,6 +625,10 @@ public class Ogi extends TeamRobot {
         meleeAimTime = -1;
         if (getOthers() - teammatesAlive > 1 && getGunHeat() <= MELEE_AIM_TURNS * getGunCoolingRate() + 1e-9) {
             double melee = meleeGun.aim(now + 1, nextX, nextY, Rules.getBulletSpeed(planned));
+            if (logsGun()) {
+                setDebugProperty(MeleeGunLog.AIM, MeleeGunLog.aimLine(now + 1, nextX, nextY,
+                        Rules.getBulletSpeed(planned), melee, meleeGun.aimedAt()));
+            }
             if (!Double.isNaN(melee)) {
                 aim = melee;
                 meleeAim = melee;
@@ -867,6 +880,10 @@ public class Ogi extends TeamRobot {
                 }
             }
             meleeGun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), cx, cy, enemies);
+            if (logsGun()) {
+                setDebugProperty(MeleeGunLog.SCAN, MeleeGunLog.scanLine(e.getName(), e.getTime(), x, y,
+                        sighting.heading(), e.getVelocity(), cx, cy, enemies));
+            }
         }
         gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
         shield.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
@@ -888,7 +905,9 @@ public class Ogi extends TeamRobot {
     @Override
     public void onBulletHit(BulletHitEvent e) {
         expectedEnergy += Rules.getBulletHitBonus(e.getBullet().getPower());
-        bulletEnded(inFlight.remove(e.getBullet()), e.getName());
+        FiredShot shot = inFlight.remove(e.getBullet());
+        logMeleeEnd(shot, 'h', e.getName());
+        bulletEnded(shot, e.getName());
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
             surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
@@ -911,7 +930,16 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletMissed(BulletMissedEvent e) {
-        bulletEnded(inFlight.remove(e.getBullet()), null);
+        FiredShot shot = inFlight.remove(e.getBullet());
+        logMeleeEnd(shot, 'm', null);
+        bulletEnded(shot, null);
+    }
+
+    /** For the melee bench: how a bullet the melee gun aimed ended ({@link MeleeGunLog#END}). */
+    private void logMeleeEnd(FiredShot shot, char how, String robot) {
+        if (shot != null && shot.melee() && logsGun()) {
+            setDebugProperty(MeleeGunLog.END, MeleeGunLog.endLine(shot.planTime(), how, robot));
+        }
     }
 
     @Override
@@ -920,6 +948,7 @@ public class Ogi extends TeamRobot {
         if (shot != null) {
             gun.shotDown(shot.target(), shot.planTime());
         }
+        logMeleeEnd(shot, 'b', e.getHitBullet().getName());
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getHitBullet().getName())) {
             surfer.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),
@@ -973,6 +1002,9 @@ public class Ogi extends TeamRobot {
         world.robotDied(e.getName());
         gun.robotDied(e.getName());
         meleeGun.robotDied(e.getName());
+        if (logsGun()) {
+            setDebugProperty(MeleeGunLog.DEATH, e.getName());
+        }
         surfer.robotDied(e.getName());
     }
 }

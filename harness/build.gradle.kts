@@ -352,12 +352,16 @@ fun compareArguments(home: String, file: (String) -> String, out: () -> String):
     }
 }
 
-/** RecordBattles' arguments for [robot], placed like [compareArguments]; with [keys], only those debug properties. */
-fun recordArguments(robot: String, keys: String?, home: String, file: (String) -> String, out: () -> String):
+/**
+ * RecordBattles' arguments for [robot], placed like [compareArguments]; with [keys], only the debug properties it
+ * gives for the opponent set's file.
+ */
+fun recordArguments(robot: String, keys: ((String) -> String)?, home: String, file: (String) -> String,
+                    out: () -> String):
     () -> List<String> {
     val versions = providers.gradleProperty("versions")
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val passed = listOf("only", "pairs", "seed", "rounds", "starts")
+    val passed = listOf("only", "pairs", "draws", "seed", "rounds", "starts")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     return {
         val versionList = (versions.orNull ?: throw GradleException("Pass -Pversions=<revision or version>,..."))
@@ -368,9 +372,15 @@ fun recordArguments(robot: String, keys: String?, home: String, file: (String) -
             "versions=" + versionList.joinToString(","),
             "opponents=" + file(opponents.get()),
             "out=" + out(),
-        ) + passed + listOfNotNull(keys?.let { "keys=$it" })
+        ) + passed + listOfNotNull(keys?.let { "keys=" + it(file(opponents.get())) })
     }
 }
+
+/** The gun's debug properties, or against a melee set the melee gun's and every robot's position (melee bench). */
+fun gunLogKeys(opponentsFile: String): String =
+    if (File(opponentsFile).readLines().any { it.trim().split(Regex("\\s+")) == listOf("format", "melee") })
+        "meleescan,meleedeath,meleeaim,meleefire,meleeend,@positions"
+    else "gunshot,gunpass,gunshield"
 
 /** A repository path as a local run sees it. */
 fun localFile(path: String): String = rootDir.resolve(path).absolutePath
@@ -385,7 +395,7 @@ tasks.register<JavaExec>("compare") {
 }
 
 /** Runs RecordBattles for [robot] on comparison seeds; with [keys], only those debug properties are recorded. */
-fun JavaExec.recordsBattles(robot: String, defaultOut: String, keys: String?) {
+fun JavaExec.recordsBattles(robot: String, defaultOut: String, keys: ((String) -> String)?) {
     onRobocode("cz.libors.harness.compare.RecordBattles")
     // Debug mode, as in recordProbes: no robot can skip a turn, so a recording does not depend on machine load.
     jvmArgs("-Ddebug=true")
@@ -406,7 +416,7 @@ tasks.register<JavaExec>("recordGunLogs") {
     group = "verification"
     description = "Records the gun's log of comparison battles for the gun bench; see docs/harness.md."
     // OgiGunLog plays like Ogi and logs its gun; only the working tree has its jar (bot/build/robots).
-    recordsBattles("cz.libors.OgiGunLog", "harness/build/gun-logs", "gunshot,gunpass,gunshield")
+    recordsBattles("cz.libors.OgiGunLog", "harness/build/gun-logs", ::gunLogKeys)
 }
 
 tasks.register<JavaExec>("gunBench") {
@@ -424,6 +434,28 @@ tasks.register<JavaExec>("gunBench") {
     argumentProviders.add(CommandLineArgumentProvider {
         listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }) +
             passed.map { if (it.startsWith("selection=")) "selection=" + root.resolve(it.substringAfter('=')).absolutePath else it }
+    })
+}
+
+tasks.register<JavaExec>("meleeBench") {
+    group = "verification"
+    description = "Replays recorded melee gun logs with given melee gun parameters and scores the bullets against " +
+        "the recorded positions; see docs/harness.md."
+    mainClass = "cz.libors.harness.meleebench.MeleeBench"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = gunBench.runtimeClasspath
+    jvmArgs("-Xmx8g", "-Dmeleebench.debug=" + (providers.gradleProperty("debugDiff").orNull ?: "false"))
+    val logs = providers.gradleProperty("logs")
+    val passed = listOf("robot", "base", "weights", "neighbours", "wallRange", "neighbourRange", "distanceSoftening",
+        "enemyDistancePower", "kernelWidth", "maxAge", "horizon", "maxRecords", "everyRound", "reachingOnly", "tune",
+        "splitSeed")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val otherLogs = providers.gradleProperty("otherLogs")
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        val dirs = { value: String -> value.split(",").joinToString(",") { root.resolve(it.trim()).absolutePath } }
+        listOf("logs=" + dirs(logs.orNull ?: throw GradleException("Pass -Plogs=<melee gun logs>,..."))) +
+            listOfNotNull(otherLogs.orNull?.let { "otherLogs=" + dirs(it) }) + passed
     })
 }
 
@@ -649,7 +681,8 @@ val remoteRecordArguments = recordArguments("cz.libors.Ogi", null, remoteLayout.
 remoteTask("remoteRecordBattles", "Runs recordBattles on the remote worker.", "battle-recordings",
     "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteRecordArguments() }
 
-val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", "gunshot,gunpass,gunshield",
+// The opponent set's path is the worker's there: the duel gun's keys only.
+val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", { _ -> "gunshot,gunpass,gunshield" },
     remoteLayout.home("gun-logs"), remoteLayout.file) { remoteLayout.out("gun-logs") }
 remoteTask("remoteRecordGunLogs", "Runs recordGunLogs on the remote worker.", "gun-logs",
     "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteGunLogArguments() }
@@ -789,20 +822,22 @@ tasks.register<JavaExec>("submit") {
 
 tasks.register<JavaExec>("submitGunLogs") {
     group = "queue"
-    description = "Queues the gun's logs (OgiGunLog) of the working tree against -Popponents; see docs/harness.md."
+    description = "Queues the gun's logs (OgiGunLog) of the working tree against -Popponents, or the melee gun's " +
+        "against a melee set; see docs/harness.md."
     dependsOn(snapshotJars, installRobocode)
     mainClass = "cz.libors.harness.queue.Submit"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val passed = listOf("pairs", "seed", "rounds", "starts", "note", "timeout")
+    val passed = listOf("pairs", "draws", "seed", "rounds", "starts", "note", "timeout")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val versionFile = snapshotVersionFile
     val port = providers.gradleProperty("port").orElse("8765")
     argumentProviders.add(CommandLineArgumentProvider {
         val version = versionFile.get().asFile.readText().trim()
+        val keys = gunLogKeys(localFile(opponents.get()))
         listOf("state=" + queueDir.absolutePath, "type=record", "robot=cz.libors.OgiGunLog", "version=$version",
-            "keys=gunshot,gunpass,gunshield", "opponents=" + localFile(opponents.get()),
+            "keys=$keys", "opponents=" + localFile(opponents.get()),
             "jar=" + snapshotsDir.file("cz.libors.OgiGunLog_$version.jar").asFile.absolutePath,
             "port=" + port.get()) + passed
     })

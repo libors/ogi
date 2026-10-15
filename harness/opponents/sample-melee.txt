@@ -1,0 +1,20 @@
+# The Robocode sample bots in a melee: a draw puts nine of them with the subject, as the melee rumble does. For local
+# checks of melee recordings and the melee bench; skeletonCheck's melee plays nine fixed ones.
+title The sample bots (melee)
+format melee
+weight [samples] 1
+
+[samples]
+sample.Corners
+sample.Crazy
+sample.Fire
+sample.MyFirstJuniorRobot
+sample.MyFirstRobot
+sample.RamFire
+sample.SittingDuck
+sample.SpinBot
+sample.Target
+sample.Tracker
+sample.TrackFire
+sample.VelociRobot
+sample.Walls

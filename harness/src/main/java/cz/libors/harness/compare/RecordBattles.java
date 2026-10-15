@@ -24,7 +24,9 @@ import java.util.Set;
  * {@link Compare} uses with the same run seed, so a pair from a comparison log can be replayed and examined.
  *
  * <p>Usage: {@code RecordBattles <robocodeHome> robot=<class> versions=<v>,<v> opponents=<file> out=<dir>
- * [only=<opponent>,...] [pairs=n] [seed=n] [rounds=n] [starts=random|fixed] [keys=<debug key>,...]}
+ * [only=<opponent>,...] [pairs=n] [seed=n] [rounds=n] [starts=random|fixed] [keys=<debug key>,...]}, against a
+ * melee set {@code [draws=n]} instead of {@code only} and {@code pairs}: the draws of {@link MeleeJob}, recorded into
+ * {@code <out>/<version>/draw<d>.rec.gz}, with "melee draw d" as the opponent in the index.
  *
  * <p>Writes {@code <out>/<version>/<opponent>_p<pair>.rec.gz}, one recording per battle (format in
  * {@link TurnRecorder}); with {@code keys}, only those debug properties. Each battle also appends a line to
@@ -40,7 +42,8 @@ public final class RecordBattles {
             "seed", "1",
             "rounds", "0",
             "starts", "random",
-            "keys", "");
+            "keys", "",
+            "draws", "1");
 
     private static final List<String> REQUIRED = List.of("robot", "versions", "opponents", "out");
 
@@ -61,9 +64,6 @@ public final class RecordBattles {
         }
         OpponentSet set = OpponentSet.read(Path.of(options.get("opponents")));
         Format format = set.format();
-        if (format == Format.MELEE) {
-            usage(set.name() + " is a melee set: recordings are of one opponent at a time");
-        }
         List<String> only = options.get("only").isEmpty() ? List.of()
                 : Arrays.stream(options.get("only").split(",")).map(String::trim).toList();
         List<String> names = set.opponents().stream().map(OpponentSet.Opponent::name).toList();
@@ -87,6 +87,13 @@ public final class RecordBattles {
         Path out = Path.of(options.get("out"));
         Set<String> keys = options.get("keys").isEmpty() ? null
                 : Set.copyOf(Arrays.stream(options.get("keys").split(",")).map(String::trim).toList());
+        if (format == Format.MELEE) {
+            if (fixedStarts || !only.isEmpty()) {
+                usage(set.name() + " is a melee set: random starts and draws only");
+            }
+            recordDraws(Path.of(args[0]), set, options, rounds, runSeed, out, keys);
+            System.exit(0);
+        }
         try (BattleRunner runner = new BattleRunner(Path.of(args[0]))) {
             for (String opponent : opponents) {
                 for (int pair = 0; pair < pairs; pair++) {
@@ -115,6 +122,31 @@ public final class RecordBattles {
         System.exit(0);
     }
 
+    /** Draws 0 to {@code draws} − 1 of a melee set, each version at the draw's place among its nine opponents. */
+    private static void recordDraws(Path home, OpponentSet set, Map<String, String> options, int rounds, long runSeed,
+                                    Path out, Set<String> keys) throws IOException {
+        MeleeDraws draws = new MeleeDraws(set);
+        int count = Integer.parseInt(options.get("draws"));
+        try (BattleRunner runner = new BattleRunner(home)) {
+            for (int d = 0; d < count; d++) {
+                MeleeDraws.Draw draw = draws.draw(runSeed, d);
+                for (String version : Arrays.asList(options.get("versions").split(","))) {
+                    String subject = options.get("robot") + " " + version;
+                    BattleSetup setup = new BattleSetup("melee draw " + d, Format.MELEE.width, Format.MELEE.height,
+                            rounds, draw.robots(subject), draw.seed());
+                    Path file = out.resolve(version).resolve(RecordJob.drawFileName(d));
+                    BattleOutcome outcome;
+                    try (TurnRecorder recorder = TurnRecorder.open(file, setup, keys)) {
+                        outcome = runner.run(setup, recorder);
+                    }
+                    index(file, "melee draw " + d, d, draw.seed(), outcome, subject);
+                    System.out.printf(Locale.ROOT, "%-10s melee draw %-4d seed %20d  problems %d  (%.1f s)%n",
+                            version, d, draw.seed(), outcome.problems().size(), outcome.elapsedMillis() / 1000.0);
+                }
+            }
+        }
+    }
+
     private static void index(Path file, String opponent, int pair, long seed, BattleOutcome outcome, String robot)
             throws IOException {
         Path index = file.getParent().resolve("battles.tsv");
@@ -136,7 +168,7 @@ public final class RecordBattles {
         System.err.println(problem);
         System.err.println("Usage: RecordBattles <robocodeHome> robot=<class> versions=<v>,<v> opponents=<file> "
                 + "out=<dir> [only=<opponent>,...] [pairs=n] [seed=n] [rounds=n] [starts=random|fixed] "
-                + "[keys=<debug key>,...]");
+                + "[keys=<debug key>,...] [draws=n]");
         System.exit(2);
     }
 }

@@ -23,6 +23,7 @@ results. Every score claim about the bot must come from here.
 | `compare.OpponentSet`, `compare.CompareLog` | The opponent set file, and the battle log that makes a comparison resumable |
 | `compare.RecordBattles` | Records the battles of a comparison turn by turn; see [Recording comparison battles](#recording-comparison-battles) |
 | `gunbench.GunBench`, `gunbench.GunBattle`, `gunbench.GunReplay`, `gunbench.GunTrend` | The offline gun bench (source set `gunBench`): replays the gun's logs with other gun parameters, and the hit rate early against late in battles; see [Gun bench](#gun-bench) |
+| `meleebench.MeleeBench`, `meleebench.MeleeBattle`, `meleebench.MeleeReplay` | The offline melee bench (source set `gunBench` too): replays the melee gun's logs of recorded melee battles with other melee gun parameters and scores the bullets against the recorded positions; see [Melee bench](#melee-bench) |
 | `dangerbench.DangerBench`, `dangerbench.DangerBattle`, `dangerbench.DangerReplay` | The offline danger bench (source set `gunBench` too): replays the enemy bullets of full recordings through the surfer's danger model; see [Danger bench](#danger-bench) |
 | `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
 | `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
@@ -187,6 +188,7 @@ robot   index  name  teamIndex  teamName  droid
 r       round  turn  robot  state  x  y  bodyHeading  velocity  energy  gunHeat  gunHeading  radarHeading
 b       round  turn  owner  bulletId  state  power  x  y  heading  victim
 d       round  turn  robot  key  value
+p       round  turn  robot  x  y
 end     round  turns
 ```
 
@@ -197,6 +199,10 @@ end     round  turns
   turn, so its debug properties race with the snapshot (engine-model G-34).
 - **Robot and bullet states** are the names of Robocode's `RobotState` and `BulletState`; `victim` is a robot index
   or -1.
+- **A recording limited to some debug properties** (`TurnRecorder.open` with keys, `-Pkeys`) has no `r` and `b`
+  records. With the key `@positions` (`TurnRecorder.POSITIONS`, not a debug property) it has a `p` record for every
+  live robot in every turn: about a tenth of an `r` record, which a melee gun log of ten robots needs (the
+  [Melee bench](#melee-bench) scores bullets against these positions).
 
 ### Checks
 
@@ -339,7 +345,9 @@ The run prints one line per pair and the tables at the end. It does not fail on 
 
 `./gradlew recordBattles -Pversions=<v>,<v>` records each version against each opponent of a set on the pair seeds
 that `compare` uses with the same run seed, so a pair from a comparison log can be replayed and examined turn by
-turn. A version is a git revision (built by `baselineJars`), a jar in `.robocode/baselines/` or the working tree's
+turn. Against a melee set it records the draws of a [melee comparison](#a-melee-comparison-comparemeleejob)
+instead (`-Pdraws=n`, draws 0 to n − 1, into `<out>/<version>/draw<d>.rec.gz`; `only` and fixed starts do not
+apply); `harness/opponents/sample-melee.txt` draws nine of Robocode's sample bots. A version is a git revision (built by `baselineJars`), a jar in `.robocode/baselines/` or the working tree's
 `botVersion`. Like `recordProbes`, it runs the engine in debug mode.
 
 ```sh
@@ -352,6 +360,7 @@ turn. A version is a git revision (built by `baselineJars`), a jar in `.robocode
 | `opponents` | `harness/opponents/lab-1v1.txt` | opponent set file; gives the format |
 | `only` | all | comma-separated opponents of the set to record, named as the set lists them; an unknown name is an error |
 | `pairs` | 1 | pairs per opponent, from pair 0 |
+| `draws` | 1 | against a melee set: draws, from draw 0 |
 | `seed`, `rounds`, `starts` | as in `compare` | |
 | `out` | `harness/build/battle-recordings` | writes `<out>/<version>/<opponent>_p<pair>.rec.gz` |
 
@@ -457,6 +466,67 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   - A recording can lose a turn's debug properties, and with them a plan: after a skipped turn, and rarely without
     one (2026-10-10, 1 battle in 450: the snapshot of a turn repeated the previous turn's properties). The replay
     then reports an orphan wave and a few `differ` after it.
+
+## Melee bench
+
+The melee bench replays the melee gun's aims of recorded melee battles with other melee gun parameters
+(`MeleeGunParameters`: the feature weights, the neighbours, the ranges, the softening, how an enemy's distance
+weighs, the kernel's width, the age limit, the horizon and the records kept), in seconds instead of battles. It runs
+the bot's own `MeleeGun` on what the bot logged, so with the logging bot's parameters it aims exactly as the bot did,
+and it flies each bullet along the replayed aim against every robot's recorded positions.
+
+```sh
+./gradlew submitGunLogs -Popponents=.robocode/foreign/rumble-melee-2026-10.txt -Pdraws=100   # on the queue
+./gradlew recordGunLogs -Pversions=0.1 -Popponents=harness/opponents/sample-melee.txt -Pdraws=2  # here
+./gradlew meleeBench -Plogs=.robocode/queue/jobs/<id>/recordings/<version>
+./gradlew meleeBench -Plogs=<dir> -Pneighbours=24 -PenemyDistancePower=2
+./gradlew meleeBench -Plogs=<the base's logs> -PotherLogs=<the variant's logs> -Pneighbours=24   # both ways
+./gradlew meleeBench -Plogs=<dir> -Ptune=4
+```
+
+- **The logs:** against a melee set `OgiGunLog` logs the melee gun's inputs and decisions (`MeleeGunLog`: keys
+  `meleescan`, `meleedeath`, `meleeaim`, `meleefire`, `meleeend`, see [bot.md](bot.md#debug-overlay-czliborsogitrace)),
+  and the recording keeps every live robot's position in every turn (`@positions`, [Format](#format)): about 1.1 MB
+  per 10 rounds against the sample bots.
+- **Replay:** per battle a fresh `MeleeGun.Memory`, per round a new `MeleeGun`, fed the logged scans and deaths in
+  their order. At each aim that a bullet was fired on, the replayed gun aims. Bullets of the duel at the end come from
+  the duel's guns and are not scored.
+- **Scoring:** the bullet flies along the replayed aim from where the bot fired it, with its power, by the engine's
+  rules (`BulletMotion`, `RobotBox`: the move of turn t against the boxes at the end of turn t − 1, engine-model
+  G-02): the first robot's box it touches is a hit, the wall a miss. Left out are bullets an enemy bullet destroyed
+  (they ended in `meleeend` with `b`: the aim did not decide them) and bullets still in the air at the round's end. A
+  shot the replayed gun has no aim for counts as a miss (`no aim`).
+- **Parameters:** `-Pweights` (8, in the order of the features), `-Pneighbours`, `-PwallRange`, `-PneighbourRange`,
+  `-PdistanceSoftening`, `-PenemyDistancePower`, `-PkernelWidth`, `-PmaxAge`, `-Phorizon` and `-PmaxRecords` give the
+  variant over the base. `-Pbase="neighbours=24;horizon=98"` gives the parameters the logging bot played with, over
+  `MeleeGunParameters.DEFAULT`. `-Probot=<prefix>` picks the logged robot (default `cz.libors.Ogi`).
+- **Parity:** with the base parameters every replayed aim must equal the logged one within 1e-9 rad, and the robot
+  it was aimed at must be the same; the task fails if more than one aim in 10,000 differs. Battles in which the
+  logging robot skipped a turn (the index's `skippedTurns`) are left out of the check: without debug mode a skipped
+  turn can lose its log, and the rest of that battle replays from other records. Logs from the Windows
+  worker (x86_64) replayed on the Mac (arm64) differ in the last bit of some doubles
+  ([build-and-run.md](build-and-run.md#determinism-across-machines)), and such a difference can tip a nearly tied
+  peak of the density: 3 of 157,114 aims of 99 rumble draws (2026-10-15); logs from the same machine replay bit for
+  bit. `MeleeGunTest` checks the replay on a simulated fight. `-PdebugDiff=true` prints the first differing aims
+  of each battle and every real bullet that ends otherwise.
+- **Real bullets:** each bullet whose end the bot learned (a hit, the wall) also flies along its real heading and must
+  end as in the engine. On two local battles against the sample bots all 965 did; on 99 rumble draws 67 of 132,755
+  did not (2026-10-15): a robot that another bullet killed earlier in the same turn still stands in the replay (the
+  engine moves the bullets of a turn in random order, engine-model G-04).
+- **Output:** for the base and the variant the bullets scored, `fired %` (hits per bullet scored), the damage per
+  bullet scored, and the bullets with no aim, shot down, open and with an aim that differs from the log; then the
+  variant's change of `fired %` with its 95 % interval over the battles as clusters (per battle each side's
+  linearised residual (h − R·s)/Σs, differenced).
+- **Both ways** (`-PotherLogs`: logs of a bot that played with the variant, on the same draws): as on the
+  [Gun bench](#gun-bench), a target that reacts to being hit reacted to the logged gun's hits, so any other aim looks
+  better on the replay. The variant's gain on the base's logs is effect + bias, the base's gain on the variant's logs
+  is −effect + bias; the bench prints both, the effect and the bias.
+- **`-Ptune=<passes>`:** the gun bench's coordinate search over the 17 parameters, on half of the battles (shuffled
+  by `-PsplitSeed`, default 1), reported on both halves against the base. Integer parameters are rounded; the
+  weights and `enemyDistancePower` may also go to 0. It ends with the tuned parameters as `-P` options.
+- **Limits:** the movement, the fire timing and the bullet power stay as recorded; a replayed aim the turret could not
+  have reached in time is fired anyway; a hit the replay adds or takes away does not change the battle's later course
+  (energy, who dies when), and the bench scores the hit rate, not the score.
 
 ## Danger bench
 
@@ -679,8 +749,8 @@ configuration line, so its `battles.tsv` reads like a local one:
 ### A melee comparison (`compare.MeleeJob`)
 
 `submit` with a set whose format is `melee` queues a melee comparison: the same command and versions, but each battle
-puts the subject among nine opponents of the set, as the melee rumble does. Only the queue runs it; `compare`,
-`recordBattles` and the recording jobs refuse melee sets.
+puts the subject among nine opponents of the set, as the melee rumble does. Only the queue runs it; `compare`
+refuses melee sets. `recordBattles` and the recording jobs record a melee set's draws.
 
 ```sh
 ./gradlew submit -Pbaseline=HEAD -Popponents=.robocode/foreign/rumble-melee-2026-10.txt -Pbounds=nonregression
@@ -759,6 +829,19 @@ job type `record` takes any robot and keys (`queue.Submit`).
   count as in [Shots](#how-results-are-gathered).
 - Battles go out pair by pair over all opponents, so a job stopped early covers every opponent alike. A recording
   that exists is not played again: a restarted server goes on where it stopped.
+- **Against a melee set** a job records draws instead (`-Pdraws=n`, the fields of a
+  [melee comparison](#a-melee-comparison-comparemeleejob) with the same seed) into `recordings/<dir>/draw<d>.rec.gz`.
+  Its index has columns of its own (`RecordJob.MELEE_INDEX_COLUMNS`): the file, the draw, the seed, the subject's
+  place among the ten, its bullets fired and hits, skipped turns, problems, the opponents' skipped turns, its own
+  turn times, debug mode, its score components, its mean pairwise share against the nine (the battle's measure in a
+  melee comparison), the wall time, the turns of every round and the opponents, separated by ` | `.
+  `submitGunLogs` against a melee set records the melee gun's log ([Melee bench](#melee-bench)).
+  - **Without debug mode by default** (`-Pdebug=true` asks for it): in debug mode a robot whose thread never stops
+    (SHAM.WOW 1.4) holds its battle until the timeout, because the engine waits for every turn, and among ten robots
+    such a robot is common (2026-10-15: it held two jobs for 10 and 20 minutes, and comparisons waited behind them,
+    since a worker plays one mode at a time). Without debug mode a turn Ogi skips can lose that turn's log; the
+    melee bench leaves such battles out of its parity check (Ogi skipped no turn in 100 draws of a comparison).
+  - A melee battle's default timeout is 600 s; the longest of 199 draws took 185 s in debug mode.
 - **In debug mode by default**, like `recordBattles` (engine-model G-17): a battle can ask for it
   (`BattleSpec.debug`), and the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag
   once per JVM. A job's battles all want the same mode, and a worker plays one mode at a time: while battles of one

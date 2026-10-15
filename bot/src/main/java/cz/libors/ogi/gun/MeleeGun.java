@@ -28,32 +28,18 @@ import java.util.Map;
  * neighbour weighs more the nearer its situation is, and an enemy the nearer it is to us. A bullet aimed so hits
  * whoever is there.
  *
- * <p>The records last for the battle (statics, engine-model G-22); the records still collecting displacements are
- * per round.
+ * <p>The records last for the battle in a {@link Memory}, which the bot keeps in a static (engine-model G-22); the
+ * records still collecting displacements are per round. The numbers come from {@link MeleeGunParameters}.
  */
 public final class MeleeGun {
 
-    /** Displacements are collected for this many turns after a record's scan: longer than any bullet's flight. */
-    static final int HORIZON = 70;
-    /** Records kept per enemy; the oldest go first. */
-    static final int MAX_RECORDS = 1500;
-    /** The most similar records each enemy's aim uses. */
-    static final int NEIGHBOURS = 12;
     /** Features, each in about [0, 1]. */
-    static final int FEATURES = 8;
-    /** The wall ahead counts up to this far, and the closest robot's distance up to that far. */
-    static final double WALL_RANGE = 400;
-    static final double NEIGHBOUR_RANGE = 600;
+    public static final int FEATURES = 8;
     /** A gap between scans longer than this tells nothing about acceleration and turning. */
     static final int MAX_SCAN_GAP = 8;
-    /** A neighbour's weight: 1 / (its feature distance + this). */
-    static final double DISTANCE_SOFTENING = 0.05;
-    /** Enemies whose last scan is older than this many turns are not aimed at. */
-    static final int MAX_AGE = 8;
 
-    /** One scan of an enemy and where it went from there. */
+    /** One scan of an enemy and where it went from there; its features stay in its {@link Store}. */
     static final class Record {
-        final double[] features;
         final long time;
         final double x;
         final double y;
@@ -63,9 +49,11 @@ public final class MeleeGun {
         int[] turns = new int[8];
         float[] forward = new float[8];
         float[] left = new float[8];
+        /** Where the record stands in its store, or -1 once the store dropped it. */
+        Store store;
+        int slot = -1;
 
-        Record(double[] features, long time, double x, double y, double frame) {
-            this.features = features;
+        Record(long time, double x, double y, double frame) {
             this.time = time;
             this.x = x;
             this.y = y;
@@ -85,6 +73,9 @@ public final class MeleeGun {
             turns[samples] = (int) (t - time);
             forward[samples] = (float) (dx * c + dy * s);
             left[samples] = (float) (-dx * s + dy * c);
+            if (slot >= 0) {
+                store.last[slot] = turns[samples];
+            }
             samples++;
         }
 
@@ -124,15 +115,64 @@ public final class MeleeGun {
         final Deque<Record> open = new ArrayDeque<>();
     }
 
-    private static final Map<String, List<Record>> RECORDS = new HashMap<>();
+    /**
+     * One enemy's records, the newest {@code capacity}, oldest first in a ring. What the neighbour search reads of each
+     * record lies side by side in arrays (its features, its scan's turn, its last sample's turn): the search runs over
+     * all of them for every aim, and objects scattered over the heap made it wait for memory.
+     */
+    static final class Store {
+        final int capacity;
+        final double[] features;
+        final long[] times;
+        /** The last sample's turn after the scan, -1 while the record has none. */
+        final int[] last;
+        final Record[] records;
+        int start;
+        int size;
+
+        Store(int capacity) {
+            this.capacity = capacity;
+            features = new double[capacity * FEATURES];
+            times = new long[capacity];
+            last = new int[capacity];
+            records = new Record[capacity];
+        }
+
+        /** Adds a record without samples, dropping the oldest if full. */
+        void add(Record r, double[] f) {
+            if (size == capacity) {
+                records[start].slot = -1;
+                records[start] = null;
+                start = (start + 1) % capacity;
+                size--;
+            }
+            int i = (start + size) % capacity;
+            System.arraycopy(f, 0, features, i * FEATURES, FEATURES);
+            times[i] = r.time;
+            last[i] = r.samples == 0 ? -1 : r.turns[r.samples - 1];
+            records[i] = r;
+            r.store = this;
+            r.slot = i;
+            size++;
+        }
+    }
+
+    /** The records of a battle, per enemy. */
+    public static final class Memory {
+        final Map<String, Store> records = new HashMap<>();
+    }
 
     private final Field field;
+    private final Memory memory;
+    private final MeleeGunParameters p;
     private final Map<String, Enemy> enemies = new HashMap<>();
     /** The enemy whose positions weighed most in the last aim, or null. */
     private String aimedAt;
 
-    public MeleeGun(Field field) {
+    public MeleeGun(Field field, Memory memory, MeleeGunParameters parameters) {
         this.field = field;
+        this.memory = memory;
+        this.p = parameters;
     }
 
     /**
@@ -149,7 +189,7 @@ public final class MeleeGun {
         }
         for (Iterator<Record> it = e.open.iterator(); it.hasNext(); ) {
             Record r = it.next();
-            if (time - r.time > HORIZON) {
+            if (time - r.time > p.horizon()) {
                 it.remove();
             } else {
                 r.add(time, x, y);
@@ -164,9 +204,9 @@ public final class MeleeGun {
         f[1] = clamp((acceleration + RobotMotion.DECELERATION) / (RobotMotion.DECELERATION + RobotMotion.ACCELERATION));
         double turn = recent ? Angles.normalizeRelative(heading - e.heading) / gap * Math.signum(velocity) : 0;
         f[2] = clamp((turn / RobotMotion.MAX_TURN_RATE + 1) / 2);
-        f[3] = wallAhead(x, y, frame) / WALL_RANGE;
+        f[3] = wallAhead(x, y, frame) / p.wallRange();
         double closest = Math.hypot(closestX - x, closestY - y);
-        f[4] = clamp(closest / NEIGHBOUR_RANGE);
+        f[4] = clamp(closest / p.neighbourRange());
         double towards = Angles.bearing(x, y, closestX, closestY) - frame;
         f[5] = (Math.cos(towards) + 1) / 2;
         f[6] = (Math.sin(towards) + 1) / 2;
@@ -178,13 +218,9 @@ public final class MeleeGun {
         e.velocity = velocity;
         e.heading = heading;
         e.features = f;
-        Record r = new Record(f, time, x, y, frame);
+        Record r = new Record(time, x, y, frame);
         e.open.add(r);
-        List<Record> list = RECORDS.computeIfAbsent(name, n -> new ArrayList<>());
-        list.add(r);
-        if (list.size() > MAX_RECORDS) {
-            list.remove(0);
-        }
+        memory.records.computeIfAbsent(name, n -> new Store(p.maxRecords())).add(r, f);
     }
 
     public void robotDied(String name) {
@@ -205,25 +241,36 @@ public final class MeleeGun {
         List<String> owners = new ArrayList<>();
         for (Map.Entry<String, Enemy> entry : enemies.entrySet()) {
             Enemy e = entry.getValue();
-            List<Record> records = RECORDS.get(entry.getKey());
-            if (records == null || e.features == null || fireTime - e.time > MAX_AGE) {
+            Store store = memory.records.get(entry.getKey());
+            if (store == null || e.features == null || fireTime - e.time > p.maxAge()) {
                 continue;
             }
             double enemyDistance = Math.max(Math.hypot(e.x - ox, e.y - oy), 1);
-            Record[] nearest = new Record[NEIGHBOURS];
-            double[] distances = new double[NEIGHBOURS];
+            int neighbours = p.neighbours();
+            Record[] nearest = new Record[neighbours];
+            double[] distances = new double[neighbours];
             int found = 0;
-            for (Record r : records) {
-                if (r.samples == 0 || r.time >= e.time) {
+            // The turns from the enemy's last scan to the bullet's arrival, roughly: the iterations below refine it.
+            double reach = fireTime - e.time + enemyDistance / speed;
+            double[] w = p.weights();
+            double[] ef = e.features;
+            for (int n = 0; n < store.size; n++) {
+                int slot = (store.start + n) % store.capacity;
+                int last = store.last[slot];
+                if (last < 0 || !p.everyRound() && store.times[slot] >= e.time || p.reachingOnly() && last < reach) {
                     continue;
                 }
+                // The sum only grows: once it reaches the farthest neighbour's, the record is out.
+                double limit = found < neighbours ? Double.POSITIVE_INFINITY : distances[found - 1];
                 double d = 0;
-                for (int i = 0; i < FEATURES; i++) {
-                    double diff = r.features[i] - e.features[i];
-                    d += diff * diff;
+                int base = slot * FEATURES;
+                for (int i = 0; i < FEATURES && d < limit; i++) {
+                    double diff = store.features[base + i] - ef[i];
+                    d += w[i] * diff * diff;
                 }
-                if (found < NEIGHBOURS || d < distances[found - 1]) {
-                    int i = found < NEIGHBOURS ? found++ : found - 1;
+                if (d < limit) {
+                    Record r = store.records[slot];
+                    int i = found < neighbours ? found++ : found - 1;
                     while (i > 0 && distances[i - 1] > d) {
                         distances[i] = distances[i - 1];
                         nearest[i] = nearest[i - 1];
@@ -255,9 +302,10 @@ public final class MeleeGun {
                     continue;
                 }
                 double distance = Math.max(Math.hypot(px - ox, py - oy), RobotMotion.HALF_SIZE + 1);
-                double weight = 1 / (Math.sqrt(distances[n]) + DISTANCE_SOFTENING) / enemyDistance;
+                double weight = 1 / (Math.sqrt(distances[n]) + p.distanceSoftening())
+                        / Math.pow(enemyDistance, p.enemyDistancePower());
                 candidates.add(new double[] {Angles.bearing(ox, oy, px, py),
-                        Math.atan(RobotMotion.HALF_SIZE / distance), weight});
+                        p.kernelWidth() * Math.atan(RobotMotion.HALF_SIZE / distance), weight});
                 owners.add(entry.getKey());
             }
         }
@@ -271,7 +319,7 @@ public final class MeleeGun {
             String owner = null;
             for (int j = 0; j < candidates.size(); j++) {
                 double[] other = candidates.get(j);
-                double off = Math.abs(Angles.normalizeRelative(a - other[0]));
+                double off = Math.abs(relative(a - other[0]));
                 if (off < other[1]) {
                     // A triangle over the robot's width: a bullet through its middle counts most.
                     double w = other[2] * (1 - off / other[1]);
@@ -291,11 +339,26 @@ public final class MeleeGun {
         return best;
     }
 
+    /**
+     * {@link Angles#normalizeRelative} of an angle within ±2π, bit for bit, without its remainder, which costs tens of
+     * nanoseconds and ran for every pair of predicted positions. Above 2π the subtraction is exact (Sterbenz), as the
+     * remainder is.
+     */
+    static double relative(double angle) {
+        double a = angle + Math.PI;
+        if (a >= Angles.TWO_PI) {
+            a -= Angles.TWO_PI;
+        } else if (a < 0) {
+            a += Angles.TWO_PI;
+        }
+        return a - Math.PI;
+    }
+
     /** How far the robot can drive along {@code heading} before its centre is 18 px from a wall, up to the range. */
     private double wallAhead(double x, double y, double heading) {
         double c = Math.cos(heading);
         double s = Math.sin(heading);
-        double limit = WALL_RANGE;
+        double limit = p.wallRange();
         double margin = Field.ROBOT_HALF_SIZE;
         if (c > 1e-9) {
             limit = Math.min(limit, (field.width() - margin - x) / c);
