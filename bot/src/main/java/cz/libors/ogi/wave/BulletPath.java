@@ -61,8 +61,13 @@ public record BulletPath(Object id, long fireTime, double x, double y, double dx
      * random (chance ½).
      */
     public List<double[]> shadows(Wave wave) {
+        return shadows(wave, Long.MIN_VALUE);
+    }
+
+    /** {@link #shadows(Wave)} of the moves from turn {@code from} on. */
+    public List<double[]> shadows(Wave wave, long from) {
         List<double[]> found = new ArrayList<>();
-        for (long t = Math.max(fireTime, wave.fireTime()) + 1; t <= endTime; t++) {
+        for (long t = Math.max(Math.max(fireTime, wave.fireTime()) + 1, from); t <= endTime; t++) {
             crossings(found, wave, t, wave.radius(t - 1), wave.radius(t), 1);
             if (t - 1 > wave.fireTime()) {
                 // We move first and hit the enemy's bullet through its move of the turn before.

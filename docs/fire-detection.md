@@ -16,8 +16,13 @@ Everything comes from what the bot itself receives, in the turn it happens (engi
 | `zapped()` | our own unexplained loss of 0.1 (engine-model G-38) | −0.1 |
 | `nearOtherRobot()` | another robot, enemy or teammate, seen within 150 px of the enemy in the last 16 turns (`Neighbours`) | rams among others: −0.6 each |
 
-The bot feeds all of them except `zapped()`: the inactivity penalty needs 450 turns in which the robots lose less than
-10 energy, and Ogi fires whenever it can, so it can only happen once one side is already finished.
+The bot feeds all of them. `zapped()` comes from `Ogi`: once a turn, before the turn's scans, it compares its energy
+with what last turn left it and the turn's known changes (its shots, its bullets' hits, the enemy's hits, rams); a
+turn in which it hit a wall is not checked. A loss of exactly 0.1 more is the inactivity penalty, which the engine
+takes from every robot, so each fire detector learns it before it reads the enemy's energy. The penalty needs 450
+turns in which the robots lose less than 10 energy (engine-model G-38). While surfing that happens only once one side
+is finished; but bullets that collide damage nobody, so the bullet shield's rounds against weak bullets reach it, and
+an enemy's shot of 0.1 then looked like 0.2.
 
 ## Rules
 

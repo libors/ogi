@@ -142,8 +142,12 @@ public final class WaveSurfer {
         final DangerModel.Prediction prediction;
         /** Guess-factor intervals {low, high, chance of a collision} that our bullets shadow, by bullet. */
         final Map<Object, List<double[]>> shadows = new HashMap<>();
+        /** Whether the wave teaches the danger model: not if it was fired while we shielded instead of surfing. */
+        final boolean learns;
 
-        EnemyWave(Wave wave, HitRange range, int direction, double[] features, DangerModel.Prediction prediction) {
+        EnemyWave(Wave wave, HitRange range, int direction, double[] features, DangerModel.Prediction prediction,
+                  boolean learns) {
+            this.learns = learns;
             this.wave = wave;
             this.range = range;
             this.direction = direction;
@@ -209,6 +213,8 @@ public final class WaveSurfer {
     private Wave lastSurfed;
     /** The distance the orbit leans towards and the wall smoothing turns towards. */
     private double preferredDistance = PREFERRED_DISTANCE;
+    /** Whether the waves detected from now on teach the danger model ({@link #learning(boolean)}). */
+    private boolean learning = true;
 
     public WaveSurfer(Field field, double coolingRate) {
         this.field = field;
@@ -235,8 +241,18 @@ public final class WaveSurfer {
         });
     }
 
-    /** Our scan of an enemy, heading mathematical; a shot it reveals becomes a wave. */
-    public void scanned(String name, long time, double x, double y, double heading, double velocity, double energy) {
+    /**
+     * Whether the waves detected from now on teach the danger model. A robot that stands and shoots bullets down
+     * (bullet shielding) sees bullets aimed at a standing target, which say nothing about how the enemy aims at a
+     * surfer.
+     */
+    public void learning(boolean learning) {
+        this.learning = learning;
+    }
+
+    /** Our scan of an enemy, heading mathematical; a shot it reveals becomes a wave, and is returned. */
+    public Optional<DetectedShot> scanned(String name, long time, double x, double y, double heading,
+                                          double velocity, double energy) {
         neighbours.seen(name, time, x, y);
         Map<Long, double[]> positions = enemyPositions.computeIfAbsent(name, n -> new HashMap<>());
         positions.put(time, new double[] {x, y, heading, velocity});
@@ -252,7 +268,9 @@ public final class WaveSurfer {
         if (neighbours.nearOther(name, time)) {
             detector.nearOtherRobot();
         }
-        detector.scanned(time, x, y, velocity, energy).ifPresent(this::addWave);
+        Optional<DetectedShot> shot = detector.scanned(time, x, y, velocity, energy);
+        shot.ifPresent(this::addWave);
+        return shot;
     }
 
     /** Our scan of a teammate, which can ram an enemy out of our sight. */
@@ -266,6 +284,15 @@ public final class WaveSurfer {
 
     public void rammed(String name) {
         detector(name).rammed();
+    }
+
+    /**
+     * The engine's inactivity penalty took 0.1 energy from every robot in this turn (engine-model G-38): call it
+     * before the turn's scans. Bullets that collide damage nobody, so in a bullet shield's rounds against weak bullets
+     * the robots lose less than 10 energy in 450 turns, their shots' cost alone.
+     */
+    public void zapped() {
+        detectors.values().forEach(FireDetector::zapped);
     }
 
     /** An enemy bullet hit us at the end of its move in turn {@code time}; heading mathematical. */
@@ -356,7 +383,7 @@ public final class WaveSurfer {
             EnemyWave w = it.next();
             w.range.observe(now, us[0], us[1]);
             if (w.range.passed()) {
-                if (w.range.hits()) {
+                if (w.range.hits() && w.learns) {
                     double middle = (w.range.minOffset() + w.range.maxOffset()) / 2;
                     model(w.wave.shooter()).visit(w.features, w.direction * middle / w.escape);
                 }
@@ -461,7 +488,8 @@ public final class WaveSurfer {
             simple[g] = direction * Angles.normalizeRelative(aims[g] - reference) / wave.maxEscapeAngle();
         }
         HitRange range = new HitRange(wave, reference, (int) field.width(), (int) field.height());
-        EnemyWave w = new EnemyWave(wave, range, direction, features, model(shooter).predict(features, simple));
+        EnemyWave w = new EnemyWave(wave, range, direction, features, model(shooter).predict(features, simple),
+                false);
         for (BulletPath b : ourBullets) {
             addShadows(w, b);
         }
@@ -1038,7 +1066,8 @@ public final class WaveSurfer {
                 range.observe(t, s[0], s[1]);
             }
         }
-        EnemyWave w = new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple));
+        EnemyWave w = new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple),
+                learning);
         for (BulletPath b : ourBullets) {
             addShadows(w, b);
         }
@@ -1060,7 +1089,9 @@ public final class WaveSurfer {
             double travelled = Math.hypot(x - w.wave.x(), y - w.wave.y());
             double expected = w.wave.radius(time) - movesBack * w.wave.speed();
             if (Math.abs(travelled - expected) <= w.wave.speed()) {
-                model(shooter).learn(w.features, w.prediction, w.guessFactor(heading));
+                if (w.learns) {
+                    model(shooter).learn(w.features, w.prediction, w.guessFactor(heading));
+                }
                 it.remove();
                 spent.add(w);
                 return;

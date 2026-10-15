@@ -1,5 +1,6 @@
 package cz.libors;
 
+import cz.libors.ogi.enemy.DetectedShot;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.CircularAim;
@@ -12,7 +13,10 @@ import cz.libors.ogi.gun.RacePower;
 import cz.libors.ogi.move.OrbitMovement;
 import cz.libors.ogi.move.WaveSurfer;
 import cz.libors.ogi.physics.EngineRobot;
+import cz.libors.ogi.physics.Inactivity;
 import cz.libors.ogi.physics.RobotMotion;
+import cz.libors.ogi.shield.Shield;
+import cz.libors.ogi.shield.ShieldPlanner;
 import cz.libors.ogi.team.EnemySighting;
 import cz.libors.ogi.trace.Overlay;
 import cz.libors.ogi.trace.Trace;
@@ -23,8 +27,10 @@ import robocode.Bullet;
 import robocode.BulletHitBulletEvent;
 import robocode.BulletHitEvent;
 import robocode.BulletMissedEvent;
+import robocode.DeathEvent;
 import robocode.HitByBulletEvent;
 import robocode.HitRobotEvent;
+import robocode.HitWallEvent;
 import robocode.MessageEvent;
 import robocode.RobotDeathEvent;
 import robocode.Rules;
@@ -36,10 +42,13 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * Ogi, a team-first Robocode bot. One robot class serves 1v1, melee and team battles.
@@ -122,6 +131,54 @@ public class Ogi extends TeamRobot {
     private static final int MIRROR_PLANNED_TURNS = 50;
     /** How much further than the target is now the mirror gun's planned path reaches: the target may move away. */
     private static final double MIRROR_REACH = 100;
+    /** Whether we shoot the enemy's bullets down in a duel instead of surfing them. */
+    private static final boolean SHIELD = true;
+    /** The gun must be this close to a shield shot's heading, in radians: the shot has to be exact. */
+    private static final double SHIELD_AIM_TOLERANCE = 1e-9;
+    /** While shielding, after this many turns without an enemy shot the gun shoots at the enemy. */
+    private static final long SHIELD_IDLE_TURNS = 60;
+    /**
+     * While shielding we stand where the round put us and return there after each step aside; pushed further than this
+     * (by a robot, or while ramming) we stand where we are.
+     */
+    private static final double SHIELD_HOME_DRIFT = 2;
+    /**
+     * Closer to the enemy than this plus this many pixels per unit of the speed of its next bullet (as its last shot
+     * this round, before that the mean over the battle), our shot cannot meet its bullet in time: we back away first,
+     * still shielding. With these our fastest bullet, fired up to two turns after the enemy's, meets it before it is
+     * within the planner's clearance: about 105 px against a bullet of power 0.1, 80 px against one of power 3. A
+     * retreat costs more than it saves when it need not be: guns that learn or smooth our movement miss for a few
+     * shots after it, and some enemies move away by themselves; but an enemy low on energy that stands close and
+     * fires weak bullets would hit us with every one.
+     */
+    private static final double SHIELD_MIN_DISTANCE = 38;
+    private static final double SHIELD_DISTANCE_PER_SPEED = 3.4;
+    /** The power assumed for an enemy's shots before its first one. */
+    private static final double SHIELD_FIRST_POWER = 2;
+    /**
+     * The trial: every duel starts with the shield, and once the damage the enemy's bullets did to us while we shielded
+     * exceeds this much plus this much per shot it fired then, we surf it for the rest of the battle. Not the other way
+     * round: guns that learn our movement learn a few rounds of surfing, and a shield tried after them fails. In shield mode
+     * we score about 60 a round (survival), so 0.25 a shot at about 40 shots a round keeps a share of about 80 %. The
+     * start allows two full-power hits: the aim models learn from the first bullets.
+     */
+    private static final double SHIELD_TRIAL_DAMAGE = 35;
+    private static final double SHIELD_TRIAL_RATE = 0.25;
+    /**
+     * We surf the enemy too once we lost this many rounds while shielding: an enemy that hits with many weak bullets
+     * wins the energy race though its damage stays within the budget.
+     */
+    private static final int SHIELD_TRIAL_ROUNDS = 2;
+    /** Per enemy, for the battle: {the damage its bullets did to us while we shielded, its shots then, rounds lost}. */
+    private static final Map<String, double[]> SHIELD_TRIALS = new HashMap<>();
+    /** The enemies we stopped shielding against or never try it against, for the battle. */
+    private static final Set<String> SHIELD_DROPPED = new HashSet<>();
+
+    /** Nearer than this to where we stand, along the body, we do not move back: the rest is the body's turning. */
+    private static final double SHIELD_HOME_SLACK = 0.05;
+    /** How far ahead a retreat must stay inside the field, and by how much. */
+    private static final double RETREAT_LOOKAHEAD = 60;
+    private static final double RETREAT_MARGIN = 30;
 
     private World world;
     private Field field;
@@ -129,6 +186,13 @@ public class Ogi extends TeamRobot {
     private GuessFactorGun gun;
     private MirrorAim mirror;
     private WaveSurfer surfer;
+    private Shield shield;
+    /** The enemy we shielded against in the last turn, or null. */
+    private String shieldedEnemy;
+
+    /** Where we stand while shielding; NaN until the round's first shielding turn. */
+    private double homeX = Double.NaN;
+    private double homeY = Double.NaN;
     private Random aimSpread;
     /**
      * Where in the target's escape range the random gun aims: drawn once per bullet and held until the bullet fires,
@@ -143,6 +207,13 @@ public class Ogi extends TeamRobot {
     private boolean plannedShot;
     /** Whether this round's preferred distance is chosen: once, in the round's first turn with a target. */
     private boolean distanceChosen;
+    /**
+     * Our energy as this turn's known changes leave it (shots fired last turn, bullets, rams), to tell the engine's
+     * inactivity penalty from them; NaN until the first turn checked. A turn in which we hit a wall is not checked.
+     */
+    private double expectedEnergy = Double.NaN;
+    private boolean hitWall;
+    private long energyChecked = -1;
 
     @Override
     public void run() {
@@ -155,6 +226,7 @@ public class Ogi extends TeamRobot {
         randomAim = new Random(roundSeed() * 31 + 17);
         randomDraw = randomAim.nextDouble();
         surfer = new WaveSurfer(field, getGunCoolingRate());
+        shield = new Shield(field, getGunCoolingRate());
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
@@ -186,7 +258,11 @@ public class Ogi extends TeamRobot {
 
     private void act() {
         long now = getTime();
+        if (energyChecked != now) {
+            checkInactivity(now);
+        }
         surfer.ourState(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getVelocity());
+        shield.ourState(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getVelocity());
         surfer.update(now);
         mirror.ours(now, getX(), getY());
         Optional<EnemyState> target = world.closestEnemy(getX(), getY(), now, MAX_TARGET_AGE);
@@ -199,6 +275,13 @@ public class Ogi extends TeamRobot {
         EnemyState t = target.get();
         if (getOthers() == 1 && t.time() == now) {
             mirror.scanned(t.name(), now, t.x(), t.y());
+        }
+        // For the waves of the next scans: the surfer learns only from shots fired while we surf.
+        surfer.learning(!shielding(t.name()));
+        shieldedEnemy = shielding(t.name()) ? t.name() : null;
+        if (shielding(t.name())) {
+            shieldAct(t, now);
+            return;
         }
         if (!distanceChosen) {
             distanceChosen = true;
@@ -219,6 +302,191 @@ public class Ogi extends TeamRobot {
             gun.plan(t.name(), now).ifPresent(p -> setDebugProperty(GunLog.SHOT, GunLog.line(p.shot(),
                     p.decision())));
         }
+    }
+
+    /**
+     * Once a turn, before the turn's scans: an unexplained loss of exactly the inactivity penalty means the engine took
+     * it from every robot, the enemies too, which their fire detectors must not take for a shot.
+     */
+    private void checkInactivity(long now) {
+        if (!Double.isNaN(expectedEnergy) && !hitWall && energyChecked == now - 1
+                && Math.abs(getEnergy() - (expectedEnergy - Inactivity.ZAP)) < 1e-6) {
+            surfer.zapped();
+        }
+        expectedEnergy = getEnergy();
+        hitWall = false;
+        energyChecked = now;
+    }
+
+    /** A bullet of ours was fired in this turn: its power leaves our energy in the next. */
+    private void paid(Bullet bullet) {
+        if (bullet != null) {
+            expectedEnergy -= bullet.getPower();
+        }
+    }
+
+    /** Whether we shoot this enemy's bullets down instead of surfing them: in a duel, until its trial fails. */
+    private boolean shielding(String name) {
+        return SHIELD && getOthers() == 1 && !SHIELD_DROPPED.contains(name);
+    }
+
+    /** One of the enemy's bullets hit us while we shielded, it fired, or it won a round: the trial's account. */
+    private void shieldTrial(String name, double damage, boolean shot, boolean lost) {
+        double[] trial = SHIELD_TRIALS.get(name);
+        if (trial == null) {
+            trial = new double[3];
+            SHIELD_TRIALS.put(name, trial);
+        }
+        trial[0] += damage;
+        trial[1] += shot ? 1 : 0;
+        trial[2] += lost ? 1 : 0;
+        if ((trial[0] > SHIELD_TRIAL_DAMAGE + SHIELD_TRIAL_RATE * trial[1] || trial[2] >= SHIELD_TRIAL_ROUNDS)
+                && SHIELD_DROPPED.add(name)) {
+            setDebugProperty("shieldTrial", String.format(Locale.ROOT, "dropped damage %.1f shots %.0f lost %.0f",
+                    trial[0], trial[1], trial[2]));
+        }
+    }
+
+    @Override
+    public void onDeath(DeathEvent e) {
+        if (shieldedEnemy != null && getOthers() > 0) {
+            shieldTrial(shieldedEnemy, 0, false, true);
+        }
+    }
+
+    /**
+     * A turn of bullet shielding: fire the shield shot planned last turn, then stand (stepping a tenth of a pixel aside
+     * when a shot needs it, and back), keep the body across the line to the enemy and turn the gun for the next shield
+     * shot. Too close to the enemy we back away first. A disabled enemy gets the weakest bullet once no bullet of its
+     * is left to shoot down: any hit kills it, and ramming it would move us, which guns that learn our movement learn
+     * too. After a long time without enemy shots the gun shoots at the enemy instead.
+     */
+    private void shieldAct(EnemyState target, long now) {
+        double fired = 0;
+        Optional<ShieldPlanner.Plan> due = shield.due(now);
+        if (due.isPresent() && getGunHeat() == 0 && getEnergy() > due.get().power() && Math.abs(
+                Angles.normalizeRelative(due.get().heading() - Angles.fromRobocode(getGunHeadingRadians())))
+                < SHIELD_AIM_TOLERANCE) {
+            Bullet bullet = setFireBullet(due.get().power());
+            paid(bullet);
+            if (bullet != null) {
+                surfer.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
+                        Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
+                shield.fired(now);
+                fired = bullet.getPower();
+            }
+        }
+        String event = shield.takeEvent();
+        if (event != null) {
+            setDebugProperty("shield", event);
+        }
+        double bearing = Angles.bearing(getX(), getY(), target.x(), target.y());
+        double heading = Angles.fromRobocode(getHeadingRadians());
+        if (finishesByRamming(target) && !shield.hasTargets()) {
+            gun.update(now, getX(), getY(), null);
+            setAhead(0);
+            double gunHeading = Angles.fromRobocode(getGunHeadingRadians());
+            double within = Math.atan2(RobotMotion.HALF_SIZE / 2.0, target.distanceTo(getX(), getY()));
+            if (fired == 0 && getGunHeat() == 0 && getEnergy() > Rules.MIN_BULLET_POWER
+                    && Math.abs(Angles.normalizeRelative(bearing - gunHeading)) < within) {
+                paid(setFireBullet(Rules.MIN_BULLET_POWER));
+            }
+            setTurnGunRightRadians(Angles.robocodeTurn(gunHeading, bearing));
+            return;
+        }
+        double bodyTurn;
+        double[] moves;
+        if (target.distanceTo(getX(), getY()) < SHIELD_MIN_DISTANCE + SHIELD_DISTANCE_PER_SPEED
+                * Rules.getBulletSpeed(shield.nextPower(target.name(), SHIELD_FIRST_POWER))) {
+            double away = retreatHeading(target);
+            bodyTurn = Angles.robocodeTurn(heading, away);
+            double distance = 100;
+            if (Math.abs(bodyTurn) > Math.PI / 2) {
+                bodyTurn = Angles.robocodeTurn(heading, away + Math.PI);
+                distance = -distance;
+            }
+            moves = new double[] {distance};
+            homeX = Double.NaN;
+        } else {
+            if (Double.isNaN(homeX) || Math.hypot(getX() - homeX, getY() - homeY) > SHIELD_HOME_DRIFT) {
+                homeX = getX();
+                homeY = getY();
+            }
+            bodyTurn = Angles.robocodeTurn(heading, bearing + Math.PI / 2);
+            if (Math.abs(bodyTurn) > Math.PI / 2) {
+                bodyTurn = Angles.robocodeTurn(heading, bearing - Math.PI / 2);
+            }
+            moves = shieldMoves(bodyTurn);
+        }
+        setTurnRightRadians(bodyTurn);
+        if (fired == 0 && shield.sinceLastShot(now) > SHIELD_IDLE_TURNS) {
+            boolean shot = fire(target, now);
+            gun.update(now, getX(), getY(), shot ? target.name() : null);
+            setAhead(moves[0]);
+            aim(target, now, getX(), getY());
+            return;
+        }
+        gun.update(now, getX(), getY(), null);
+        EngineRobot me = ourEngineState();
+        me.adjustGunForBodyTurn = true;
+        me.adjustRadarForGunTurn = true;
+        me.adjustRadarForBodyTurn = true;
+        if (fired > 0) {
+            RobotMotion.fire(me, fired);
+        }
+        ShieldPlanner.Plan plan = shield.plan(me, now, moves, bodyTurn, Math.min(Rules.MAX_BULLET_POWER,
+                getEnergy() - fired - Rules.MIN_BULLET_POWER));
+        if (plan == null) {
+            setAhead(moves[0]);
+            setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), bearing));
+        } else {
+            setAhead(shield.isCommitted(now) ? plan.distance() : moves[0]);
+            setTurnGunRightRadians(plan.gunTurn());
+        }
+    }
+
+    /**
+     * The distances we may set this turn while shielding, with {@code bodyTurn} set: back to where we stand, or to
+     * {@link ShieldPlanner#STEPS} to either side of it along the body, which this turn's turn has set across the line
+     * to the enemy.
+     */
+    private double[] shieldMoves(double bodyTurn) {
+        EngineRobot turned = ourEngineState();
+        turned.bodyTurnRemaining = bodyTurn;
+        RobotMotion.move(turned, (int) field.width(), (int) field.height(), getGunCoolingRate());
+        double h = Angles.fromRobocode(turned.bodyHeading);
+        double home = (homeX - turned.x) * Math.cos(h) + (homeY - turned.y) * Math.sin(h);
+        if (Math.abs(home) < SHIELD_HOME_SLACK) {
+            // Back from a step aside, or only turned: we stand here now.
+            home = 0;
+            homeX = getX();
+            homeY = getY();
+        }
+        double[] moves = new double[ShieldPlanner.STEPS.length];
+        for (int i = 0; i < moves.length; i++) {
+            moves[i] = home + ShieldPlanner.STEPS[i];
+        }
+        return moves;
+    }
+
+    /**
+     * Straight away from the target, or the nearest heading to it that keeps us inside the field: moving along the
+     * line to the enemy changes little in the angles its gun learns.
+     */
+    private double retreatHeading(EnemyState target) {
+        double away = Angles.bearing(target.x(), target.y(), getX(), getY());
+        for (double turn = 0; turn <= Math.PI / 2; turn += 0.1) {
+            for (int side = 1; side >= -1; side -= 2) {
+                double h = away + side * turn;
+                double x = getX() + RETREAT_LOOKAHEAD * Math.cos(h);
+                double y = getY() + RETREAT_LOOKAHEAD * Math.sin(h);
+                if (x > RETREAT_MARGIN && x < field.width() - RETREAT_MARGIN && y > RETREAT_MARGIN
+                        && y < field.height() - RETREAT_MARGIN) {
+                    return h;
+                }
+            }
+        }
+        return away;
     }
 
     /**
@@ -263,6 +531,7 @@ public class Ogi extends TeamRobot {
             return false;
         }
         Bullet bullet = setFireBullet(plan.get().power());
+        paid(bullet);
         if (bullet != null) {
             surfer.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
                     Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
@@ -500,6 +769,9 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onScannedRobot(ScannedRobotEvent e) {
+        if (energyChecked != e.getTime()) {
+            checkInactivity(e.getTime());
+        }
         double bearing = Angles.fromRobocode(getHeadingRadians() + e.getBearingRadians());
         double x = getX() + e.getDistance() * Math.cos(bearing);
         double y = getY() + e.getDistance() * Math.sin(bearing);
@@ -512,7 +784,13 @@ public class Ogi extends TeamRobot {
                 e.getVelocity(), e.getEnergy(), e.getTime(), getRoundNum());
         world.observeEnemy(sighting);
         gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
-        surfer.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
+        shield.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
+        Optional<DetectedShot> shot = surfer.scanned(e.getName(), e.getTime(), x, y, sighting.heading(),
+                e.getVelocity(), e.getEnergy());
+        shot.ifPresent(shield::shotDetected);
+        if (shot.isPresent() && shielding(e.getName())) {
+            shieldTrial(e.getName(), 0, true, false);
+        }
         if (getTeammates() != null) {
             try {
                 broadcastMessage(sighting);
@@ -524,6 +802,7 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onBulletHit(BulletHitEvent e) {
+        expectedEnergy += Rules.getBulletHitBonus(e.getBullet().getPower());
         bulletEnded(inFlight.remove(e.getBullet()), e.getName());
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
@@ -533,9 +812,15 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onHitByBullet(HitByBulletEvent e) {
+        expectedEnergy -= Rules.getBulletDamage(e.getPower());
         if (!isTeammate(e.getName())) {
             surfer.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
                     Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+            shield.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
+                    Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+            if (shielding(e.getName())) {
+                shieldTrial(e.getName(), Rules.getBulletDamage(e.getPower()), false, false);
+            }
         }
     }
 
@@ -555,14 +840,23 @@ public class Ogi extends TeamRobot {
             surfer.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),
                     e.getHitBullet().getY(), Angles.fromRobocode(e.getHitBullet().getHeadingRadians()),
                     e.getHitBullet().getPower());
+            shield.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),
+                    e.getHitBullet().getY(), Angles.fromRobocode(e.getHitBullet().getHeadingRadians()),
+                    e.getHitBullet().getPower());
         }
     }
 
     @Override
     public void onHitRobot(HitRobotEvent e) {
+        expectedEnergy -= Rules.ROBOT_HIT_DAMAGE;
         if (!isTeammate(e.getName())) {
             surfer.rammed(e.getName());
         }
+    }
+
+    @Override
+    public void onHitWall(HitWallEvent e) {
+        hitWall = true;
     }
 
     /** Called only while painting is enabled for this robot in the GUI. */

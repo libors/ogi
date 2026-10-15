@@ -12,7 +12,8 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 1. **Our state** goes to the surfer, and the enemy waves advance to our position at the end of this turn.
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
 3. **Radar:** locked on the target in 1v1, spinning otherwise.
-4. **Movement:** the surfer's commands while an enemy wave is in the air; otherwise, in a duel, the wave the enemy can
+4. **Movement:** in a duel, until the enemy's trial fails, the bullet shield instead of the rest of this list
+   ([Bullet shield](#bullet-shield-czliborsogishield)). Otherwise the surfer's commands while an enemy wave is in the air; otherwise, in a duel, the wave the enemy can
    fire next once its gun is cool (`WaveSurfer.gunHeatCommand`), the surfer's ways around a target that drives at us
    (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A disabled target in a duel
    (energy 0: it can neither fire nor move) is rammed instead, once none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
@@ -277,6 +278,73 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   walls at any distance (the surfer only beyond 325 px).
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
   up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
+
+## Bullet shield (`cz.libors.ogi.shield`)
+
+In a duel the bot starts by standing still and shooting each enemy bullet down with one of its own. Against a target
+that stands, head-on, linear and circular guns aim at the same point and guns that learn converge to it, so many guns
+become predictable to the last bits; anything that makes us move spoils that.
+
+- **The trial** (`Ogi`, per enemy, for the battle): every duel starts with the shield. Once the damage the enemy's
+  bullets did to us while we shielded exceeds 35 plus 0.25 per shot it fired meanwhile, or we lost 2 rounds while
+  shielding, we surf it for the rest of the battle. Never the other way round: guns that learn our movement learn a few
+  rounds of surfing, and a shield tried after them fails. In shield mode we score about 60 a round (survival), so 0.25
+  a shot at about 40 shots a round keeps a share of about 80 %. The start allows two full-power hits, since the aim
+  models learn from the first bullets.
+- **Targets** (`Shield`): every shot the fire detector finds with an exact fire time, while we saw both robots,
+  becomes a target. Each turn the first target not yet shot at gets a plan. Once the gun will be cool and on the
+  plan's heading in the next turn the plan is committed, and it is fired then only if the gun is within 1e-9 rad of the
+  heading. While the gun cannot fire in the next turn there is no plan, only the gun turned towards the line to the
+  bullet's origin: a plan costs a fraction of a millisecond warm and several cold. Each enemy bullet that hits us or
+  one of ours is matched to its target, also one or two bullet moves back (engine-model G-04), and teaches the aim.
+- **Where the enemy aims** (`ShieldAim`, per enemy, for the battle): 45 models, each a base heading and an offset.
+  - The bases, for a bullet fired in turn f: head-on from the enemy's position at the end of f − 1 at ours then
+    (engine-model G-01); from the bullet's origin; from the enemy's position advanced by one turn of its velocity;
+    head-on plus its body's turn in f. Each also at our position advanced by one turn of our velocity, which matters
+    only in the turns we move. And the enemy's body heading, for a gun that never turns on its own.
+  - The offsets: constant; signed by our lateral direction as the enemy saw it (the last one we moved in, or the
+    current one with standing counted as clockwise); the same two in units of the maximum escape angle.
+  - A model's offset is the error that most of its last 60 errors match within 2e-5 rad. The model matching the most
+    bullets predicts, the smaller offset on a tie; without bullets, head-on. Following runs of a gun's other aim (one
+    guess-factor bin off) after two of their shots caught more against some bots and provoked more against others,
+    so the aim does not follow runs.
+  - The margin the enemy's aim needs: 1.25 × the error 90 % of the last 30 predictions stayed within, at least
+    2e-5 rad; 1e-4 before 10 bullets.
+- **The shot** (`ShieldPlanner`): two bullets collide when their moves of a turn cross (engine-model G-04).
+  - For each turn of the enemy bullet's flight, until it would come within our box's extent along its path plus
+    2 px (`18 / max(|cos|, |sin|) + 2`, 20 to 27.5 px: the box is square and axis-aligned, engine-model G-03), the
+    planner aims at five points of the enemy bullet's move of that turn, the middle first. It takes the speed at which
+    our move of the turn is centred on the point, or the nearest allowed speed that still reaches it. With the middle
+    alone, two bullets of the same speed, closing in by two moves a turn, had no solution in half of the turns.
+  - A shot's margin is how far the enemy's heading may be off and the bullets still collide for sure, from the
+    shadows our bullet would cast on the wave (`BulletPath.shadows`, from the turns around the crossing).
+  - The choice, among shots the gun is ready for with a sure margin (2e-5 rad): the smallest move whose shot reaches
+    the needed margin; a power within the energy race's target; the widest margin up to 3e-3 rad (some guns aim with
+    a little noise); the lowest power.
+  - **The energy race:** if every shot meets its bullet, each enemy shot of power p costs it p and our answer q
+    costs us q. Its energy has paid for its bullet, ours not yet for the answer, so we can answer all its shots while
+    E_enemy / p ≤ (E_us − q) / q, that is q ≤ p · E_us / (E_enemy + p). The power never exceeds the enemy's bullet's.
+- **Standing:** we stand where the round put us, the body across the line to the enemy, and return there after a
+  step; pushed more than 2 px away (by a robot) we stand where we are. A robot on the enemy bullet's line can meet it
+  only head-on, so a standing robot may step `ShieldPlanner.WIGGLE` (a tenth of a pixel) aside along the body for a
+  shot and back, but only where standing gives less margin than the enemy's aim needs. Every move teaches guns that
+  learn our movement to expect another: steps of a pixel at the start of each round cost more hits than the margin
+  they gave.
+- **Retreat:** closer to the enemy than 38 px plus 3.4 px per unit of its next bullet's speed (its last shot's power
+  this round, before that the battle's mean, before its first shot 2), our fastest bullet fired up to two turns after
+  the enemy's would not meet it in time: about 105 px against power 0.1, 80 px against 3. We back straight away, or
+  along the nearest heading that stays 30 px inside the field 60 px ahead, still shielding.
+- **A disabled enemy** gets a 0.1 bullet once none of its bullets is left to shoot down: any hit kills it, and a ram
+  would move us.
+- **Idle:** after 60 turns without an enemy shot the gun shoots at the enemy as usual.
+- **The surfer does not learn** from the waves fired while we shield (`WaveSurfer.learning`): bullets aimed at a
+  standing target say nothing about the aim at a surfer. The shield's bullets still cast their shadows.
+- **Inactivity:** bullets that collide damage nobody, so a shield's rounds against weak bullets can reach the
+  inactivity penalty ([fire-detection.md](fire-detection.md#inputs)).
+- **Debug properties:** `shield` for each enemy bullet matched to its target: the fire turn, `down` or `hit`, whether
+  we shot at it (or why not), the model, the margin, the error of the expected heading, the distance, our power, the
+  model and offset for the next bullet, the share of bullets it matches and the states of the turns it was planned for.
+  `shieldTrial` when the trial ends.
 
 ## Debug overlay (`cz.libors.ogi.trace`)
 
