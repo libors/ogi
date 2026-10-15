@@ -10,11 +10,13 @@ import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.gun.HitRecord;
 import cz.libors.ogi.gun.MirrorAim;
 import cz.libors.ogi.gun.RacePower;
+import cz.libors.ogi.move.MeleeMovement;
 import cz.libors.ogi.move.OrbitMovement;
 import cz.libors.ogi.move.WaveSurfer;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.physics.Inactivity;
 import cz.libors.ogi.physics.RobotMotion;
+import cz.libors.ogi.radar.MeleeRadar;
 import cz.libors.ogi.shield.Shield;
 import cz.libors.ogi.shield.ShieldPlanner;
 import cz.libors.ogi.team.EnemySighting;
@@ -41,8 +43,10 @@ import robocode.TeamRobot;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -53,8 +57,9 @@ import java.util.Set;
 /**
  * Ogi, a team-first Robocode bot. One robot class serves 1v1, melee and team battles.
  *
- * <p>Radar lock or sweep, guess-factor and circular targeting chosen by virtual hits, wave surfing (orbiting the
- * target while no enemy wave is in the air) and shared scans.
+ * <p>Radar lock in a duel, towards the stalest enemy in a melee; guess-factor and circular targeting chosen by
+ * virtual hits; wave surfing in a duel (orbiting the target while no enemy wave is in the air), minimum risk with the
+ * likely shooters' waves in a melee; shared scans.
  */
 public class Ogi extends TeamRobot {
 
@@ -173,6 +178,11 @@ public class Ogi extends TeamRobot {
     private static final Map<String, double[]> SHIELD_TRIALS = new HashMap<>();
     /** The enemies we stopped shielding against or never try it against, for the battle. */
     private static final Set<String> SHIELD_DROPPED = new HashSet<>();
+    /**
+     * Whether this battle started as a melee (statics last for the battle). Its duel at the end is surfed: the last
+     * enemy has seen us move all round, and a failed trial would cost the round we fought for.
+     */
+    private static boolean meleeBattle;
 
     /** Nearer than this to where we stand, along the body, we do not move back: the rest is the body's turning. */
     private static final double SHIELD_HOME_SLACK = 0.05;
@@ -183,6 +193,10 @@ public class Ogi extends TeamRobot {
     private World world;
     private Field field;
     private OrbitMovement movement;
+    private MeleeMovement melee;
+    private final MeleeRadar meleeRadar = new MeleeRadar();
+    /** Our teammates alive this round; 0 outside a team. */
+    private int teammatesAlive;
     private GuessFactorGun gun;
     private MirrorAim mirror;
     private WaveSurfer surfer;
@@ -220,6 +234,8 @@ public class Ogi extends TeamRobot {
         world = new World();
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
         movement = new OrbitMovement(field, new Random(roundSeed()));
+        melee = new MeleeMovement(field, new Random(roundSeed() * 7 + 3));
+        teammatesAlive = getTeammates() == null ? 0 : getTeammates().length;
         gun = new GuessFactorGun(field);
         mirror = new MirrorAim(field);
         aimSpread = new Random(~roundSeed());
@@ -325,9 +341,13 @@ public class Ogi extends TeamRobot {
         }
     }
 
-    /** Whether we shoot this enemy's bullets down instead of surfing them: in a duel, until its trial fails. */
+    /**
+     * Whether we shoot this enemy's bullets down instead of surfing them: in a duel, until its trial fails; never in a
+     * battle that started as a melee.
+     */
     private boolean shielding(String name) {
-        return SHIELD && getOthers() == 1 && !SHIELD_DROPPED.contains(name);
+        meleeBattle |= getOthers() > 1;
+        return SHIELD && getOthers() == 1 && !meleeBattle && !SHIELD_DROPPED.contains(name);
     }
 
     /** One of the enemy's bullets hit us while we shielded, it fired, or it won a round: the trial's account. */
@@ -509,6 +529,17 @@ public class Ogi extends TeamRobot {
     }
 
     private void steerRadar(EnemyState target, long now) {
+        int enemies = getOthers() - teammatesAlive;
+        if (enemies > 1) {
+            List<MeleeRadar.Seen> seen = new ArrayList<>();
+            for (EnemyState e : world.enemies()) {
+                seen.add(new MeleeRadar.Seen(e.name(), e.x(), e.y(), e.time()));
+            }
+            double turn = meleeRadar.turn(now, getX(), getY(), Angles.fromRobocode(getRadarHeadingRadians()), seen,
+                    enemies, target == null ? null : target.name(), getGunHeat() <= 2 * getGunCoolingRate());
+            setTurnRadarRightRadians(-turn);
+            return;
+        }
         if (getOthers() == 1 && target != null && now - target.time() <= 1) {
             double bearing = Angles.bearing(getX(), getY(), target.x(), target.y());
             double turn = Angles.robocodeTurn(Angles.fromRobocode(getRadarHeadingRadians()), bearing);
@@ -700,11 +731,25 @@ public class Ogi extends TeamRobot {
     }
 
     /**
-     * Sets this turn's movement and returns where it takes us by the end of the next turn: surfing the nearest enemy
-     * wave, or in a duel the wave the enemy can fire next once its gun is cool, ramming a disabled enemy once none is
-     * in the air, or orbiting the target.
+     * Sets this turn's movement and returns where it takes us by the end of the next turn: in a melee the safest place
+     * ({@link MeleeMovement}); otherwise surfing the nearest enemy wave, or in a duel the wave the enemy can fire next
+     * once its gun is cool, ramming a disabled enemy once none is in the air, or orbiting the target.
      */
     private double[] move(EnemyState target, long now) {
+        if (getOthers() > 1) {
+            List<MeleeMovement.Robot> robots = new ArrayList<>();
+            for (EnemyState e : world.enemies()) {
+                robots.add(new MeleeMovement.Robot(e.x(), e.y(), e.energy(), true));
+            }
+            for (World.Teammate t : world.recentTeammates(now, MAX_TEAMMATE_AGE)) {
+                robots.add(new MeleeMovement.Robot(t.x(), t.y(), 0, false));
+            }
+            double[] cmd = melee.command(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getEnergy(),
+                    robots, surfer, ourEngineState());
+            setAhead(cmd[0]);
+            setTurnRightRadians(cmd[1]);
+            return predictNext(cmd[0], cmd[1]);
+        }
         Optional<double[]> surf = surfer.command(ourEngineState(), now);
         if (surf.isPresent()) {
             setAhead(surf.get()[0]);
@@ -882,6 +927,9 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onRobotDeath(RobotDeathEvent e) {
+        if (isTeammate(e.getName())) {
+            teammatesAlive--;
+        }
         world.robotDied(e.getName());
         gun.robotDied(e.getName());
         surfer.robotDied(e.getName());

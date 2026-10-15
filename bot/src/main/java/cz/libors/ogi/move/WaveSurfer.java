@@ -109,6 +109,14 @@ public final class WaveSurfer {
     private static final double POWER_TOLERANCE = 0.01;
     /** The key of the bullet {@link #dangerWithShot} imagines. */
     private static final Object PROBE = new Object();
+    /** In a melee, a way to a destination is predicted at most this many turns. */
+    static final int MELEE_HORIZON = 30;
+    /** In a melee, waves whose shooter aimed at us with less chance than this are left out of a way's danger. */
+    static final double MIN_AIM_CHANCE = 0.1;
+    /** The chance that a melee shooter aimed at us falls with this power of 1 + the enemies it had closer than us. */
+    static final double AIM_EXPONENT = 2;
+    /** How far in time another enemy's scan may lie from a shot to say where it was then. */
+    private static final int AIM_SCAN_TURNS = 16;
 
     /**
      * Turns after which a path changes its way (drives past a point and comes back, stops short, or waits and goes),
@@ -144,6 +152,8 @@ public final class WaveSurfer {
         final Map<Object, List<double[]>> shadows = new HashMap<>();
         /** Whether the wave teaches the danger model: not if it was fired while we shielded instead of surfing. */
         final boolean learns;
+        /** In a melee, the chance that the shooter aimed at us ({@link #aimChance}); 1 in a duel. */
+        double aimedAtUs = 1;
 
         EnemyWave(Wave wave, HitRange range, int direction, double[] features, DangerModel.Prediction prediction,
                   boolean learns) {
@@ -1068,10 +1078,97 @@ public final class WaveSurfer {
         }
         EnemyWave w = new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple),
                 learning);
+        w.aimedAtUs = aimChance(shot.shooter(), from[0], from[1], us, aimed);
         for (BulletPath b : ourBullets) {
             addShadows(w, b);
         }
         waves.add(w);
+    }
+
+    /**
+     * The chance that a shooter at ({@code x}, {@code y}) aimed at us in turn {@code t}, where we were at {@code us}:
+     * 1 / (1 + the enemies it had closer than us), each where its scan nearest to that turn saw it (the power is
+     * {@link #AIM_EXPONENT}). Most melee robots aim at the enemy closest to them.
+     */
+    private double aimChance(String shooter, double x, double y, double[] us, long t) {
+        double ours = Math.hypot(us[0] - x, us[1] - y);
+        int closer = 0;
+        for (Map.Entry<String, Map<Long, double[]>> e : enemyPositions.entrySet()) {
+            if (e.getKey().equals(shooter)) {
+                continue;
+            }
+            double[] p = null;
+            for (int k = 0; k <= AIM_SCAN_TURNS && p == null; k++) {
+                p = e.getValue().get(t - k);
+                if (p == null) {
+                    p = e.getValue().get(t + k);
+                }
+            }
+            if (p != null && Math.hypot(p[0] - x, p[1] - y) < ours) {
+                closer++;
+            }
+        }
+        return 1 / Math.pow(1 + closer, AIM_EXPONENT);
+    }
+
+    /**
+     * Whether a wave counts in a melee way's danger: its shooter aimed at us with a chance of
+     * {@link #MIN_AIM_CHANCE} or more, and it can reach us within {@link #MELEE_HORIZON} turns wherever we drive.
+     */
+    private static boolean meleeRelevant(EnemyWave w, EngineRobot me, long now) {
+        double gap = Math.hypot(me.x - w.wave.x(), me.y - w.wave.y()) - w.wave.radius(now);
+        return w.aimedAtUs >= MIN_AIM_CHANCE
+                && gap < (w.wave.speed() + RobotMotion.MAX_VELOCITY) * MELEE_HORIZON + RobotMotion.HALF_SIZE;
+    }
+
+    /**
+     * In a melee, the damage we expect from the enemy waves in the air on the way to ({@code px}, {@code py}): we drive
+     * straight there and stand, predicted by the engine's rules until the waves have passed, at most
+     * {@link #MELEE_HORIZON} turns. Each wave counts its share of the shooter's predicted aim inside its hit range
+     * times its bullet's damage, as in a duel, times the chance that the shooter aimed at us; waves whose chance is
+     * below {@link #MIN_AIM_CHANCE}, and waves that cannot reach us within the horizon, are left out.
+     *
+     * @param me our state at the end of this turn, in the engine's convention, without commands
+     */
+    public double meleeDanger(EngineRobot me, long now, double px, double py) {
+        int n = 0;
+        for (EnemyWave w : waves) {
+            if (meleeRelevant(w, me, now)) {
+                n++;
+            }
+        }
+        if (n == 0) {
+            return 0;
+        }
+        EnemyWave[] relevant = new EnemyWave[n];
+        HitRange[] ranges = new HitRange[n];
+        int i = 0;
+        for (EnemyWave w : waves) {
+            if (meleeRelevant(w, me, now)) {
+                relevant[i] = w;
+                ranges[i++] = w.range.copy();
+            }
+        }
+        EngineRobot r = me.copy();
+        boolean open = true;
+        for (long t = now + 1; t <= now + MELEE_HORIZON && open; t++) {
+            double[] cmd = MeleeMovement.driveTo(r.x, r.y, Angles.fromRobocode(r.bodyHeading), px, py);
+            r.distanceRemaining = cmd[0];
+            r.bodyTurnRemaining = cmd[1];
+            RobotMotion.move(r, (int) field.width(), (int) field.height(), coolingRate);
+            open = false;
+            for (HitRange range : ranges) {
+                if (!range.passed()) {
+                    range.observe(t, r.x, r.y);
+                    open |= !range.passed();
+                }
+            }
+        }
+        double sum = 0;
+        for (int k = 0; k < n; k++) {
+            sum += relevant[k].aimedAtUs * damage(relevant[k], ranges[k]);
+        }
+        return sum;
     }
 
     /** Matches a bullet of {@code shooter} to its wave by power and travelled distance, and learns its guess factor. */

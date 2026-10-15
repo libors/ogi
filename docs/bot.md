@@ -11,9 +11,12 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 
 1. **Our state** goes to the surfer, and the enemy waves advance to our position at the end of this turn.
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
-3. **Radar:** locked on the target in 1v1, spinning otherwise.
-4. **Movement:** in a duel, until the enemy's trial fails, the bullet shield instead of the rest of this list
-   ([Bullet shield](#bullet-shield-czliborsogishield)). Otherwise the surfer's commands while an enemy wave is in the air; otherwise, in a duel, the wave the enemy can
+3. **Radar:** locked on the target in 1v1; in a melee towards the enemy scanned longest ago
+   ([Melee radar](#melee-radar-meleeradar)).
+4. **Movement:** in a melee (more than one other robot alive), the safest place ([Melee movement](#melee-movement-meleemovement)).
+   In a duel, until the enemy's trial fails, the bullet shield instead of the rest of this list
+   ([Bullet shield](#bullet-shield-czliborsogishield)); not in the duel at the end of a battle that started as a
+   melee: the last enemy has seen us move all battle, and a failed trial would cost the round we fought for. Otherwise the surfer's commands while an enemy wave is in the air; otherwise, in a duel, the wave the enemy can
    fire next once its gun is cool (`WaveSurfer.gunHeatCommand`), the surfer's ways around a target that drives at us
    (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A disabled target in a duel
    (energy 0: it can neither fire nor move) is rammed instead, once none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
@@ -278,6 +281,48 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   walls at any distance (the surfer only beyond 325 px).
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
   up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
+
+### Melee movement (`MeleeMovement`)
+
+While more than one other robot lives, the bot does not surf: it drives to the safest point near it (minimum risk).
+In a melee most of the score is survival and most robots fire at the enemy closest to them, so the safest place is far
+from everybody and nobody's closest robot. The waves are still detected and learned, for the duel at the end.
+
+- **Candidates:** every turn 40 points on a circle around us, one per sector at a random angle within it, each at a
+  random distance between 80 and 220 px but at most 0.6 times the closest enemy's distance (we do not drive past it),
+  45 px or more from every wall. Last turn's destination competes with its risk times 0.9 until we are within 20 px
+  of it, so that a near tie does not turn us back and forth.
+- **Risk** of a point D: the sum over the enemies (last scans) of
+  `threat · (1 + |cos a|) / (d² · (1 + n))`, where threat is the enemy's energy over ours clamped to [0.5, 2], a the
+  angle between our way to D and the line from D to the enemy (driving at or away from a shooter is what head-on and
+  linear guns hit), d the distance from D to the enemy and n the robots closer to the enemy than D (with each one, it
+  is less likely to aim at us). A teammate adds 0.3 / d². The sum is multiplied by 1 + Σ 400 / d² over our last 20
+  positions, one every 5 turns, so that we do not keep to one spot.
+- **Waves:** the 8 candidates with the least risk (last turn's destination always among them) also get the damage we
+  expect on the way from the enemy waves in the air (`WaveSurfer.meleeDanger`): we drive straight to the point and
+  stand, predicted by the engine's rules until the waves have passed, at most 30 turns, and each wave counts as in a
+  duel (its shooter's danger model inside the hit range, our bullets' shadows, times the bullet's damage), times the
+  chance that its shooter aimed at us: 1 / (1 + n)², n the enemies it had closer than us when it fired, each where
+  its scan nearest to that turn saw it (most melee robots aim at their closest enemy). Waves below a chance of 0.1
+  (n ≥ 3), and waves that cannot reach us within the 30 turns wherever we drive, are left out. A candidate's score is
+  its risk over the 8 candidates' median risk plus 3 times its waves' damage over their median damage (at least 0.1);
+  last turn's destination at 0.9 times its score.
+- **Driving:** straight at the point, backwards if that turns us less; the engine slows us down to stop there.
+- Measured on the melee rumble's population (2026-10-15): the position alone gave about 7 points of APS more than
+  surfing every wave (rounds won from 12 to 32 %); with the waves, the radar below and the duel after a melee surfed,
+  2.7 more (rounds won 49 %); the wave weight 3 and the sharper aim chance 0.6 more, at a third of the waves' CPU
+  ([harness.md](harness.md#a-melee-comparison-comparemeleejob)). The distance law must be steep (1/d lost 1.3, 1/d³
+  tied) and our recent positions must repel, but not too much (without them 1.6 less, at four times the weight 1.6
+  less); predicting 12 candidates against the waves instead of 8 cost ten times the CPU for nothing; the other terms
+  changed little either way. Full power in a melee lost 1.4 (rounds won −10 points), 1.5 beyond close range tied.
+
+### Melee radar (`MeleeRadar`)
+
+While more than one enemy lives the radar does not spin. Until every living enemy has been seen in the round it
+spins on; then it turns towards the enemy whose last scan is the oldest, past its bearing by the angle it may have
+moved since (full speed for the turns since the scan, plus half a robot, at most 45°), and so sweeps only the arc that
+holds the enemies. In the two turns before our gun is cool the gun's target goes first while its scan is more than a
+turn old, so that the shot is aimed from a fresh position.
 
 ## Bullet shield (`cz.libors.ogi.shield`)
 
