@@ -160,15 +160,19 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   - **Records:** every scan of an enemy starts one, with its situation then: speed, acceleration and turn rate since
     its previous scan (up to 8 turns back), the room to the wall along its way of travel (up to 560 px), the distance
     to its closest robot (us included, the others where we saw them last; up to 1680 px) and that robot's bearing
-    from its way of travel (cosine and sine), and the number of enemies alive, each scaled to about [0, 1]. Its later
+    from its way of travel (cosine and sine), the number of enemies alive, the turns since it last reversed and since
+    it last slowed down (up to 60), the straight-line distance it covered over its scans of the last 16 turns against
+    the most it could have driven, and its distance from the field's centre, each scaled to about [0, 1]. Its later
     scans, up to 140 turns on, add where it had got to, forward and to the left in its frame at the start. The
     records last for the battle, at most 1500 per enemy.
   - **Aim:** for every enemy scanned in the last 32 turns, the 24 records nearest its situation now each give where it
     will be when the bullet arrives: its last scan plus the record's displacement after the turns since that scan
     plus the flight (interpolated between the record's samples, iterated three times for the flight), turned into its
     way of travel now. The distance between two situations is the square root of the weighted sum of the squared
-    differences: the wall ahead weighs 11.2, the turn rate 7.84, the speed 2, the acceleration 1.4, the closest
-    robot's distance 0.98, its cosine 0.5, its sine 0.25 and the enemies alive 0.5. Only records whose displacements
+    differences: the wall ahead weighs 22.4, the turn rate 7.84, the speed 2.8, the distance covered 2, the centre
+    distance 2, the closest robot's distance 1.96, the acceleration 1.4, its cosine 0.5, the enemies alive 0.5, its
+    sine 0.25, the turns since a reversal 0.2 and those since slowing down 0 (the search left it out; features without
+    weight are skipped). Only records whose displacements
     reach the bullet's arrival take part, from every earlier round and from this round before the last scan.
     Positions outside the field are left out. Each position is a bearing from the bullet's origin with a triangle over
     two robot half-widths on each side, weighted 1 / (feature distance + 0.8), so the neighbours weigh almost alike,
@@ -185,7 +189,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
   - Measured on the melee rumble's population (2026-10-15): the first guess (12 neighbours of equal features, only
     records scanned at an earlier turn of their round) gave 2.2 points of APS more than the duel's guns at the
     closest enemy, rounds won 51 → 64 %, our hit rate 25 → 28 %; the tuned numbers 1.2 points more again, our hit
-    rate 28 → 30 %, with own turns over the idle CPU constant about 9 → 30 per battle and no skipped turn.
+    rate 28 → 30 %, with own turns over the idle CPU constant about 9 → 30 per battle and no skipped turn; the four
+    movement features (since reversal, since slowing down, distance covered, centre distance) with the weights
+    searched again 0.4 points more, our hit rate 30.2 → 30.6 %.
 - **One model for the bot and the bench:** what the gun knows about an enemy and how it decides (the data, the
   virtual scores, the choice of gun, learning a passed wave) is `GunModel`. The tunable numbers (feature weights,
   the neighbour count, the virtual weight, the tries before switching) are `GunParameters`; the bot plays with

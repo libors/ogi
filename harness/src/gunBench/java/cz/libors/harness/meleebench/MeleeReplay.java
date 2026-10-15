@@ -154,6 +154,57 @@ final class MeleeReplay {
                 realDiffering);
     }
 
+    /** Distances (px) from the bullet's origin to the robot aimed at that bound the bands of {@link #powers}. */
+    static final double[] DISTANCE_BANDS = {200, 350, 500};
+
+    /**
+     * Replays {@code battle} with {@code parameters} once per power: each bullet fired on the melee gun's aim is aimed
+     * and flown with that power instead of its own, at the same moment. Returns per power and band of the distance to
+     * the robot aimed at (as {@link #DISTANCE_BANDS} bound them) the bullets scored and their hits: {@code
+     * [power][band][0 shots, 1 hits]}.
+     */
+    static long[][][] powers(MeleeBattle battle, MeleeGunParameters parameters, double[] powers) {
+        long[][][] counts = new long[powers.length][DISTANCE_BANDS.length + 1][2];
+        Field field = new Field(battle.width(), battle.height());
+        for (int k = 0; k < powers.length; k++) {
+            MeleeGun.Memory memory = new MeleeGun.Memory();
+            double speed = BulletMotion.speed(powers[k]);
+            for (Round r : battle.rounds()) {
+                MeleeGun gun = new MeleeGun(field, memory, parameters);
+                for (Object e : r.events()) {
+                    if (e instanceof MeleeGunLog.Scan s) {
+                        gun.scanned(s.name(), s.time(), s.x(), s.y(), s.heading(), s.velocity(), s.closestX(),
+                                s.closestY(), s.enemies());
+                    } else if (e instanceof MeleeBattle.Death d) {
+                        gun.robotDied(d.name());
+                    } else if (e instanceof Shot shot) {
+                        MeleeGunLog.Aim a = shot.aim();
+                        double aim = gun.aim(a.fireTime(), a.x(), a.y(), speed);
+                        if (shot.end() != null && shot.end().how() == 'b' || Double.isNaN(aim)) {
+                            continue;
+                        }
+                        int target = battle.names().indexOf(gun.aimedAt());
+                        double[] at = r.positions()[shot.fireTurn()];
+                        double distance = target < 0 || Double.isNaN(at[2 * target]) ? Double.NaN
+                                : Math.hypot(at[2 * target] - shot.fire().x(), at[2 * target + 1] - shot.fire().y());
+                        int band = 0;
+                        while (band < DISTANCE_BANDS.length && !(distance < DISTANCE_BANDS[band])) {
+                            band++;
+                        }
+                        int v = verdict(battle, r, shot.fireTurn(), shot.fire().x(), shot.fire().y(), aim, powers[k]);
+                        if (v != OPEN) {
+                            counts[k][band][0]++;
+                            if (v >= 0) {
+                                counts[k][band][1]++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return counts;
+    }
+
     /**
      * Whether a replayed aim equals the logged one: within {@link #PARITY_TOLERANCE}, since logs from the Windows worker
      * (x86_64) differ from a replay on the Mac (arm64) in the last bit of some doubles (docs/build-and-run.md,

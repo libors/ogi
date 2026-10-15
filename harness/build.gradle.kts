@@ -448,7 +448,7 @@ tasks.register<JavaExec>("meleeBench") {
     val logs = providers.gradleProperty("logs")
     val passed = listOf("robot", "base", "weights", "neighbours", "wallRange", "neighbourRange", "distanceSoftening",
         "enemyDistancePower", "kernelWidth", "maxAge", "horizon", "maxRecords", "everyRound", "reachingOnly", "tune",
-        "splitSeed")
+        "splitSeed", "fixed", "powers")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val otherLogs = providers.gradleProperty("otherLogs")
     val root = rootDir

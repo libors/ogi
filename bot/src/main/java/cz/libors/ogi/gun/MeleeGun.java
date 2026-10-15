@@ -34,9 +34,13 @@ import java.util.Map;
 public final class MeleeGun {
 
     /** Features, each in about [0, 1]. */
-    public static final int FEATURES = 8;
+    public static final int FEATURES = 12;
     /** A gap between scans longer than this tells nothing about acceleration and turning. */
     static final int MAX_SCAN_GAP = 8;
+    /** The turns since a reversal or a deceleration count up to this many. */
+    static final double SINCE_RANGE = 60;
+    /** The distance travelled is measured over the scans of about this many turns. */
+    static final int TRAVEL_TURNS = 16;
 
     /** One scan of an enemy and where it went from there; its features stay in its {@link Store}. */
     static final class Record {
@@ -112,6 +116,12 @@ public final class MeleeGun {
         double velocity;
         double heading;
         double[] features;
+        /** The sign of its last non-zero velocity, and the turns of its last reversal and deceleration this round. */
+        double sign;
+        long reversal;
+        long deceleration;
+        /** Its scans of the last turns: {time, x, y}. */
+        final Deque<double[]> trail = new ArrayDeque<>();
         final Deque<Record> open = new ArrayDeque<>();
     }
 
@@ -165,6 +175,8 @@ public final class MeleeGun {
     private final Field field;
     private final Memory memory;
     private final MeleeGunParameters p;
+    /** The features with a weight, in order: the others add nothing to a distance. */
+    private final int[] weighted;
     private final Map<String, Enemy> enemies = new HashMap<>();
     /** The enemy whose positions weighed most in the last aim, or null. */
     private String aimedAt;
@@ -173,6 +185,8 @@ public final class MeleeGun {
         this.field = field;
         this.memory = memory;
         this.p = parameters;
+        double[] w = parameters.weights();
+        weighted = java.util.stream.IntStream.range(0, FEATURES).filter(i -> w[i] != 0).toArray();
     }
 
     /**
@@ -211,6 +225,33 @@ public final class MeleeGun {
         f[5] = (Math.cos(towards) + 1) / 2;
         f[6] = (Math.sin(towards) + 1) / 2;
         f[7] = clamp((enemies - 1) / 8.0);
+        if (e.time == Long.MIN_VALUE) {
+            e.reversal = time;
+            e.deceleration = time;
+        }
+        double sign = Math.signum(velocity);
+        if (sign != 0 && e.sign != 0 && sign != e.sign) {
+            e.reversal = time;
+        }
+        if (sign != 0) {
+            e.sign = sign;
+        }
+        if (recent && Math.abs(velocity) < Math.abs(e.velocity)) {
+            e.deceleration = time;
+        }
+        f[8] = clamp((time - e.reversal) / SINCE_RANGE);
+        f[9] = clamp((time - e.deceleration) / SINCE_RANGE);
+        e.trail.addLast(new double[] {time, x, y});
+        while (e.trail.peekFirst()[0] < time - TRAVEL_TURNS) {
+            e.trail.pollFirst();
+        }
+        double[] first = e.trail.peekFirst();
+        double travelTurns = time - first[0];
+        // Straight-line distance against the most it could have driven: low for robots that oscillate.
+        f[10] = travelTurns <= 0 ? f[0]
+                : clamp(Math.hypot(x - first[1], y - first[2]) / (RobotMotion.MAX_VELOCITY * travelTurns));
+        f[11] = clamp(Math.hypot(x - field.width() / 2, y - field.height() / 2)
+                / Math.hypot(field.width() / 2, field.height() / 2));
         e.time = time;
         e.x = x;
         e.y = y;
@@ -254,6 +295,7 @@ public final class MeleeGun {
             double reach = fireTime - e.time + enemyDistance / speed;
             double[] w = p.weights();
             double[] ef = e.features;
+            int[] weighted = this.weighted;
             for (int n = 0; n < store.size; n++) {
                 int slot = (store.start + n) % store.capacity;
                 int last = store.last[slot];
@@ -264,7 +306,8 @@ public final class MeleeGun {
                 double limit = found < neighbours ? Double.POSITIVE_INFINITY : distances[found - 1];
                 double d = 0;
                 int base = slot * FEATURES;
-                for (int i = 0; i < FEATURES && d < limit; i++) {
+                for (int k = 0; k < weighted.length && d < limit; k++) {
+                    int i = weighted[k];
                     double diff = store.features[base + i] - ef[i];
                     d += w[i] * diff * diff;
                 }

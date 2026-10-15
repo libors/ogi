@@ -27,7 +27,7 @@ import java.util.stream.Stream;
  * replayed aim must equal the logged one.
  *
  * <p>Usage: {@code MeleeBench logs=<dir>,... [robot=<name prefix>] [base=<parameters>] [otherLogs=<dir>,...]
- * [<parameter>=<value>]... [tune=<passes>] [splitSeed=n]}
+ * [<parameter>=<value>]... [tune=<passes>] [splitSeed=n] [fixed=<parameter>,...]}
  *
  * <ul>
  *   <li>{@code base}: the parameters the logging bot played with, as {@code key=value} pairs separated by
@@ -37,24 +37,28 @@ import java.util.stream.Stream;
  *   <li>{@code otherLogs}: logs of a bot that played with the variant, on the same draws. The bench then measures
  *       both ways: the variant's gain on the base's logs is effect + bias, the base's gain on the variant's logs is
  *       −effect + bias.</li>
- *   <li>{@code tune}: a coordinate search from the variant on half of the battles, reported on both halves.</li>
+ *   <li>{@code tune}: a coordinate search from the variant on half of the battles, reported on both halves;
+ *       {@code fixed} names parameters it leaves as they are (the option names, {@code weights} for all eight).</li>
  * </ul>
  * Exits with 1 if more than one in 10,000 replayed aims of the base parameters differ from the logs.
  */
 public final class MeleeBench {
 
-    static final List<String> NAMES = List.of("w0 speed", "w1 acceleration", "w2 turn rate", "w3 wall ahead",
-            "w4 closest distance", "w5 closest cos", "w6 closest sin", "w7 enemies", "neighbours", "wallRange",
-            "neighbourRange", "distanceSoftening", "enemyDistancePower", "kernelWidth", "maxAge", "horizon",
-            "maxRecords", "everyRound", "reachingOnly");
+    private static final List<String> FEATURE_NAMES = List.of("w0 speed", "w1 acceleration", "w2 turn rate",
+            "w3 wall ahead", "w4 closest distance", "w5 closest cos", "w6 closest sin", "w7 enemies",
+            "w8 since reversal", "w9 since deceleration", "w10 travel", "w11 centre distance");
     /** The option of each parameter after the weights, in {@link #NAMES}' order. */
     private static final List<String> OPTIONS = List.of("neighbours", "wallRange", "neighbourRange",
             "distanceSoftening", "enemyDistancePower", "kernelWidth", "maxAge", "horizon", "maxRecords", "everyRound",
             "reachingOnly");
+    /** The weights by feature, then the other parameters as {@link #OPTIONS} names them. */
+    static final List<String> NAMES = java.util.stream.Stream.concat(FEATURE_NAMES.stream(), OPTIONS.stream())
+            .toList();
+    private static final int F = MeleeGun.FEATURES;
     /** Integer parameters, by index in {@link #NAMES}. */
-    private static final List<Integer> INTEGERS = List.of(8, 14, 15, 16);
+    private static final List<Integer> INTEGERS = List.of(F, F + 6, F + 7, F + 8);
     /** Switches, by index in {@link #NAMES}: 1 for true. */
-    private static final List<Integer> SWITCHES = List.of(17, 18);
+    private static final List<Integer> SWITCHES = List.of(F + 9, F + 10);
 
     /**
      * Aims that may differ from the log beyond the tolerance, per aim: on logs from another machine a last-bit
@@ -89,9 +93,31 @@ public final class MeleeBench {
         System.out.println("Base:    " + base);
         System.out.println("Variant: " + variant);
 
+        if (options.containsKey("powers")) {
+            powers(logs.battles, variant, Arrays.stream(options.get("powers").split(","))
+                    .mapToDouble(v -> Double.parseDouble(v.trim())).toArray());
+            System.exit(0);
+        }
         if (options.containsKey("tune")) {
+            java.util.Set<Integer> fixed = new java.util.HashSet<>();
+            for (String name : options.getOrDefault("fixed", "").split(",")) {
+                if (name.isBlank()) {
+                    continue;
+                }
+                int i = name.trim().equals("weights") ? -1 : OPTIONS.indexOf(name.trim());
+                if (i < 0 && !name.trim().equals("weights")) {
+                    usage("fixed takes parameter names (" + String.join(", ", OPTIONS) + ", weights): " + name);
+                }
+                if (i < 0) {
+                    for (int k = 0; k < MeleeGun.FEATURES; k++) {
+                        fixed.add(k);
+                    }
+                } else {
+                    fixed.add(MeleeGun.FEATURES + i);
+                }
+            }
             tune(logs.battles, base, variant, Integer.parseInt(options.get("tune")),
-                    Long.parseLong(options.getOrDefault("splitSeed", "1")));
+                    Long.parseLong(options.getOrDefault("splitSeed", "1")), fixed);
             System.exit(0);
         }
 
@@ -244,6 +270,52 @@ public final class MeleeBench {
         return new Paired(100 * r0, 100 * r1, 100 * (r1 - r0), 100 * se);
     }
 
+    /**
+     * The same shots at other powers: per power and distance band the hit rate, the damage per bullet and per turn of
+     * the gun's heat (a bullet heats the gun by 1 + p/5, which cools by 0.1 a turn), and the energy a bullet nets
+     * (3p back per hit, p paid). The battles' course stays as recorded: fewer shots at a higher power, the energy and
+     * the kills are not replayed.
+     */
+    private static void powers(List<MeleeBattle> battles, MeleeGunParameters p, double[] powers) {
+        long[][][] sum = new long[powers.length][MeleeReplay.DISTANCE_BANDS.length + 1][2];
+        for (long[][][] c : battles.parallelStream().map(b -> MeleeReplay.powers(b, p, powers)).toList()) {
+            for (int k = 0; k < powers.length; k++) {
+                for (int band = 0; band < sum[k].length; band++) {
+                    sum[k][band][0] += c[k][band][0];
+                    sum[k][band][1] += c[k][band][1];
+                }
+            }
+        }
+        List<String> bands = new ArrayList<>();
+        double lo = 0;
+        for (double hi : MeleeReplay.DISTANCE_BANDS) {
+            bands.add((int) lo + "-" + (int) hi);
+            lo = hi;
+        }
+        bands.add(">" + (int) lo);
+        bands.add("all");
+        System.out.printf(Locale.ROOT, "%n%-6s %-8s %8s %8s %9s %10s %10s%n", "power", "band", "shots", "hit %",
+                "dmg/shot", "dmg/turn", "net energy");
+        for (int k = 0; k < powers.length; k++) {
+            double power = powers[k];
+            double damage = cz.libors.ogi.physics.BulletMotion.damage(power);
+            long allShots = 0;
+            long allHits = 0;
+            for (int band = 0; band <= sum[k].length; band++) {
+                long shots = band < sum[k].length ? sum[k][band][0] : allShots;
+                long hits = band < sum[k].length ? sum[k][band][1] : allHits;
+                if (band < sum[k].length) {
+                    allShots += shots;
+                    allHits += hits;
+                }
+                double rate = shots == 0 ? Double.NaN : (double) hits / shots;
+                System.out.printf(Locale.ROOT, "%-6s %-8s %8d %8.2f %9.3f %10.4f %10.3f%n", fmt(power),
+                        bands.get(band), shots, 100 * rate, rate * damage, rate * damage / (10 + 2 * power),
+                        rate * 3 * power - power);
+            }
+        }
+    }
+
     /** The pooled fired rate of {@code p} over {@code battles}: what the search maximises. */
     static double objective(List<MeleeBattle> battles, MeleeGunParameters p) {
         return battles.parallelStream().map(b -> MeleeReplay.replay(b, p, false, false))
@@ -255,7 +327,7 @@ public final class MeleeBench {
      * ({@code splitSeed}) and every other one goes to the training half.
      */
     private static void tune(List<MeleeBattle> battles, MeleeGunParameters base, MeleeGunParameters start,
-                             int passes, long splitSeed) {
+                             int passes, long splitSeed, java.util.Set<Integer> fixed) {
         List<MeleeBattle> shuffled = new ArrayList<>(battles);
         shuffled.sort((a, b) -> a.file().toString().compareTo(b.file().toString()));
         Collections.shuffle(shuffled, new Random(splitSeed));
@@ -273,6 +345,9 @@ public final class MeleeBench {
         for (int pass = 1; pass <= passes; pass++) {
             boolean improved = false;
             for (int i = 0; i < x.length; i++) {
+                if (fixed.contains(i)) {
+                    continue;
+                }
                 double current = x[i];
                 double[] bestY = null;
                 double bestV = best + 0.01;
@@ -326,7 +401,7 @@ public final class MeleeBench {
             return fine ? new double[0] : new double[] {1 - v};
         }
         if (INTEGERS.contains(i)) {
-            int min = i == 14 ? 0 : 1;
+            int min = i == F + 6 ? 0 : 1;
             return Arrays.stream(factors).map(f -> Math.max(min, Math.round(v * f))).filter(c -> c != v).distinct()
                     .toArray();
         }
@@ -352,24 +427,24 @@ public final class MeleeBench {
 
     static double[] vector(MeleeGunParameters p) {
         double[] x = Arrays.copyOf(p.weights(), NAMES.size());
-        x[8] = p.neighbours();
-        x[9] = p.wallRange();
-        x[10] = p.neighbourRange();
-        x[11] = p.distanceSoftening();
-        x[12] = p.enemyDistancePower();
-        x[13] = p.kernelWidth();
-        x[14] = p.maxAge();
-        x[15] = p.horizon();
-        x[16] = p.maxRecords();
-        x[17] = p.everyRound() ? 1 : 0;
-        x[18] = p.reachingOnly() ? 1 : 0;
+        x[F] = p.neighbours();
+        x[F + 1] = p.wallRange();
+        x[F + 2] = p.neighbourRange();
+        x[F + 3] = p.distanceSoftening();
+        x[F + 4] = p.enemyDistancePower();
+        x[F + 5] = p.kernelWidth();
+        x[F + 6] = p.maxAge();
+        x[F + 7] = p.horizon();
+        x[F + 8] = p.maxRecords();
+        x[F + 9] = p.everyRound() ? 1 : 0;
+        x[F + 10] = p.reachingOnly() ? 1 : 0;
         return x;
     }
 
     static MeleeGunParameters parameters(double[] x) {
-        return new MeleeGunParameters(Arrays.copyOf(x, MeleeGun.FEATURES), (int) Math.round(x[8]), x[9], x[10],
-                x[11], x[12], x[13], (int) Math.round(x[14]), (int) Math.round(x[15]), (int) Math.round(x[16]),
-                x[17] != 0, x[18] != 0);
+        return new MeleeGunParameters(Arrays.copyOf(x, F), (int) Math.round(x[F]), x[F + 1], x[F + 2], x[F + 3],
+                x[F + 4], x[F + 5], (int) Math.round(x[F + 6]), (int) Math.round(x[F + 7]), (int) Math.round(x[F + 8]),
+                x[F + 9] != 0, x[F + 10] != 0);
     }
 
     /** The options that give {@code p}, every digit printed. */
@@ -407,9 +482,11 @@ public final class MeleeBench {
         if (options.containsKey("weights")) {
             double[] w = Arrays.stream(options.get("weights").split(",")).mapToDouble(s -> Double.parseDouble(s.trim()))
                     .toArray();
-            if (w.length != MeleeGun.FEATURES) {
-                usage("weights takes " + MeleeGun.FEATURES + " values: " + options.get("weights"));
+            if (w.length > MeleeGun.FEATURES) {
+                usage("weights takes up to " + MeleeGun.FEATURES + " values: " + options.get("weights"));
             }
+            // Features added later weigh 0 unless given, so older command lines keep their meaning.
+            Arrays.fill(x, 0, MeleeGun.FEATURES, 0);
             System.arraycopy(w, 0, x, 0, w.length);
         }
         for (int i = 0; i < OPTIONS.size(); i++) {
@@ -437,7 +514,7 @@ public final class MeleeBench {
         System.err.println(problem);
         System.err.println("Usage: MeleeBench logs=<dir>,... [robot=<name prefix>] [base=<key=value;...>] "
                 + "[otherLogs=<dir>,...] [weights=w,...] [" + String.join("=x] [", OPTIONS) + "=x] [tune=<passes>] "
-                + "[splitSeed=n]");
+                + "[splitSeed=n] [fixed=<parameter>,...]");
         System.exit(2);
     }
 }

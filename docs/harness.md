@@ -496,7 +496,8 @@ and it flies each bullet along the replayed aim against every robot's recorded p
   G-02): the first robot's box it touches is a hit, the wall a miss. Left out are bullets an enemy bullet destroyed
   (they ended in `meleeend` with `b`: the aim did not decide them) and bullets still in the air at the round's end. A
   shot the replayed gun has no aim for counts as a miss (`no aim`).
-- **Parameters:** `-Pweights` (8, in the order of the features), `-Pneighbours`, `-PwallRange`, `-PneighbourRange`,
+- **Parameters:** `-Pweights` (12, in the order of the features; missing ones are 0, so older command lines keep
+  their meaning), `-Pneighbours`, `-PwallRange`, `-PneighbourRange`,
   `-PdistanceSoftening`, `-PenemyDistancePower`, `-PkernelWidth`, `-PmaxAge`, `-Phorizon` and `-PmaxRecords` give the
   variant over the base. `-Pbase="neighbours=24;horizon=98"` gives the parameters the logging bot played with, over
   `MeleeGunParameters.DEFAULT`. `-Probot=<prefix>` picks the logged robot (default `cz.libors.Ogi`).
@@ -524,6 +525,12 @@ and it flies each bullet along the replayed aim against every robot's recorded p
 - **`-Ptune=<passes>`:** the gun bench's coordinate search over the 17 parameters, on half of the battles (shuffled
   by `-PsplitSeed`, default 1), reported on both halves against the base. Integer parameters are rounded; the
   weights and `enemyDistancePower` may also go to 0. It ends with the tuned parameters as `-P` options.
+  `-Pfixed=neighbours,maxRecords,...` leaves those parameters as given (`weights` for all eight): the search knows
+  nothing of the gun's time, and left alone it raised the counts to 12 times the gun's time for little.
+- **`-Ppowers=1.5,1.92,2.4,3`:** the same shots at other bullet powers (aimed and flown at that power): per power
+  and band of the distance to the robot aimed at, the hit rate, the damage per bullet, the damage per turn of the
+  gun's heat (1 + p/5 per bullet, cooling 0.1 a turn) and the energy a bullet nets (3p back per hit, p paid). A guide
+  for queue tests: fewer shots, the energy and the kills are not replayed.
 - **Limits:** the movement, the fire timing and the bullet power stay as recorded; a replayed aim the turret could not
   have reached in time is fired anyway; a hit the replay adds or takes away does not change the battle's later course
   (energy, who dies when), and the bench scores the hit rate, not the score.

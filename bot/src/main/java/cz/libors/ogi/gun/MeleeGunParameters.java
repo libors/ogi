@@ -29,12 +29,13 @@ public record MeleeGunParameters(double[] weights, int neighbours, double wallRa
 
     /**
      * Tuned on the melee bench (coordinate search over half of 99 rumble draws, checked on the other half), with the
-     * counts cut back for the gun's time: the turn rate and the wall ahead weigh most, the closest robot's bearing
-     * least.
+     * counts cut back for the gun's time, and the weights searched again with the four movement features: the wall
+     * ahead and the turn rate weigh most, the closest robot's bearing and the turns since a reversal least, the turns
+     * since slowing down not at all.
      */
     public static final MeleeGunParameters DEFAULT = new MeleeGunParameters(
-            new double[] {2, 1.4, 7.84, 11.2, 0.98, 0.5, 0.25, 0.5}, 24, 560, 1680, 0.8, 0.245, 2, 32, 140, 1500, true,
-            true);
+            new double[] {2.8, 1.4, 7.84, 22.4, 1.96, 0.5, 0.25, 0.5, 0.2, 0, 2, 2}, 24, 560, 1680, 0.8, 0.245, 2, 32,
+            140, 1500, true, true);
 
     public MeleeGunParameters {
         if (weights.length != MeleeGun.FEATURES) {
