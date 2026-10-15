@@ -40,7 +40,7 @@ import java.util.stream.Stream;
  *   <li>{@code tune}: a coordinate search from the variant on half of the battles, reported on both halves;
  *       {@code fixed} names parameters it leaves as they are (the option names, {@code weights} for all eight).</li>
  * </ul>
- * Exits with 1 if more than one in 10,000 replayed aims of the base parameters differ from the logs.
+ * Exits with 1 if more than one in 1,000 replayed aims of the base parameters differ from the logs.
  */
 public final class MeleeBench {
 
@@ -50,7 +50,7 @@ public final class MeleeBench {
     /** The option of each parameter after the weights, in {@link #NAMES}' order. */
     private static final List<String> OPTIONS = List.of("neighbours", "wallRange", "neighbourRange",
             "distanceSoftening", "enemyDistancePower", "kernelWidth", "maxAge", "horizon", "maxRecords", "everyRound",
-            "reachingOnly");
+            "reachingOnly", "singleEnemy");
     /** The weights by feature, then the other parameters as {@link #OPTIONS} names them. */
     static final List<String> NAMES = java.util.stream.Stream.concat(FEATURE_NAMES.stream(), OPTIONS.stream())
             .toList();
@@ -58,14 +58,15 @@ public final class MeleeBench {
     /** Integer parameters, by index in {@link #NAMES}. */
     private static final List<Integer> INTEGERS = List.of(F, F + 6, F + 7, F + 8);
     /** Switches, by index in {@link #NAMES}: 1 for true. */
-    private static final List<Integer> SWITCHES = List.of(F + 9, F + 10);
+    private static final List<Integer> SWITCHES = List.of(F + 9, F + 10, F + 11);
 
     /**
-     * Aims that may differ from the log beyond the tolerance, per aim: on logs from another machine a last-bit
+     * Aims that may differ from the log beyond the tolerance, per aim. On logs from another machine a last-bit
      * difference can tip a nearly tied peak of the density (3 of 157,114 aims on the Windows worker's logs replayed on
-     * the Mac, 2026-10-15).
+     * the Mac, 2026-10-15). Logs recorded without debug mode lose a turn's log now and then even where no skipped turn
+     * was reported, and the replay goes on without that scan: 58 of 127,929 aims (2026-10-16).
      */
-    private static final double MAX_DIFFERING = 1e-4;
+    private static final double MAX_DIFFERING = 1e-3;
 
     private MeleeBench() {
     }
@@ -214,6 +215,8 @@ public final class MeleeBench {
             System.out.printf(Locale.ROOT, "variant - base: %+.2f ± %.2f points of fired %% (95 %%, battles as "
                     + "clusters)%n", p.difference, 1.96 * p.se);
         }
+        System.out.printf(Locale.ROOT, "Hits on the robot aimed at: %.1f %% of the base's hits%n",
+                100.0 * baseTally.hitsAimed() / Math.max(1, baseTally.hits()));
         System.out.printf(Locale.ROOT, "Real bullets: %d flown along their real heading, %.2f %% hit in the engine "
                         + "(the harness: %.2f %% of all %d bullets, the duel at the end included); %d end otherwise "
                         + "here than in the engine%n", baseTally.realChecked(), baseTally.realRate(),
@@ -438,13 +441,14 @@ public final class MeleeBench {
         x[F + 8] = p.maxRecords();
         x[F + 9] = p.everyRound() ? 1 : 0;
         x[F + 10] = p.reachingOnly() ? 1 : 0;
+        x[F + 11] = p.singleEnemy() ? 1 : 0;
         return x;
     }
 
     static MeleeGunParameters parameters(double[] x) {
         return new MeleeGunParameters(Arrays.copyOf(x, F), (int) Math.round(x[F]), x[F + 1], x[F + 2], x[F + 3],
                 x[F + 4], x[F + 5], (int) Math.round(x[F + 6]), (int) Math.round(x[F + 7]), (int) Math.round(x[F + 8]),
-                x[F + 9] != 0, x[F + 10] != 0);
+                x[F + 9] != 0, x[F + 10] != 0, x[F + 11] != 0);
     }
 
     /** The options that give {@code p}, every digit printed. */

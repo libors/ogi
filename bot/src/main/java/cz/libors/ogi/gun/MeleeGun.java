@@ -361,6 +361,9 @@ public final class MeleeGun {
             double strongest = 0;
             String owner = null;
             for (int j = 0; j < candidates.size(); j++) {
+                if (p.singleEnemy() && !owners.get(j).equals(owners.get(i))) {
+                    continue;
+                }
                 double[] other = candidates.get(j);
                 double off = Math.abs(relative(a - other[0]));
                 if (off < other[1]) {

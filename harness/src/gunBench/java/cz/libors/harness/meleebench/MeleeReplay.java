@@ -40,16 +40,17 @@ final class MeleeReplay {
      * @param realChecked   bullets whose real end the bot learned, flown along their real heading
      * @param realHits      of those, the engine's hits
      * @param realDiffering of those, bullets whose flight here ends otherwise than in the engine
+     * @param hitsAimed     replayed hits on the robot the replayed gun aimed at (the others hit a robot in the way)
      */
     record Tally(long shots, long hits, double damage, long noAim, long shotDown, long open, long differing,
-                 long realChecked, long realHits, long realDiffering) {
+                 long realChecked, long realHits, long realDiffering, long hitsAimed) {
 
-        static final Tally ZERO = new Tally(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        static final Tally ZERO = new Tally(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         Tally plus(Tally o) {
             return new Tally(shots + o.shots, hits + o.hits, damage + o.damage, noAim + o.noAim,
                     shotDown + o.shotDown, open + o.open, differing + o.differing, realChecked + o.realChecked,
-                    realHits + o.realHits, realDiffering + o.realDiffering);
+                    realHits + o.realHits, realDiffering + o.realDiffering, hitsAimed + o.hitsAimed);
         }
 
         /** Hits per scored bullet, in percent. */
@@ -89,6 +90,7 @@ final class MeleeReplay {
         long realChecked = 0;
         long realHits = 0;
         long realDiffering = 0;
+        long hitsAimed = 0;
         for (Round r : battle.rounds()) {
             MeleeGun gun = new MeleeGun(field, memory, parameters);
             for (Object e : r.events()) {
@@ -145,13 +147,16 @@ final class MeleeReplay {
                         if (v >= 0) {
                             hits++;
                             damage += BulletMotion.damage(shot.fire().power());
+                            if (battle.names().get(v).equals(gun.aimedAt())) {
+                                hitsAimed++;
+                            }
                         }
                     }
                 }
             }
         }
         return new Tally(shots, hits, damage, noAim, shotDown, open, differing, realChecked, realHits,
-                realDiffering);
+                realDiffering, hitsAimed);
     }
 
     /** Distances (px) from the bullet's origin to the robot aimed at that bound the bands of {@link #powers}. */

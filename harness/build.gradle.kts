@@ -379,7 +379,7 @@ fun recordArguments(robot: String, keys: ((String) -> String)?, home: String, fi
 /** The gun's debug properties, or against a melee set the melee gun's and every robot's position (melee bench). */
 fun gunLogKeys(opponentsFile: String): String =
     if (File(opponentsFile).readLines().any { it.trim().split(Regex("\\s+")) == listOf("format", "melee") })
-        "meleescan,meleedeath,meleeaim,meleefire,meleeend,@positions"
+        "meleescan,meleedeath,meleeaim,meleefire,meleeend,hitbybullet,duelstart,@positions"
     else "gunshot,gunpass,gunshield"
 
 /** A repository path as a local run sees it. */
@@ -448,7 +448,7 @@ tasks.register<JavaExec>("meleeBench") {
     val logs = providers.gradleProperty("logs")
     val passed = listOf("robot", "base", "weights", "neighbours", "wallRange", "neighbourRange", "distanceSoftening",
         "enemyDistancePower", "kernelWidth", "maxAge", "horizon", "maxRecords", "everyRound", "reachingOnly", "tune",
-        "splitSeed", "fixed", "powers")
+        "splitSeed", "fixed", "powers", "singleEnemy")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val otherLogs = providers.gradleProperty("otherLogs")
     val root = rootDir

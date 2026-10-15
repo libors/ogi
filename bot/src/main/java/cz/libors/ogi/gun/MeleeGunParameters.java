@@ -22,10 +22,13 @@ import java.util.Locale;
  *                            scanned in; otherwise only those scanned before the enemy's last scan in its round
  * @param reachingOnly        whether the neighbours come only from records whose displacements reach the bullet's
  *                            flight; otherwise a record that ends sooner takes a neighbour's place and gives nothing
+ * @param singleEnemy         whether a bearing's weight counts one enemy's positions only (the best enemy's best
+ *                            bearing wins); otherwise all enemies' positions add up
  */
 public record MeleeGunParameters(double[] weights, int neighbours, double wallRange, double neighbourRange,
                                  double distanceSoftening, double enemyDistancePower, double kernelWidth, int maxAge,
-                                 int horizon, int maxRecords, boolean everyRound, boolean reachingOnly) {
+                                 int horizon, int maxRecords, boolean everyRound, boolean reachingOnly,
+                                 boolean singleEnemy) {
 
     /**
      * Tuned on the melee bench (coordinate search over half of 99 rumble draws, checked on the other half), with the
@@ -35,7 +38,7 @@ public record MeleeGunParameters(double[] weights, int neighbours, double wallRa
      */
     public static final MeleeGunParameters DEFAULT = new MeleeGunParameters(
             new double[] {2.8, 1.4, 7.84, 22.4, 1.96, 0.5, 0.25, 0.5, 0.2, 0, 2, 2}, 24, 560, 1680, 0.8, 0.245, 2, 32,
-            140, 1500, true, true);
+            140, 1500, true, true, false);
 
     public MeleeGunParameters {
         if (weights.length != MeleeGun.FEATURES) {
@@ -60,22 +63,23 @@ public record MeleeGunParameters(double[] weights, int neighbours, double wallRa
                 && Double.compare(distanceSoftening, p.distanceSoftening) == 0
                 && Double.compare(enemyDistancePower, p.enemyDistancePower) == 0
                 && Double.compare(kernelWidth, p.kernelWidth) == 0 && maxAge == p.maxAge && horizon == p.horizon
-                && maxRecords == p.maxRecords && everyRound == p.everyRound && reachingOnly == p.reachingOnly;
+                && maxRecords == p.maxRecords && everyRound == p.everyRound && reachingOnly == p.reachingOnly
+                && singleEnemy == p.singleEnemy;
     }
 
     @Override
     public int hashCode() {
         return Arrays.hashCode(new double[] {Arrays.hashCode(weights), neighbours, wallRange, neighbourRange,
                 distanceSoftening, enemyDistancePower, kernelWidth, maxAge, horizon, maxRecords, everyRound ? 1 : 0,
-                reachingOnly ? 1 : 0});
+                reachingOnly ? 1 : 0, singleEnemy ? 1 : 0});
     }
 
     @Override
     public String toString() {
         return String.format(Locale.ROOT, "weights=%s neighbours=%d wallRange=%s neighbourRange=%s "
                         + "distanceSoftening=%s enemyDistancePower=%s kernelWidth=%s maxAge=%d horizon=%d maxRecords=%d "
-                        + "everyRound=%s reachingOnly=%s",
+                        + "everyRound=%s reachingOnly=%s singleEnemy=%s",
                 Arrays.toString(weights), neighbours, wallRange, neighbourRange, distanceSoftening,
-                enemyDistancePower, kernelWidth, maxAge, horizon, maxRecords, everyRound, reachingOnly);
+                enemyDistancePower, kernelWidth, maxAge, horizon, maxRecords, everyRound, reachingOnly, singleEnemy);
     }
 }

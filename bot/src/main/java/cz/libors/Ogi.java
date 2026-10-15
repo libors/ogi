@@ -120,6 +120,11 @@ public class Ogi extends TeamRobot {
     private static final int AIM_LEAD_TURNS = 4;
     /** In a melee the melee gun aims ({@link MeleeGun}) in this many turns before the gun is cool, and while it is. */
     private static final int MELEE_AIM_TURNS = 2;
+    /**
+     * In a melee, while the radar spins at the round's start and the gun is too hot to fire soon, the gun spins along
+     * and carries the radar (engine-model G-09): 65° a turn instead of 45°.
+     */
+    private static final boolean FAST_FIRST_SWEEP = true;
     /** How far past a disabled enemy we drive when ramming it, so that we do not stop short. */
     private static final double RAM_OVERSHOOT = 50;
     /**
@@ -207,6 +212,8 @@ public class Ogi extends TeamRobot {
     private GuessFactorGun gun;
     private MirrorAim mirror;
     private MeleeGun meleeGun;
+    /** Whether the gun spins along with the radar this turn ({@link #FAST_FIRST_SWEEP}). */
+    private boolean sweeping;
     /** The melee gun's aim planned for the next turn's shot (mathematical), and the turn it was planned in. */
     private double meleeAim;
     private long meleeAimTime = -1;
@@ -550,6 +557,15 @@ public class Ogi extends TeamRobot {
             double turn = meleeRadar.turn(now, getX(), getY(), Angles.fromRobocode(getRadarHeadingRadians()), seen,
                     enemies, target == null ? null : target.name(), getGunHeat() <= 2 * getGunCoolingRate());
             setTurnRadarRightRadians(-turn);
+            boolean sweep = FAST_FIRST_SWEEP && MeleeRadar.spinning(seen, enemies)
+                    && getGunHeat() > (MELEE_AIM_TURNS + 1) * getGunCoolingRate();
+            if (sweep != sweeping) {
+                setAdjustRadarForGunTurn(!sweep);
+                sweeping = sweep;
+            }
+            if (sweeping) {
+                setTurnGunRightRadians(-turn);
+            }
             return;
         }
         if (getOthers() == 1 && target != null && now - target.time() <= 1) {
@@ -635,7 +651,7 @@ public class Ogi extends TeamRobot {
                 meleeAimTime = now;
             }
         }
-        if (!Double.isNaN(aim)) {
+        if (!Double.isNaN(aim) && !sweeping) {
             setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
         }
     }

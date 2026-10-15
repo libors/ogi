@@ -39,6 +39,11 @@ public final class MeleeRadar {
      * @param target  the gun's target, or null
      * @param gunSoon whether our gun is cool within the next turns
      */
+    /** Whether the radar still spins: not every living enemy has been seen this round. */
+    public static boolean spinning(List<Seen> enemies, int others) {
+        return enemies.size() < others;
+    }
+
     public double turn(long now, double x, double y, double radarHeading, List<Seen> enemies, int others,
                        String target, boolean gunSoon) {
         if (enemies.size() < others) {

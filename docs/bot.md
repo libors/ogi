@@ -191,7 +191,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     closest enemy, rounds won 51 → 64 %, our hit rate 25 → 28 %; the tuned numbers 1.2 points more again, our hit
     rate 28 → 30 %, with own turns over the idle CPU constant about 9 → 30 per battle and no skipped turn; the four
     movement features (since reversal, since slowing down, distance covered, centre distance) with the weights
-    searched again 0.4 points more, our hit rate 30.2 → 30.6 %.
+    searched again 0.4 points more, our hit rate 30.2 → 30.6 %. On the bench, 23 % of the melee gun's hits strike a
+    robot other than the one it aimed at, and counting one enemy's positions per bearing (`singleEnemy`) instead of
+    all enemies' hits 1.0 point less often (2026-10-16).
 - **One model for the bot and the bench:** what the gun knows about an enemy and how it decides (the data, the
   virtual scores, the choice of gun, learning a passed wave) is `GunModel`. The tunable numbers (feature weights,
   the neighbour count, the virtual weight, the tries before switching) are `GunParameters`; the bot plays with
@@ -359,7 +361,11 @@ from everybody and nobody's closest robot. The waves are still detected and lear
 ### Melee radar (`MeleeRadar`)
 
 While more than one enemy lives the radar does not spin. Until every living enemy has been seen in the round it
-spins on; then it turns towards the enemy whose last scan is the oldest, past its bearing by the angle it may have
+spins on, and while the gun is too hot to fire soon (it starts each round at 3.0) the gun spins along: with the
+radar not adjusted for the gun's turn the two add up (engine-model G-09), 65° a turn instead of 45°, and the first
+look round takes about 5 turns instead of 8; then the radar is adjusted for the gun again and the gun aims. Kept on
+the argument (the gun cannot fire in those turns anyway): measured −0.10 ± 0.27, within the noise (2026-10-16). Then
+it turns towards the enemy whose last scan is the oldest, past its bearing by the angle it may have
 moved since (full speed for the turns since the scan, plus half a robot, at most 45°), and so sweeps only the arc that
 holds the enemies. In the two turns before our gun is cool the gun's target goes first while its scan is more than a
 turn old, so that the shot is aimed from a fresh position.
@@ -464,6 +470,9 @@ become predictable to the last bits; anything that makes us move spoils that.
     (its arguments, the heading found and the robot aimed at), `meleefire` for each bullet fired on the melee gun's
     aim (the aim's turn, the bullet's heading, power and position) and `meleeend` for how such a bullet ended (hit,
     wall or bullet, and whom). The recording adds every robot's position ([harness.md](harness.md#melee-bench)).
+    For diagnosing melee battles it logs `hitbybullet` for each bullet that hits us (the turn, its power and
+    position, our energy after it, the shooter) and `duelstart` when a melee comes down to a duel (the turn, our
+    energy, the enemy's at its last scan, its name).
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).
