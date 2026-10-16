@@ -30,6 +30,19 @@ class MeleeRadarTest {
     }
 
     @Test
+    void anEnemyLastSeenOutOfRangeIsPassedOver() {
+        MeleeRadar radar = new MeleeRadar();
+        // From a corner: the stalest enemy was last seen 1540 px away, out of the radar's 1200; the other, 1100 px
+        // away north-east of us, goes first.
+        List<Seen> enemies = List.of(new Seen("far", 46 + 1089, 57 + 1089, 50), new Seen("near", 46, 57 + 1100, 90));
+        double turn = radar.turn(100, 46, 57, 0, enemies, 2, null, false);
+        assertTrue(turn > Math.PI / 2 - 1e-9, "turns to the near one, north: " + turn);
+        // With both out of range the radar spins.
+        List<Seen> far = List.of(new Seen("a", 46 + 1089, 57 + 1089, 50), new Seen("b", 46 + 1300, 57, 60));
+        assertEquals(Double.POSITIVE_INFINITY, Math.abs(radar.turn(100, 46, 57, 0, far, 2, null, false)));
+    }
+
+    @Test
     void theGunsTargetGoesFirstBeforeAShot() {
         MeleeRadar radar = new MeleeRadar();
         // Pointing north, the gun's target east is two turns old and the gun is cool soon: turn clockwise to it.

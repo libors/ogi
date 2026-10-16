@@ -363,6 +363,7 @@ public class Ogi extends TeamRobot {
         if (target.isEmpty()) {
             gun.update(now, getX(), getY(), null);
             logPassedWaves();
+            search();
             return;
         }
         EnemyState t = target.get();
@@ -648,11 +649,17 @@ public class Ogi extends TeamRobot {
                 seen.add(new MeleeRadar.Seen(e.name(), e.x(), e.y(), e.time()));
             }
             boolean gunSoon = getGunHeat() <= 2 * getGunCoolingRate();
-            List<MeleeRadar.Seen> watched = teamWatch(now, seen, enemies, target, gunSoon);
-            double turn = watched != null
-                    ? TeamRadar.sweep(radar, TeamRadar.arc(now, getX(), getY(), watched))
-                    : meleeRadar.turn(now, getX(), getY(), radar, seen, enemies,
-                    target == null ? null : target.name(), gunSoon);
+            double turn;
+            if (target == null && !MeleeRadar.spinning(seen, enemies)) {
+                // No enemy seen for a while: the radar looks all round instead of where they were.
+                turn = Double.POSITIVE_INFINITY;
+            } else {
+                List<MeleeRadar.Seen> watched = teamWatch(now, seen, enemies, target, gunSoon);
+                turn = watched != null
+                        ? TeamRadar.sweep(radar, TeamRadar.arc(now, getX(), getY(), watched))
+                        : meleeRadar.turn(now, getX(), getY(), radar, seen, enemies,
+                        target == null ? null : target.name(), gunSoon);
+            }
             turnRadar(turn);
             boolean sweep = FAST_FIRST_SWEEP && MeleeRadar.spinning(seen, enemies)
                     && getGunHeat() > (MELEE_AIM_TURNS + 1) * getGunCoolingRate();
@@ -665,11 +672,10 @@ public class Ogi extends TeamRobot {
             }
             return;
         }
-        if (enemies == 1 && teammatesAlive > 0 && world.enemyCount() == 1) {
+        if (enemies == 1 && teammatesAlive > 0 && target != null) {
             // The last enemy, with teammates alive: each of us keeps it in the swept arc every turn, as in a duel.
-            EnemyState last = world.enemies().iterator().next();
             turnRadar(TeamRadar.sweep(radar, TeamRadar.arc(now, getX(), getY(),
-                    List.of(new MeleeRadar.Seen(last.name(), last.x(), last.y(), last.time())))));
+                    List.of(new MeleeRadar.Seen(target.name(), target.x(), target.y(), target.time())))));
             return;
         }
         if (getOthers() == 1 && target != null && now - target.time() <= 1) {
@@ -680,6 +686,22 @@ public class Ogi extends TeamRobot {
         } else {
             turnRadar(Double.NEGATIVE_INFINITY);
         }
+    }
+
+    /**
+     * No enemy seen in the last {@link #MAX_TARGET_AGE} turns, although some that we saw this round live: we drive
+     * towards the field's centre, from where the radar reaches every point of the field. From a corner of a team
+     * battle's field (1200 × 1200) the far corners are out of the radar's range (1200 px), and without a target we
+     * would neither move nor fire. Before the round's first scan we wait for the radar as before.
+     */
+    private void search() {
+        if (world.enemyCount() == 0) {
+            return;
+        }
+        double[] cmd = MeleeMovement.driveTo(getX(), getY(), Angles.fromRobocode(getHeadingRadians()),
+                getBattleFieldWidth() / 2, getBattleFieldHeight() / 2);
+        setAhead(cmd[0]);
+        setTurnRightRadians(cmd[1]);
     }
 
     /** Commands the radar's turn, mathematical (counter-clockwise positive). */

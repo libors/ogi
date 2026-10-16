@@ -264,7 +264,7 @@ public final class MeleeMovement {
     }
 
     /** Drives towards the point, backwards if that turns us less; {distance, right turn} in the engine's convention. */
-    static double[] driveTo(double x, double y, double heading, double px, double py) {
+    public static double[] driveTo(double x, double y, double heading, double px, double py) {
         double distance = Math.hypot(px - x, py - y);
         double turn = Angles.normalizeRelative(Angles.bearing(x, y, px, py) - heading);
         if (Math.abs(turn) > Math.PI / 2) {

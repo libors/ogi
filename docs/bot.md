@@ -10,7 +10,10 @@ Robocode delivers a turn's events before the robot acts, highest priority first,
 before scans (10), and painting (5) comes last (engine-model G-40). Then `act()` runs:
 
 1. **Our state** goes to the surfer, and the enemy waves advance to our position at the end of this turn.
-2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
+2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's. With none, but enemies
+   alive that we saw this round, we drive towards the field's centre and do nothing else this turn: from there the
+   radar reaches every point of the field (from a corner of the team field, 1200 × 1200, the far corners are out of
+   its 1200 px). Before the round's first scan we wait.
 3. **Radar:** locked on the target in 1v1, and on the last enemy in a team battle; in a melee towards the enemy
    scanned longest ago ([Melee radar](#melee-radar-meleeradar)); in a team battle on the enemies the team's plan
    gives this robot ([Team radar](#team-radar-teamradar)).
@@ -371,7 +374,10 @@ the argument (the gun cannot fire in those turns anyway): measured −0.10 ± 0.
 it turns towards the enemy whose last scan is the oldest, past its bearing by the angle it may have
 moved since (full speed for the turns since the scan, plus half a robot, at most 45°), and so sweeps only the arc that
 holds the enemies. In the two turns before our gun is cool the gun's target goes first while its scan is more than a
-turn old, so that the shot is aimed from a fresh position.
+turn old, so that the shot is aimed from a fresh position. An enemy last seen beyond the radar's range is passed over,
+and with no enemy seen in the last 8 turns the radar spins: before, it swept on towards an enemy it could not reach,
+the others went stale too, and a last robot of ours stood in a corner without a target, neither moving nor firing,
+for hundreds of turns (in 19 of 240 recorded team rounds, 2026-10-16).
 
 ### Team radar (`TeamRadar`)
 

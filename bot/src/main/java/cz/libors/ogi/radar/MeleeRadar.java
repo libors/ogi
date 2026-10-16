@@ -1,6 +1,7 @@
 package cz.libors.ogi.radar;
 
 import cz.libors.ogi.geom.Angles;
+import cz.libors.ogi.physics.RadarScan;
 import cz.libors.ogi.physics.RobotMotion;
 
 import java.util.List;
@@ -14,7 +15,9 @@ import java.util.List;
  * <ul>
  *   <li>Until every living enemy has been seen this round, the radar spins on.</li>
  *   <li>The radar turns past the stalest enemy's bearing by the angle it may have moved since that scan (at full
- *       speed, plus half a robot), so that the sweep covers it wherever it went.</li>
+ *       speed, plus half a robot), so that the sweep covers it wherever it went. An enemy last seen beyond the radar's
+ *       range is passed over: sweeping towards it would not find it, and the others would go stale meanwhile. With
+ *       every enemy that far the radar spins.</li>
  *   <li>In the turns before our gun is cool, the gun's target goes first while its scan is older than a turn: the shot
  *       is aimed from a fresh position.</li>
  * </ul>
@@ -54,6 +57,9 @@ public final class MeleeRadar {
             if (gunSoon && e.name().equals(target) && now - e.time() > 1) {
                 chosen = e;
                 break;
+            }
+            if (Math.hypot(e.x() - x, e.y() - y) > RadarScan.RADIUS) {
+                continue;
             }
             if (chosen == null || e.time() < chosen.time()) {
                 chosen = e;
