@@ -7,6 +7,7 @@ import cz.libors.harness.foreign.JarCheck.Verdict;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -124,11 +125,38 @@ class JarCheckTest {
         Map<String, byte[]> jar = classes("CleanRobot", "CleanRobot$Sighting");
         jar.put("data/stats.bin", classBytes("HostileRobot"));
         jar.put("lib/extra.jar", new byte[] {'P', 'K', 3, 4, 0, 0});
+        jar.put("data/stats.dat", zip(classes("CleanRobot")));
         jar.put("META-INF/services/java.lang.Runnable", "x.Y\n".getBytes(StandardCharsets.UTF_8));
         Map<String, Finding> byApi = byApi(JarCheck.check("hidden.jar", "-", jar, false));
         assertFinding(byApi, "entry data/stats.bin", Level.DENY, "hidden class file");
-        assertFinding(byApi, "entry lib/extra.jar", Level.DENY, "nested archive");
+        assertFinding(byApi, "entry lib/extra.jar", Level.DENY, "unreadable member jar");
+        assertFinding(byApi, "entry data/stats.dat", Level.DENY, "nested archive");
         assertFinding(byApi, "entry META-INF/services/java.lang.Runnable", Level.FLAG, "service registration");
+    }
+
+    @Test
+    void aTeamJarsMemberJarsAreCheckedLikeJarsOfTheirOwn() throws IOException {
+        Map<String, byte[]> member = classes("CleanRobot", "CleanRobot$Sighting");
+        member.put(FIXTURES + "CleanRobot.properties",
+                "robot.classname=ext.fixtures.CleanRobot\n".getBytes(StandardCharsets.UTF_8));
+        Map<String, byte[]> team = new LinkedHashMap<>();
+        team.put("ext/fixtures/CleanTeam.team", "team.members=ext.fixtures.CleanRobot\n"
+                .getBytes(StandardCharsets.UTF_8));
+        team.put("CleanRobot.jar", zip(member));
+        Report clean = JarCheck.check("team.jar", "-", team, false);
+        assertEquals(List.of(), clean.findings());
+        assertEquals(List.of("ext.fixtures.CleanTeam (team)", "CleanRobot.jar!/ext.fixtures.CleanRobot"),
+                clean.robots());
+        assertEquals(2, clean.classes());
+
+        Map<String, byte[]> hostile = classes("HostileRobot");
+        hostile.put("deeper.jar", zip(classes("CleanRobot")));
+        team.put("HostileRobot.zip", zip(hostile));
+        Map<String, Finding> byApi = byApi(JarCheck.check("team.jar", "-", team, false));
+        assertFinding(byApi, "java.lang.System.exit", Level.DENY, "exit");
+        assertEquals(List.of("HostileRobot.zip!/ext.fixtures.HostileRobot"),
+                List.copyOf(byApi.get("java.lang.System.exit").classes()));
+        assertFinding(byApi, "entry HostileRobot.zip!/deeper.jar", Level.DENY, "nested archive");
     }
 
     @Test
@@ -190,6 +218,19 @@ class JarCheckTest {
             entries.put(FIXTURES + name + ".class", classBytes(name));
         }
         return entries;
+    }
+
+    /** The entries as the bytes of a zip archive. */
+    private static byte[] zip(Map<String, byte[]> entries) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+            for (Map.Entry<String, byte[]> e : entries.entrySet()) {
+                zip.putNextEntry(new ZipEntry(e.getKey()));
+                zip.write(e.getValue());
+                zip.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
     }
 
     private static byte[] ownBytes() throws IOException {

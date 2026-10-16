@@ -862,8 +862,11 @@ tasks.register<JavaExec>("submitRecordings") {
         val foreign = subject.orNull?.trim()?.split(Regex("\\s+"))
         val robot = if (foreign == null) {
             val version = versionFile.get().asFile.readText().trim()
-            listOf("robot=cz.libors.Ogi", "version=$version",
-                "jar=" + snapshotsDir.file("cz.libors.Ogi_$version.jar").asFile.absolutePath)
+            // Against a team set the subject is our team.
+            val team = rootDir.resolve(opponents.get()).readLines().any { it.trim() == "format team" }
+            val name = if (team) "cz.libors.OgiTeam" else "cz.libors.Ogi"
+            listOf("robot=$name", "version=$version",
+                "jar=" + snapshotsDir.file("${name}_$version.jar").asFile.absolutePath)
         } else {
             require(foreign.size == 2) { "-Psubject wants a robot and its version, e.g. \"kc.serpent.Hydra 0.21\"" }
             listOf("robot=" + foreign[0], "version=" + foreign[1])

@@ -338,14 +338,16 @@ from everybody and nobody's closest robot. The waves are still detected and lear
   `threat · (1 + |cos a|) / (d² · (1 + n))`, where threat is the enemy's energy over ours clamped to [0.5, 2], a the
   angle between our way to D and the line from D to the enemy (driving at or away from a shooter is what head-on and
   linear guns hit), d the distance from D to the enemy and n the robots closer to the enemy than D (with each one, it
-  is less likely to aim at us). A teammate adds 0.3 / d². The sum is multiplied by 1 + Σ 400 / d² over our last 20
-  positions, one every 5 turns, so that we do not keep to one spot.
+  is less likely to aim at us). A teammate adds 3 / d² (see [Team play](#team-play-czliborsogiteam)). The sum is
+  multiplied by 1 + Σ 400 / d² over our last 20 positions, one every 5 turns, so that we do not keep to one spot.
 - **Waves:** the 8 candidates with the least risk (last turn's destination always among them) also get the damage we
   expect on the way from the enemy waves in the air (`WaveSurfer.meleeDanger`): we drive straight to the point and
   stand, predicted by the engine's rules until the waves have passed, at most 30 turns, and each wave counts as in a
   duel (its shooter's danger model inside the hit range, our bullets' shadows, times the bullet's damage), times the
   chance that its shooter aimed at us: 1 / (1 + n)², n the enemies it had closer than us when it fired, each where
-  its scan nearest to that turn saw it (most melee robots aim at their closest enemy). Waves below a chance of 0.1
+  its scan nearest to that turn saw it (most melee robots aim at their closest enemy); in a team battle n counts our
+  teammates instead, since an enemy never aims at its own. A teammate's bullet in the air counts its whole damage on
+  a way that crosses its line. Waves below a chance of 0.1
   (n ≥ 3), and waves that cannot reach us within the 30 turns wherever we drive, are left out. A candidate's score is
   its risk over the 8 candidates' median risk plus 3 times its waves' damage over their median damage (at least 0.1);
   last turn's destination at 0.9 times its score.
@@ -369,6 +371,37 @@ it turns towards the enemy whose last scan is the oldest, past its bearing by th
 moved since (full speed for the turns since the scan, plus half a robot, at most 45°), and so sweeps only the arc that
 holds the enemies. In the two turns before our gun is cool the gun's target goes first while its scan is more than a
 turn old, so that the shot is aimed from a fresh position.
+
+## Team play (`cz.libors.ogi.team`)
+
+`cz.libors.OgiTeam` is five copies of Ogi, the first the leader (200 energy). Each plays the melee bot above while
+more than one enemy lives, and the duel when it is alone with one. What makes them a team:
+
+- **One packet a turn** (`TeamPacket`), broadcast after acting: the robot's own state and the position its commands
+  take it to by the end of the next turn (exact unless it collides; teammates read the packet in that turn,
+  engine-model G-23), its scans of enemies in the turn (`EnemySighting`), the bullets it fired (`TeamShot`) and the
+  events that changed an enemy's energy (`TeamEvent`: our bullet hit it, its bullet hit us, we rammed it). Data of
+  another round are ignored; a teammate's scan of an enemy that died meanwhile is dropped (`World.dead`).
+- **Where the teammates are:** from the packets, every turn; the firing-line check (30 px at the teammate's distance)
+  and the movement use them.
+- **Teammates' bullets:** each is a wave with one known heading (`WaveSurfer.teammateFired`); in the melee movement a
+  way that crosses its line costs its whole damage, which takes such ways out of the choice.
+- **The enemies' shots** are told from the energy in the whole team's scans, less every hit and ram any of us saw
+  (`TeamFeed`): turn t goes to the fire detectors in turn t + 1, when all teammates' reports of t are in, events
+  first, then one scan per enemy; the waves are followed from the shot all the same. With five radars and every hit
+  reported, an enemy team's energy is known almost every turn, and its robots rarely hit each other.
+- **The scans** of all teammates also feed the world (the radar's staleness, the target), the melee gun (fresher last
+  positions, more records) and the duel gun.
+- **Copies of one enemy** (the engine names them `a.Bot 1.0 (1)` … `(5)`) share what we learn of them
+  (`Names.base`): their danger model, our guns' data, the melee gun's records and our hit records.
+- **Spread:** a teammate repels in the melee movement's risk with 3 / d², as an enemy that nobody else stands near
+  weighs 1–2: robots that keep apart are not hit by bullets aimed at each other and draw the enemies' fire apart.
+- Measured on the whole TeamRumble (2026-10-16, [harness.md](harness.md), 4 pairs per team): the packet with the
+  teammates' bullets dodged +21.2 APS, the copies' shared learning +1.4, the spread +4.1 (weight 1) and +2.1 (3); the
+  team's fire detection and the melee gun's shared scans changed the score within noise (we were hit 7 % less, hit
+  1 % more). Not kept: a droid as the fifth member (+0.6 ± 0.8), power 1.45 against enemies we hit rarely (−1.2), the
+  melee gun weighing enemies by 100 / energy (−1.2, it hit 5 points less), counting only teammates in the risk's
+  robots-closer term (−1.6).
 
 ## Bullet shield (`cz.libors.ogi.shield`)
 

@@ -629,6 +629,11 @@ jar with anything in those packages, and `deployBots` runs the jar check.
     other names, nested archives, service registrations, multi-release classes, duplicates). A class the robot
     class loader would take from the JDK or the engine never counts as the jar's own, so it cannot hide references
     to the real one.
+  - **Team jars** may carry their members as jars inside the jar: Robocode reads every entry named `*.jar` or
+    `*.zip` as a jar of its own and loads robots from it (`JarRoot.readJarStream`). Such a member jar is checked
+    like a jar of its own, its classes judged against its own classes only (a robot's class loader reaches only the
+    archive it was found in); findings and robots name it, e.g. `Member-1.0.jar!/a.Member`. An archive inside a
+    member jar, or under another name, is denied. The report lists a jar's teams as `<team> (team)`.
   - **Why references are enough:** without reflection and class loading, both denied, code can only call what its
     constant pool names, lambdas and bootstrap methods included.
   - **What it cannot see:** where a robot reads and writes files at run time; that stays with the sandbox.
@@ -851,6 +856,10 @@ job type `record` takes any robot and keys (`queue.Submit`).
     since a worker plays one mode at a time). Without debug mode a turn Ogi skips can lose that turn's log; the
     melee bench leaves such battles out of its parity check (Ogi skipped no turn in 100 draws of a comparison).
   - A melee battle's default timeout is 600 s; the longest of 199 draws took 185 s in debug mode.
+- **Against a team set** the subject is the working tree's `OgiTeam` (or a foreign team with `-Psubject`), and the
+  battles are pairs as against a 1v1 set, with the same index columns; the subject's numbers are its team's (the
+  runner names a team's result after the team). Like melee draws they run without debug mode and with a 600 s
+  timeout by default: ten robots, most of them foreign.
 - **In debug mode by default**, like `recordBattles` (engine-model G-17): a battle can ask for it
   (`BattleSpec.debug`), and the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag
   once per JVM. A job's battles all want the same mode, and a worker plays one mode at a time: while battles of one

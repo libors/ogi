@@ -25,12 +25,12 @@ class MeleeMovementTest {
     @Test
     void beingAnEnemysClosestRobotIsRiskier() {
         MeleeMovement m = new MeleeMovement(FIELD, new Random(1));
-        // A destination 300 px south of the enemy at (500, 500), with and without a teammate 100 px north of the
-        // enemy: with it, we are not the enemy's closest robot there, and the teammate itself is 400 px away.
+        // A destination 300 px south of the enemy at (500, 500), with and without another enemy 290 px north of it:
+        // with it, we are not the first enemy's closest robot there, and the other one is 590 px away.
         List<Robot> alone = List.of(new Robot(500, 500, 100, true));
-        List<Robot> covered = List.of(new Robot(500, 500, 100, true), new Robot(500, 600, 100, false));
+        List<Robot> covered = List.of(new Robot(500, 500, 100, true), new Robot(500, 790, 100, true));
         double exposed = m.risk(400, 200, 500, 200, 100, alone, new double[][] {{0}});
-        double shielded = m.risk(400, 200, 500, 200, 100, covered, new double[][] {{0, 100}, {100, 0}});
+        double shielded = m.risk(400, 200, 500, 200, 100, covered, new double[][] {{0, 290}, {290, 0}});
         assertTrue(shielded < exposed, shielded + " with a closer robot against " + exposed + " without");
     }
 

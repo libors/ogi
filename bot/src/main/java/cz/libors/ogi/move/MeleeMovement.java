@@ -27,8 +27,8 @@ import java.util.Random;
  *   <li><b>perpendicularity:</b> 1 plus a share of |cos| of the angle between our way to D and the line from D to the
  *       enemy: driving straight at or away from a shooter is what its head-on and linear guns hit.</li>
  * </ul>
- * Teammates repel as a lighter enemy would. The sum grows with our recent positions near D, so that we do not keep
- * to one spot that guns learn.
+ * Teammates repel too ({@link #TEAMMATE_WEIGHT}). The sum grows with our recent positions near D, so that we do not
+ * keep to one spot that guns learn.
  *
  * <p>The candidates lie on a circle around us at random distances, but never further than a share of the distance
  * to the closest enemy, so that we do not drive past it; points too close to a wall are left out. The destination of
@@ -59,8 +59,13 @@ public final class MeleeMovement {
     static final double CLOSER_EXPONENT = 1;
     /** How much moving along the line to an enemy adds: up to this share more risk. */
     static final double PERPENDICULAR_WEIGHT = 1;
-    /** A teammate repels as an enemy this many times weaker. */
-    static final double TEAMMATE_WEIGHT = 0.3;
+    /**
+     * A teammate repels with this weight over its distance squared, as an enemy of our energy that nobody stands
+     * closer to repels with 1 to 2: in a team battle robots that keep apart are not hit by bullets aimed at each other
+     * and draw the enemies' fire apart. Against 0.3 the weight 1 gained about 4 APS on the team rumble and 3 another
+     * 2; 10 gained nothing more (2026-10-16).
+     */
+    static final double TEAMMATE_WEIGHT = 3;
     /** Last turn's destination competes with its risk times this. */
     static final double KEEP = 0.9;
     /** Nearer to the destination than this, it is reached: new candidates only. */

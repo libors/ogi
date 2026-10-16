@@ -48,6 +48,8 @@ import java.util.zip.GZIPInputStream;
  *       gives the same fields): {@code draws=n} records draws 0 to n − 1 into {@code draw<d>.rec.gz}, with an index of
  *       their own ({@link #MELEE_INDEX_COLUMNS}). They run without debug mode by default: among ten robots one whose
  *       thread never stops is likely, and debug mode would wait for it until the timeout.</li>
+ *   <li>Against a team set, the subject is a team (ours: {@code cz.libors.OgiTeam}), the battles are pairs as against
+ *       a 1v1 set, and like melee draws they run without debug mode and with a melee battle's timeout by default.</li>
  *   <li>By default, like {@code recordBattles}, in the engine's debug mode: the executor runs these battles on slots it
  *       restarted with {@code -Ddebug=true}. Without it a robot that skips a turn can lose that turn's debug
  *       properties, which broke the gun bench's parity against 4 of 125 opponents (2026-10-09). With
@@ -55,7 +57,8 @@ import java.util.zip.GZIPInputStream;
  *       mode would wait up to 600 s for a heavy robot's turn instead.</li>
  *   <li>A recording that exists is not played again, so a restarted server goes on where it stopped. A failed battle
  *       is retried twice, then given up (the job's reason lists it); a lost one goes back to the queue. The default
- *       timeout is 300 s, for a melee battle 600 s: in debug mode a robot that hangs holds its battle until then.</li>
+ *       timeout is 300 s, for a melee or team battle 600 s: in debug mode a robot that hangs holds its battle until
+ *       then.</li>
  * </ul>
  */
 public final class RecordJob extends QueueJob {
@@ -128,11 +131,11 @@ public final class RecordJob extends QueueJob {
         runSeed = Long.parseLong(spec.getProperty("seed", "1"));
         String keyList = spec.getProperty("keys", "");
         keys = keyList.isEmpty() ? null : Arrays.stream(keyList.split(",")).map(String::trim).toList();
-        debug = Boolean.parseBoolean(spec.getProperty("debug", Boolean.toString(format != Format.MELEE)));
-        // Debug mode has no turn time limit, so a robot that hangs holds the battle until this timeout; a melee battle
-        // of ten robots takes several times a duel's time.
+        debug = Boolean.parseBoolean(spec.getProperty("debug", Boolean.toString(format == Format.DUEL)));
+        // Debug mode has no turn time limit, so a robot that hangs holds the battle until this timeout; a melee or
+        // team battle of ten robots takes several times a duel's time.
         timeoutSeconds = Long.parseLong(spec.getProperty("timeout",
-                Integer.toString(format == Format.MELEE ? MELEE_TIMEOUT : 300)));
+                Integer.toString(format == Format.DUEL ? 300 : MELEE_TIMEOUT)));
         spec.stringPropertyNames().stream().filter(k -> k.startsWith("jar.")).sorted()
                 .forEach(k -> jars.put(k.substring(4), spec.getProperty(k)));
         out = dir.resolve("recordings").resolve(shipped(spec) ? version
@@ -177,10 +180,6 @@ public final class RecordJob extends QueueJob {
     public static String check(Properties spec, List<String> opponentLines) {
         OpponentSet set = OpponentSet.parse(spec.getProperty("opponentSet"), opponentLines);
         boolean melee = set.format() == Format.MELEE;
-        if (set.format() != Format.DUEL && !melee) {
-            throw new IllegalArgumentException("recordings are of 1v1 or melee battles; " + set.name() + " is a "
-                    + set.format().label + " set");
-        }
         if (melee) {
             new MeleeDraws(set);
             if (!spec.getProperty("starts", "random").equals("random")) {
@@ -199,7 +198,7 @@ public final class RecordJob extends QueueJob {
         }
         Long.parseLong(spec.getProperty("seed", "1"));
         Compare.intOption(spec, "rounds", 0, 0);
-        Compare.intOption(spec, "timeout", melee ? MELEE_TIMEOUT : 300, 1);
+        Compare.intOption(spec, "timeout", set.format() == Format.DUEL ? 300 : MELEE_TIMEOUT, 1);
         String subject = spec.getProperty("robot") + " " + spec.getProperty("version");
         boolean trusted = cz.libors.harness.Sandbox.trusted(subject);
         if (!shipped(spec) && trusted) {
@@ -215,7 +214,7 @@ public final class RecordJob extends QueueJob {
             throw new IllegalArgumentException(subject + " is in the opponent set; a battle against itself would "
                     + "name both robots alike");
         }
-        String mode = spec.getProperty("debug", Boolean.toString(!melee));
+        String mode = spec.getProperty("debug", Boolean.toString(set.format() == Format.DUEL));
         if (!mode.equals("true") && !mode.equals("false")) {
             throw new IllegalArgumentException("debug must be true or false: " + mode);
         }

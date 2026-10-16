@@ -23,10 +23,16 @@ import cz.libors.ogi.radar.MeleeRadar;
 import cz.libors.ogi.shield.Shield;
 import cz.libors.ogi.shield.ShieldPlanner;
 import cz.libors.ogi.team.EnemySighting;
+import cz.libors.ogi.team.TeamEvent;
+import cz.libors.ogi.team.TeamFeed;
+import cz.libors.ogi.team.TeamPacket;
+import cz.libors.ogi.team.TeamShot;
+import cz.libors.ogi.team.TeammateState;
 import cz.libors.ogi.trace.Overlay;
 import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.trace.TurnClock;
 import cz.libors.ogi.world.EnemyState;
+import cz.libors.ogi.world.Names;
 import cz.libors.ogi.world.World;
 import robocode.Bullet;
 import robocode.BulletHitBulletEvent;
@@ -112,7 +118,10 @@ public class Ogi extends TeamRobot {
      * strong bots often start with both of us in this band.
      */
     private static final double RACE_CLOSE_ENERGY = 40;
-    /** Our bullets at each enemy over the battle (statics last for the battle, as the gun's data do). */
+    /**
+     * Our bullets at each enemy over the battle (statics last for the battle, as the gun's data do); the copies of one
+     * robot in an enemy team together.
+     */
     private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
     /** What the melee gun learned in this battle. */
     private static final MeleeGun.Memory MELEE_MEMORY = new MeleeGun.Memory();
@@ -246,6 +255,39 @@ public class Ogi extends TeamRobot {
     private double expectedEnergy = Double.NaN;
     private boolean hitWall;
     private long energyChecked = -1;
+    /** Our scans of enemies in this turn and the bullets we fired in it, for this turn's {@link TeamPacket}. */
+    private final List<EnemySighting> sightingsToShare = new ArrayList<>();
+    private final List<TeamShot> shotsToShare = new ArrayList<>();
+    /** The events of this turn that changed an enemy's energy, for this turn's {@link TeamPacket}. */
+    private final List<TeamEvent> eventsToShare = new ArrayList<>();
+    /**
+     * In a team battle, the team's scans of the enemies and the events that changed their energy, which the enemies'
+     * fire detectors take a turn late, when the teammates' reports of the turn are in; null outside a team battle.
+     */
+    private TeamFeed feed;
+    /** Where {@link #feed} hands each turn: to the surfer's fire detectors. */
+    private final TeamFeed.Sink detection = new TeamFeed.Sink() {
+        @Override
+        public void zapped(long time) {
+            surfer.zapped();
+        }
+
+        @Override
+        public void event(TeamEvent e) {
+            switch (e.kind()) {
+                case HIT_BY_US -> surfer.ourBulletHit(e.enemy(), e.power());
+                case HIT_US -> surfer.enemyHit(e.enemy(), e.power());
+                case RAM -> surfer.rammed(e.enemy());
+            }
+        }
+
+        @Override
+        public void scanned(EnemySighting s) {
+            surfer.energySeen(s.name(), s.time(), s.x(), s.y(), s.velocity(), s.energy(), getTime());
+        }
+    };
+    /** Where this turn's commands take us by the end of the next turn, {x, y}; NaN before the first plan. */
+    private double[] next = {Double.NaN, Double.NaN};
 
     @Override
     public void run() {
@@ -254,6 +296,7 @@ public class Ogi extends TeamRobot {
         movement = new OrbitMovement(field, new Random(roundSeed()));
         melee = new MeleeMovement(field, new Random(roundSeed() * 7 + 3));
         teammatesAlive = getTeammates() == null ? 0 : getTeammates().length;
+        feed = getTeammates() == null ? null : new TeamFeed();
         gun = new GuessFactorGun(field);
         mirror = new MirrorAim(field);
         meleeGun = new MeleeGun(field, MELEE_MEMORY, MeleeGunParameters.DEFAULT);
@@ -261,6 +304,9 @@ public class Ogi extends TeamRobot {
         randomAim = new Random(roundSeed() * 31 + 17);
         randomDraw = randomAim.nextDouble();
         surfer = new WaveSurfer(field, getGunCoolingRate());
+        if (getTeammates() != null) {
+            surfer.teamBattle();
+        }
         shield = new Shield(field, getGunCoolingRate());
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
@@ -268,6 +314,7 @@ public class Ogi extends TeamRobot {
         setColors(new Color(40, 44, 52), new Color(229, 192, 123), new Color(97, 175, 239));
         while (true) {
             act();
+            share();
             clock.ended(System.nanoTime());
             execute();
         }
@@ -293,11 +340,16 @@ public class Ogi extends TeamRobot {
 
     private void act() {
         long now = getTime();
+        next = new double[] {Double.NaN, Double.NaN};
         if (energyChecked != now) {
             checkInactivity(now);
         }
         surfer.ourState(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getVelocity());
         shield.ourState(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getVelocity());
+        if (feed != null) {
+            // The teammates' reports of the last turn are in; with none alive, ours of this turn are all there is.
+            feed.flush(teammatesAlive > 0 ? now - 1 : now, detection);
+        }
         surfer.update(now);
         mirror.ours(now, getX(), getY());
         Optional<EnemyState> target = world.closestEnemy(getX(), getY(), now, MAX_TARGET_AGE);
@@ -324,7 +376,7 @@ public class Ogi extends TeamRobot {
                 surfer.preferredDistance(NEAR_DISTANCE);
             }
         }
-        double[] next = move(t, now);
+        next = move(t, now);
         boolean fired = fire(t, now);
         if (fired) {
             randomDraw = randomAim.nextDouble();
@@ -340,13 +392,39 @@ public class Ogi extends TeamRobot {
     }
 
     /**
+     * Tells the teammates, once a turn after acting, where we are and where this turn's commands take us, whom we
+     * scanned and what we fired: one message, serialized once. They read it in the next turn (engine-model G-23).
+     */
+    private void share() {
+        if (getTeammates() != null && teammatesAlive > 0) {
+            boolean planned = !Double.isNaN(next[0]);
+            TeammateState me = new TeammateState(getName(), getX(), getY(),
+                    Angles.fromRobocode(getHeadingRadians()), getVelocity(), getEnergy(),
+                    planned ? next[0] : getX(), planned ? next[1] : getY(), getTime(), getRoundNum());
+            try {
+                broadcastMessage(new TeamPacket(me, List.copyOf(sightingsToShare), List.copyOf(shotsToShare),
+                        List.copyOf(eventsToShare)));
+            } catch (IOException ex) {
+                out.println("Broadcast failed: " + ex.getMessage());
+            }
+        }
+        sightingsToShare.clear();
+        shotsToShare.clear();
+        eventsToShare.clear();
+    }
+
+    /**
      * Once a turn, before the turn's scans: an unexplained loss of exactly the inactivity penalty means the engine took
      * it from every robot, the enemies too, which their fire detectors must not take for a shot.
      */
     private void checkInactivity(long now) {
         if (!Double.isNaN(expectedEnergy) && !hitWall && energyChecked == now - 1
                 && Math.abs(getEnergy() - (expectedEnergy - Inactivity.ZAP)) < 1e-6) {
-            surfer.zapped();
+            if (feed != null) {
+                feed.zapped(now);
+            } else {
+                surfer.zapped();
+            }
         }
         expectedEnergy = getEnergy();
         hitWall = false;
@@ -598,6 +676,10 @@ public class Ogi extends TeamRobot {
             boolean melee = meleeAimTime == now - 1;
             String aimedAt = melee && meleeGun.aimedAt() != null ? meleeGun.aimedAt() : target.name();
             inFlight.put(bullet, new FiredShot(aimedAt, plan.get().time(), melee));
+            if (teammatesAlive > 0) {
+                shotsToShare.add(new TeamShot(getName(), bullet.getX(), bullet.getY(),
+                        Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower(), now, getRoundNum()));
+            }
             if (melee && logsGun()) {
                 setDebugProperty(MeleeGunLog.FIRE, MeleeGunLog.fireLine(meleeAimTime,
                         Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower(), bullet.getX(),
@@ -731,7 +813,7 @@ public class Ogi extends TeamRobot {
                 : getOthers() == 1 && hitsBelow(target.name(), RARE_HIT_RATE) ? RARE_HIT_POWER : DEFAULT_POWER;
         if (getOthers() == 1 && (getEnergy() < RACE_ENERGY
                 || target.energy() < RACE_ENERGY && getEnergy() < RACE_CLOSE_ENERGY)) {
-            HitRecord record = HIT_RECORDS.get(target.name());
+            HitRecord record = HIT_RECORDS.get(Names.base(target.name()));
             double hits = record == null ? 0 : record.hits();
             double ended = record == null ? 0 : record.ended();
             power = RacePower.choose((hits + RACE_PRIOR_HITS) / (ended + RACE_PRIOR_BULLETS),
@@ -744,7 +826,7 @@ public class Ogi extends TeamRobot {
 
     /** Whether our bullets hit this enemy often enough over the battle for full power at any distance. */
     private static boolean readsWell(String name) {
-        HitRecord record = HIT_RECORDS.get(name);
+        HitRecord record = HIT_RECORDS.get(Names.base(name));
         return record != null && record.ended() >= READ_MIN_BULLETS && record.rate() >= READ_HIT_RATE;
     }
 
@@ -755,14 +837,15 @@ public class Ogi extends TeamRobot {
 
     /** Whether our bullets hit this enemy less often than {@code rate} over the battle, once enough of them ended. */
     private static boolean hitsBelow(String name, double rate) {
-        HitRecord record = HIT_RECORDS.get(name);
+        HitRecord record = HIT_RECORDS.get(Names.base(name));
         return record != null && record.ended() >= NEAR_MIN_BULLETS && record.rate() < rate;
     }
 
     /** One of our bullets fired at {@code shot}'s target ended; it hit {@code victim}, or nobody if null. */
     private static void bulletEnded(FiredShot shot, String victim) {
         if (shot != null) {
-            HIT_RECORDS.computeIfAbsent(shot.target(), n -> new HitRecord()).ended(shot.target().equals(victim));
+            HIT_RECORDS.computeIfAbsent(Names.base(shot.target()), n -> new HitRecord())
+                    .ended(shot.target().equals(victim));
         }
     }
 
@@ -870,51 +953,72 @@ public class Ogi extends TeamRobot {
         double x = getX() + e.getDistance() * Math.cos(bearing);
         double y = getY() + e.getDistance() * Math.sin(bearing);
         if (isTeammate(e.getName())) {
-            world.observeTeammate(e.getName(), x, y, e.getTime());
+            world.observeTeammate(new World.Teammate(e.getName(), x, y, Angles.fromRobocode(e.getHeadingRadians()),
+                    e.getVelocity(), e.getEnergy(), e.getTime()));
             surfer.teammateSeen(e.getName(), e.getTime(), x, y);
             return;
         }
         EnemySighting sighting = new EnemySighting(e.getName(), x, y, Angles.fromRobocode(e.getHeadingRadians()),
                 e.getVelocity(), e.getEnergy(), e.getTime(), getRoundNum());
         world.observeEnemy(sighting);
-        int enemies = getOthers() - teammatesAlive;
-        if (enemies > 1) {
-            // The robot closest to it, as far as we know: us, or another robot where we saw it last.
-            double cx = getX();
-            double cy = getY();
-            for (EnemyState other : world.enemies()) {
-                if (!other.name().equals(e.getName())
-                        && Math.hypot(other.x() - x, other.y() - y) < Math.hypot(cx - x, cy - y)) {
-                    cx = other.x();
-                    cy = other.y();
-                }
-            }
-            for (World.Teammate t : world.recentTeammates(e.getTime(), MAX_TEAMMATE_AGE)) {
-                if (Math.hypot(t.x() - x, t.y() - y) < Math.hypot(cx - x, cy - y)) {
-                    cx = t.x();
-                    cy = t.y();
-                }
-            }
-            meleeGun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), cx, cy, enemies);
-            if (logsGun()) {
-                setDebugProperty(MeleeGunLog.SCAN, MeleeGunLog.scanLine(e.getName(), e.getTime(), x, y,
-                        sighting.heading(), e.getVelocity(), cx, cy, enemies));
-            }
-        }
+        meleeScan(sighting);
         gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
         shield.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
-        Optional<DetectedShot> shot = surfer.scanned(e.getName(), e.getTime(), x, y, sighting.heading(),
-                e.getVelocity(), e.getEnergy());
-        shot.ifPresent(shield::shotDetected);
-        if (shot.isPresent() && shielding(e.getName())) {
-            shieldTrial(e.getName(), 0, true, false);
-        }
-        if (getTeammates() != null) {
-            try {
-                broadcastMessage(sighting);
-            } catch (IOException ex) {
-                out.println("Broadcast failed: " + ex.getMessage());
+        if (feed != null) {
+            surfer.seen(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), true);
+            feed.sighting(sighting);
+        } else {
+            Optional<DetectedShot> shot = surfer.scanned(e.getName(), e.getTime(), x, y, sighting.heading(),
+                    e.getVelocity(), e.getEnergy());
+            shot.ifPresent(shield::shotDetected);
+            if (shot.isPresent() && shielding(e.getName())) {
+                shieldTrial(e.getName(), 0, true, false);
             }
+        }
+        if (teammatesAlive > 0) {
+            sightingsToShare.add(sighting);
+        }
+    }
+
+    /** In a team battle, an event that changed an enemy's energy: for the fire detectors and for the teammates. */
+    private void energyEvent(String enemy, TeamEvent.Kind kind, double power, long time) {
+        TeamEvent event = new TeamEvent(enemy, kind, power, time, getRoundNum());
+        feed.event(event);
+        if (teammatesAlive > 0) {
+            eventsToShare.add(event);
+        }
+    }
+
+    /**
+     * A scan of an enemy, ours or a teammate's, for the melee gun while more than one enemy lives; its situation
+     * includes the robot closest to it, as far as we know: us, or another robot where it was seen last.
+     */
+    private void meleeScan(EnemySighting s) {
+        int enemies = getOthers() - teammatesAlive;
+        if (enemies <= 1) {
+            return;
+        }
+        double x = s.x();
+        double y = s.y();
+        double cx = getX();
+        double cy = getY();
+        for (EnemyState other : world.enemies()) {
+            if (!other.name().equals(s.name())
+                    && Math.hypot(other.x() - x, other.y() - y) < Math.hypot(cx - x, cy - y)) {
+                cx = other.x();
+                cy = other.y();
+            }
+        }
+        for (World.Teammate t : world.recentTeammates(s.time(), MAX_TEAMMATE_AGE)) {
+            if (Math.hypot(t.x() - x, t.y() - y) < Math.hypot(cx - x, cy - y)) {
+                cx = t.x();
+                cy = t.y();
+            }
+        }
+        meleeGun.scanned(s.name(), s.time(), x, y, s.heading(), s.velocity(), cx, cy, enemies);
+        if (logsGun()) {
+            setDebugProperty(MeleeGunLog.SCAN, MeleeGunLog.scanLine(s.name(), s.time(), x, y, s.heading(),
+                    s.velocity(), cx, cy, enemies));
         }
     }
 
@@ -926,7 +1030,11 @@ public class Ogi extends TeamRobot {
         bulletEnded(shot, e.getName());
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
-            surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
+            if (feed != null) {
+                energyEvent(e.getName(), TeamEvent.Kind.HIT_BY_US, e.getBullet().getPower(), e.getTime());
+            } else {
+                surfer.ourBulletHit(e.getName(), e.getBullet().getPower());
+            }
         }
     }
 
@@ -934,8 +1042,14 @@ public class Ogi extends TeamRobot {
     public void onHitByBullet(HitByBulletEvent e) {
         expectedEnergy -= Rules.getBulletDamage(e.getPower());
         if (!isTeammate(e.getName())) {
-            surfer.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
-                    Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+            if (feed != null) {
+                surfer.learnHit(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
+                        Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+                energyEvent(e.getName(), TeamEvent.Kind.HIT_US, e.getPower(), e.getTime());
+            } else {
+                surfer.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
+                        Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+            }
             shield.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
                     Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
             if (shielding(e.getName())) {
@@ -980,7 +1094,11 @@ public class Ogi extends TeamRobot {
     public void onHitRobot(HitRobotEvent e) {
         expectedEnergy -= Rules.ROBOT_HIT_DAMAGE;
         if (!isTeammate(e.getName())) {
-            surfer.rammed(e.getName());
+            if (feed != null) {
+                energyEvent(e.getName(), TeamEvent.Kind.RAM, 0, e.getTime());
+            } else {
+                surfer.rammed(e.getName());
+            }
         }
     }
 
@@ -1003,10 +1121,31 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void onMessageReceived(MessageEvent e) {
-        if (e.getMessage() instanceof EnemySighting sighting && sighting.round() == getRoundNum()) {
+        if (!(e.getMessage() instanceof TeamPacket packet) || packet.state().round() != getRoundNum()) {
+            return;
+        }
+        TeammateState s = packet.state();
+        world.teammateReported(s);
+        surfer.teammateSeen(s.name(), s.time() + 1, s.nextX(), s.nextY());
+        for (EnemySighting sighting : packet.sightings()) {
+            if (world.dead(sighting.name())) {
+                // Scanned in the turn it died.
+                continue;
+            }
             world.observeEnemy(sighting);
+            meleeScan(sighting);
             gun.scanned(sighting.name(), sighting.time(), sighting.x(), sighting.y(), sighting.heading(),
                     sighting.velocity());
+            surfer.seen(sighting.name(), sighting.time(), sighting.x(), sighting.y(), sighting.heading(),
+                    sighting.velocity(), false);
+            feed.sighting(sighting);
+        }
+        for (TeamEvent event : packet.events()) {
+            feed.event(event);
+        }
+        for (TeamShot shot : packet.shots()) {
+            surfer.teammateFired(shot.shooter(), shot.fireTime(), shot.x(), shot.y(), shot.heading(), shot.power(),
+                    e.getTime());
         }
     }
 

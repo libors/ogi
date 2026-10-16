@@ -7,6 +7,7 @@ import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.wave.HitRange;
 import cz.libors.ogi.wave.Wave;
+import cz.libors.ogi.world.Names;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,6 +48,7 @@ public final class GuessFactorGun {
     public static final int MIRROR = GunModel.MIRROR;
     private static final String[] GUN_NAMES = {"gf", "circular", "anti-surfer", "random", "mirror"};
 
+    /** What the guns learned of each enemy; the copies of one robot in an enemy team share it ({@link Names#base}). */
     private static final Map<String, GunModel> MODELS = new HashMap<>();
 
     /**
@@ -106,13 +108,13 @@ public final class GuessFactorGun {
 
     /** Past shots stored for this enemy. */
     public int dataSize(String name) {
-        GunModel model = MODELS.get(name);
+        GunModel model = MODELS.get(Names.base(name));
         return model == null ? 0 : model.dataSize();
     }
 
     /** A gun's weighted virtual hit rate against this enemy, or NaN before it was scored. */
     public double hitRate(String name, int gun) {
-        GunModel model = MODELS.get(name);
+        GunModel model = MODELS.get(Names.base(name));
         return model == null ? Double.NaN : model.hitRate(gun);
     }
 
@@ -286,6 +288,6 @@ public final class GuessFactorGun {
 
     private Target target(String name) {
         return targets.computeIfAbsent(name,
-                n -> new Target(MODELS.computeIfAbsent(n, k -> new GunModel(GunParameters.DEFAULT))));
+                n -> new Target(MODELS.computeIfAbsent(Names.base(n), k -> new GunModel(GunParameters.DEFAULT))));
     }
 }

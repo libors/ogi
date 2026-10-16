@@ -3,6 +3,7 @@ package cz.libors.ogi.gun;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.physics.RobotMotion;
+import cz.libors.ogi.world.Names;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -167,7 +168,7 @@ public final class MeleeGun {
         }
     }
 
-    /** The records of a battle, per enemy. */
+    /** The records of a battle, per enemy; the copies of one robot in an enemy team share them ({@link Names#base}). */
     public static final class Memory {
         final Map<String, Store> records = new HashMap<>();
     }
@@ -261,7 +262,7 @@ public final class MeleeGun {
         e.features = f;
         Record r = new Record(time, x, y, frame);
         e.open.add(r);
-        memory.records.computeIfAbsent(name, n -> new Store(p.maxRecords())).add(r, f);
+        memory.records.computeIfAbsent(Names.base(name), n -> new Store(p.maxRecords())).add(r, f);
     }
 
     public void robotDied(String name) {
@@ -282,7 +283,7 @@ public final class MeleeGun {
         List<String> owners = new ArrayList<>();
         for (Map.Entry<String, Enemy> entry : enemies.entrySet()) {
             Enemy e = entry.getValue();
-            Store store = memory.records.get(entry.getKey());
+            Store store = memory.records.get(Names.base(entry.getKey()));
             if (store == null || e.features == null || fireTime - e.time > p.maxAge()) {
                 continue;
             }

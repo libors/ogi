@@ -3,6 +3,7 @@ package cz.libors.ogi.move;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.TargetingFeatures;
+import cz.libors.ogi.physics.BulletMotion;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.wave.Wave;
@@ -283,6 +284,64 @@ class WaveSurferTest {
         assertTrue(charger.drivesAtUs());
         assertTrue(!far.drivesAtUs(), "approaching from far away is no ram");
         assertTrue(!visitor.drivesAtUs(), "a short visit is no ram");
+    }
+
+    /**
+     * A teammate 300 px west of us fires along the line to us in turn 10; we learn it a turn later. Standing in its
+     * line costs the bullet's whole damage, a way out of its line nothing; a bullet fired away from us costs nothing.
+     */
+    @Test
+    void aTeammatesBulletCountsOnlyOnAWayAcrossItsLine() {
+        for (double heading : new double[] {0, Math.PI}) {
+            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            for (long t = 0; t <= 10; t++) {
+                surfer.ourState(t, 400, 300, Math.PI / 2, 0);
+                surfer.update(t);
+            }
+            surfer.teammateFired("teammate", 10, 100, 300, heading, 2, 11);
+            surfer.ourState(11, 400, 300, Math.PI / 2, 0);
+            surfer.update(11);
+            double stay = surfer.meleeDanger(us(400, 300), 11, 400, 300);
+            double away = surfer.meleeDanger(us(400, 300), 11, 400, 500);
+            assertEquals(heading == 0 ? BulletMotion.damage(2) : 0, stay, 1e-12, "standing, heading " + heading);
+            assertEquals(0, away, 1e-12, "out of its line, heading " + heading);
+        }
+    }
+
+    /**
+     * In a melee another enemy nearer to the shooter quarters the chance that its wave was aimed at us. In a team
+     * battle an enemy aims at us or at our teammates, never at its own: a teammate nearer to the shooter quarters the
+     * chance, the shooter's teammate does not. A team hands the scan that reveals the shot on a turn late, and the
+     * wave is followed from the shot all the same.
+     */
+    @Test
+    void inATeamBattleOnlyTeammatesNearerToTheShooterTakeItsAim() {
+        double[] dangers = new double[4];
+        for (int c = 0; c < 4; c++) {
+            boolean team = c >= 2;
+            boolean teammateNearer = c % 2 == 1;
+            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            if (team) {
+                surfer.teamBattle();
+            }
+            for (long t = 0; t <= 34; t++) {
+                surfer.teammateSeen("teammate", t, teammateNearer ? 560 : 100, 500);
+                surfer.seen("friend-of-shooter", t, 640, 420, 0, 0, true);
+                surfer.seen("shooter", t, 650, 300, 0, 0, true);
+                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+                // Guns start hot (engine-model G-05); it fires 2.0 in turn 32, the scan of turn 33 shows the drop,
+                // and the team hands that scan on in turn 34.
+                if (t >= 1) {
+                    surfer.energySeen("shooter", t - 1, 650, 300, 0, t - 1 <= 32 ? 100 : 98, t);
+                }
+                surfer.update(t);
+            }
+            dangers[c] = surfer.meleeDanger(us(250, 300), 34, 250, 300);
+        }
+        assertTrue(dangers[0] > 0, "the wave counts");
+        assertEquals(dangers[0], dangers[1], 1e-12, "in a melee the other enemy nearer to the shooter takes its aim");
+        assertEquals(4 * dangers[0], dangers[2], 1e-12, "in a team battle the shooter's own teammate does not");
+        assertEquals(dangers[2] / 4, dangers[3], 1e-12, "a teammate nearer to the shooter quarters the chance");
     }
 
     private static EngineRobot us(double x, double y) {

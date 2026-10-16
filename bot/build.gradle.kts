@@ -59,6 +59,8 @@ val generateRobotFiles = tasks.register("generateRobotFiles") {
     outputs.dir(outDir)
     doLast {
         val dir = outDir.get().dir(packageDir).asFile
+        // Files of robots no longer generated would otherwise reach the jars.
+        dir.deleteRecursively()
         dir.mkdirs()
         dir.resolve("$robotName.properties").writeText(
             """

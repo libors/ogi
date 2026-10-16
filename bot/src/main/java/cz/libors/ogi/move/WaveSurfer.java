@@ -14,6 +14,7 @@ import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.wave.BulletPath;
 import cz.libors.ogi.wave.HitRange;
 import cz.libors.ogi.wave.Wave;
+import cz.libors.ogi.world.Names;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -124,6 +125,7 @@ public final class WaveSurfer {
      */
     private static final int[] SWITCH_TURNS = {3, 6, 10, 15};
 
+    /** How each enemy aims, for the battle; the copies of one robot in an enemy team share one ({@link Names#base}). */
     private static final Map<String, DangerModel> MODELS = new HashMap<>();
     private static final Map<String, RamDetector> RAM_DETECTORS = new HashMap<>();
     /** Our lateral velocity as each enemy saw it, for the battle: what averaged and pattern guns aim with. */
@@ -132,7 +134,10 @@ public final class WaveSurfer {
     private static final Map<String, Double> LAST_POWERS = new HashMap<>();
     /** The power assumed for an enemy's next shot before its first one. */
     private static final double FIRST_POWER = 2;
-    /** Per enemy, for the battle: {its shots we detected, its hits on us, its bullets ours shot down}. */
+    /**
+     * Per enemy, for the battle: {its shots we detected, its hits on us, its bullets ours shot down}; the copies of one
+     * robot together.
+     */
     private static final Map<String, int[]> FIRE_RECORDS = new HashMap<>();
     /** The prior of an enemy's hit rate on us: this many hits in {@link #PRIOR_SHOTS} shots. */
     private static final double PRIOR_HITS = 1;
@@ -206,6 +211,11 @@ public final class WaveSurfer {
     /** Waves whose bullet we learned: no longer surfed, but followed until they pass us, for the flattener. */
     private final List<EnemyWave> spent = new ArrayList<>();
     private final List<BulletPath> ourBullets = new ArrayList<>();
+    /**
+     * Our teammates' bullets in the air, each as the hit range of a wave whose one heading is known (the range's
+     * reference): in a melee we keep out of their way.
+     */
+    private final List<HitRange> teamBullets = new ArrayList<>();
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
     private final RobotHistory ours = new RobotHistory();
@@ -214,6 +224,10 @@ public final class WaveSurfer {
      * from, and where a robot that drives at us starts in a prediction.
      */
     private final Map<String, Map<Long, double[]>> enemyPositions = new HashMap<>();
+    /** In a team battle, our teammates' positions of recent turns, {x, y}, by turn: whom else an enemy may aim at. */
+    private final Map<String, Map<Long, double[]>> teammatePositions = new HashMap<>();
+    /** Whether the battle is between teams: then an enemy aims at us or at our teammates, never at its own. */
+    private boolean teamBattle;
     /** Per shooter, the direction of its last wave: the fallback when our lateral velocity is 0 when it aims. */
     private final Map<String, Integer> lastDirection = new HashMap<>();
     private int lastOption = ORBIT_LEFT;
@@ -263,10 +277,22 @@ public final class WaveSurfer {
     /** Our scan of an enemy, heading mathematical; a shot it reveals becomes a wave, and is returned. */
     public Optional<DetectedShot> scanned(String name, long time, double x, double y, double heading,
                                           double velocity, double energy) {
+        seen(name, time, x, y, heading, velocity, true);
+        return energySeen(name, time, x, y, velocity, energy, time);
+    }
+
+    /**
+     * Where an enemy was at the end of turn {@code time}, heading mathematical: from our scan ({@code ours}), or from a
+     * teammate's, which arrives a turn later and does not feed the ram detector, whose distances are to us.
+     */
+    public void seen(String name, long time, double x, double y, double heading, double velocity, boolean ours) {
         neighbours.seen(name, time, x, y);
         Map<Long, double[]> positions = enemyPositions.computeIfAbsent(name, n -> new HashMap<>());
         positions.put(time, new double[] {x, y, heading, velocity});
         positions.remove(time - 64);
+        if (!ours) {
+            return;
+        }
         // Scans come before this turn's own state (onScannedRobot runs before act()).
         double[] us = ourStates.containsKey(time) ? ourStates.get(time) : ourStates.get(time - 1);
         if (us != null) {
@@ -274,22 +300,68 @@ public final class WaveSurfer {
             double approach = velocity * Math.cos(heading - Angles.bearing(x, y, us[0], us[1]));
             ramDetector(name).observe(distance, approach);
         }
+    }
+
+    /**
+     * An enemy's energy at the end of turn {@code time}, where it stood; a shot it reveals becomes a wave, followed
+     * against our positions from the shot up to the end of turn {@code followedTo - 1}, and is returned. Our own scan
+     * passes its own turn; a team passes the turn it hands the scan on in, after our state of that turn
+     * ({@link cz.libors.ogi.team.TeamFeed}).
+     */
+    public Optional<DetectedShot> energySeen(String name, long time, double x, double y, double velocity,
+                                             double energy, long followedTo) {
         FireDetector detector = detector(name);
         if (neighbours.nearOther(name, time)) {
             detector.nearOtherRobot();
         }
         Optional<DetectedShot> shot = detector.scanned(time, x, y, velocity, energy);
-        shot.ifPresent(this::addWave);
+        shot.ifPresent(s -> addWave(s, followedTo));
         return shot;
     }
 
-    /** Our scan of a teammate, which can ram an enemy out of our sight. */
+    /** In a team battle: an enemy's shot was aimed at us or at our teammates ({@link #aimChance}). */
+    public void teamBattle() {
+        teamBattle = true;
+    }
+
+    /**
+     * A teammate at the end of turn {@code time}, from our scan or its own report: it can ram an enemy out of our
+     * sight, and an enemy may aim at it instead of us.
+     */
     public void teammateSeen(String name, long time, double x, double y) {
         neighbours.seen(name, time, x, y);
+        Map<Long, double[]> positions = teammatePositions.computeIfAbsent(name, n -> new HashMap<>());
+        positions.put(time, new double[] {x, y});
+        positions.remove(time - 64);
+    }
+
+    /**
+     * A teammate fired a bullet in turn {@code fireTime} from ({@code x}, {@code y}) along {@code heading}
+     * (mathematical); we learn it in turn {@code now}, a turn later. It is followed against our positions since the
+     * shot, and in a melee our ways keep out of it ({@link #meleeDanger}).
+     */
+    public void teammateFired(String shooter, long fireTime, double x, double y, double heading, double power,
+                              long now) {
+        HitRange range = new HitRange(new Wave(shooter, x, y, fireTime, power), heading, (int) field.width(),
+                (int) field.height());
+        for (long t = fireTime; t < now; t++) {
+            double[] s = ourStates.get(t);
+            if (s != null) {
+                range.observe(t, s[0], s[1]);
+            }
+        }
+        if (!range.passed()) {
+            teamBullets.add(range);
+        }
     }
 
     public void ourBulletHit(String name, double power) {
         detector(name).ourBulletHit(power);
+    }
+
+    /** An enemy bullet of this power hit us or a teammate: the enemy regained 3 × power. */
+    public void enemyHit(String name, double power) {
+        detector(name).hitUs(power);
     }
 
     public void rammed(String name) {
@@ -307,8 +379,16 @@ public final class WaveSurfer {
 
     /** An enemy bullet hit us at the end of its move in turn {@code time}; heading mathematical. */
     public void hitByBullet(String shooter, long time, double x, double y, double heading, double power) {
-        fireRecord(shooter)[1]++;
         detector(shooter).hitUs(power);
+        learnHit(shooter, time, x, y, heading, power);
+    }
+
+    /**
+     * The same, but the shooter's energy is told apart elsewhere ({@link #enemyHit}): in a team, together with the
+     * teammates' hits.
+     */
+    public void learnHit(String shooter, long time, double x, double y, double heading, double power) {
+        fireRecord(shooter)[1]++;
         learn(shooter, time, x, y, heading, power, 0);
     }
 
@@ -347,7 +427,7 @@ public final class WaveSurfer {
      * of {@link #PRIOR_HITS} in {@link #PRIOR_SHOTS}. Its shots still in the air at a round's end count as misses.
      */
     public double hitRateOnUs(String name) {
-        int[] r = FIRE_RECORDS.getOrDefault(name, new int[3]);
+        int[] r = FIRE_RECORDS.getOrDefault(Names.base(name), new int[3]);
         return (r[1] + PRIOR_HITS) / (Math.max(0, r[0] - r[2]) + PRIOR_SHOTS);
     }
 
@@ -357,7 +437,7 @@ public final class WaveSurfer {
     }
 
     private static int[] fireRecord(String name) {
-        return FIRE_RECORDS.computeIfAbsent(name, n -> new int[3]);
+        return FIRE_RECORDS.computeIfAbsent(Names.base(name), n -> new int[3]);
     }
 
     /** Whether this enemy drives at us, to ram us or to fight at point blank ({@link RamDetector}). */
@@ -371,6 +451,7 @@ public final class WaveSurfer {
         detectors.remove(name);
         // Its waves keep their own origins; a dead robot neither rams nor marks a close fight any more.
         enemyPositions.remove(name);
+        teammatePositions.remove(name);
     }
 
     /**
@@ -386,6 +467,13 @@ public final class WaveSurfer {
         advance(waves, now, us);
         // A gun that learns our movement learns these waves too, whatever became of their bullets.
         advance(spent, now, us);
+        for (Iterator<HitRange> it = teamBullets.iterator(); it.hasNext(); ) {
+            HitRange range = it.next();
+            range.observe(now, us[0], us[1]);
+            if (range.passed()) {
+                it.remove();
+            }
+        }
     }
 
     private static void advance(List<EnemyWave> list, long now, double[] us) {
@@ -1045,7 +1133,7 @@ public final class WaveSurfer {
         return heading;
     }
 
-    private void addWave(DetectedShot shot) {
+    private void addWave(DetectedShot shot, long followedTo) {
         fireRecord(shot.shooter())[0]++;
         // The enemy aimed with what it saw at the end of the turn before the shot.
         long aimed = ourStates.containsKey(shot.fireTime() - 1) ? shot.fireTime() - 1 : shot.fireTime();
@@ -1070,7 +1158,7 @@ public final class WaveSurfer {
         }
         HitRange range = new HitRange(wave, reference, (int) field.width(), (int) field.height());
         // Catch up on the turns since the shot.
-        for (long t = shot.fireTime(); t < shot.detectedAt(); t++) {
+        for (long t = shot.fireTime(); t < followedTo; t++) {
             double[] s = ourStates.get(t);
             if (s != null) {
                 range.observe(t, s[0], s[1]);
@@ -1087,13 +1175,15 @@ public final class WaveSurfer {
 
     /**
      * The chance that a shooter at ({@code x}, {@code y}) aimed at us in turn {@code t}, where we were at {@code us}:
-     * 1 / (1 + the enemies it had closer than us), each where its scan nearest to that turn saw it (the power is
-     * {@link #AIM_EXPONENT}). Most melee robots aim at the enemy closest to them.
+     * 1 / (1 + the robots it could aim at that it had closer than us), each where it was seen nearest to that turn
+     * (the power is {@link #AIM_EXPONENT}). Most melee robots aim at the enemy closest to them: in a melee the other
+     * enemies, in a team battle our teammates, never its own.
      */
     private double aimChance(String shooter, double x, double y, double[] us, long t) {
         double ours = Math.hypot(us[0] - x, us[1] - y);
         int closer = 0;
-        for (Map.Entry<String, Map<Long, double[]>> e : enemyPositions.entrySet()) {
+        Map<String, Map<Long, double[]>> others = teamBattle ? teammatePositions : enemyPositions;
+        for (Map.Entry<String, Map<Long, double[]>> e : others.entrySet()) {
             if (e.getKey().equals(shooter)) {
                 continue;
             }
@@ -1116,9 +1206,7 @@ public final class WaveSurfer {
      * {@link #MIN_AIM_CHANCE} or more, and it can reach us within {@link #MELEE_HORIZON} turns wherever we drive.
      */
     private static boolean meleeRelevant(EnemyWave w, EngineRobot me, long now) {
-        double gap = Math.hypot(me.x - w.wave.x(), me.y - w.wave.y()) - w.wave.radius(now);
-        return w.aimedAtUs >= MIN_AIM_CHANCE
-                && gap < (w.wave.speed() + RobotMotion.MAX_VELOCITY) * MELEE_HORIZON + RobotMotion.HALF_SIZE;
+        return w.aimedAtUs >= MIN_AIM_CHANCE && reachable(w.wave, me, now);
     }
 
     /**
@@ -1126,7 +1214,9 @@ public final class WaveSurfer {
      * straight there and stand, predicted by the engine's rules until the waves have passed, at most
      * {@link #MELEE_HORIZON} turns. Each wave counts its share of the shooter's predicted aim inside its hit range
      * times its bullet's damage, as in a duel, times the chance that the shooter aimed at us; waves whose chance is
-     * below {@link #MIN_AIM_CHANCE}, and waves that cannot reach us within the horizon, are left out.
+     * below {@link #MIN_AIM_CHANCE}, and waves that cannot reach us within the horizon, are left out. A teammate's
+     * bullet within the horizon counts its whole damage if the way crosses its line, else nothing: its heading is
+     * known.
      *
      * @param me our state at the end of this turn, in the engine's convention, without commands
      */
@@ -1137,16 +1227,28 @@ public final class WaveSurfer {
                 n++;
             }
         }
-        if (n == 0) {
+        int f = 0;
+        for (HitRange b : teamBullets) {
+            if (reachable(b.wave(), me, now)) {
+                f++;
+            }
+        }
+        if (n + f == 0) {
             return 0;
         }
         EnemyWave[] relevant = new EnemyWave[n];
-        HitRange[] ranges = new HitRange[n];
+        // The enemy waves' ranges first, then the teammates' bullets'.
+        HitRange[] ranges = new HitRange[n + f];
         int i = 0;
         for (EnemyWave w : waves) {
             if (meleeRelevant(w, me, now)) {
                 relevant[i] = w;
                 ranges[i++] = w.range.copy();
+            }
+        }
+        for (HitRange b : teamBullets) {
+            if (reachable(b.wave(), me, now)) {
+                ranges[i++] = b.copy();
             }
         }
         EngineRobot r = me.copy();
@@ -1168,7 +1270,19 @@ public final class WaveSurfer {
         for (int k = 0; k < n; k++) {
             sum += relevant[k].aimedAtUs * damage(relevant[k], ranges[k]);
         }
+        for (int k = n; k < n + f; k++) {
+            // The bullet flies along the range's reference.
+            if (ranges[k].minOffset() <= 0 && ranges[k].maxOffset() >= 0) {
+                sum += BulletMotion.damage(ranges[k].wave().power());
+            }
+        }
         return sum;
+    }
+
+    /** Whether a wave can reach us within {@link #MELEE_HORIZON} turns wherever we drive. */
+    private static boolean reachable(Wave wave, EngineRobot me, long now) {
+        double gap = Math.hypot(me.x - wave.x(), me.y - wave.y()) - wave.radius(now);
+        return gap < (wave.speed() + RobotMotion.MAX_VELOCITY) * MELEE_HORIZON + RobotMotion.HALF_SIZE;
     }
 
     /** Matches a bullet of {@code shooter} to its wave by power and travelled distance, and learns its guess factor. */
@@ -1212,7 +1326,7 @@ public final class WaveSurfer {
     }
 
     static DangerModel model(String name) {
-        return MODELS.computeIfAbsent(name, n -> new DangerModel(DangerParameters.DEFAULT));
+        return MODELS.computeIfAbsent(Names.base(name), n -> new DangerModel(DangerParameters.DEFAULT));
     }
 
     private static RamDetector ramDetector(String name) {
