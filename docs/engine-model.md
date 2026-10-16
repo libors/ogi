@@ -276,9 +276,11 @@ to-test.
 
 - **G-22 No shared memory between teammates:** each robot has its own classloader and its own statics.
   - **Source:** engine; XanderCat. · **Status:** verified.
-- **G-23 Messages arrive one tick later.** They are `Serializable` and at most 32,768 bytes each. Whether
-  serialisation counts against turn time is [unverified].
-  - **Source:** Robocode source. · **Status:** verified (size), to-test (timing).
+- **G-23 Messages arrive one tick later.** They are `Serializable` and at most 32,768 bytes each. A message broadcast
+  in turn t reaches every living teammate as a `MessageEvent` of turn t + 1, and none is lost. Whether serialisation
+  counts against turn time is [unverified].
+  - **Source:** Robocode source. · **Status:** verified (size); tested (timing): `recordProbes`, a team of three
+    `MessageProbe`s, every message of the turn before arrives and nothing later.
 - **G-24 Team energy rules:**
   - leader +100; droid +20 and no radar
   - leader death costs every alive teammate 30

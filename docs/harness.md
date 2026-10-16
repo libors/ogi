@@ -162,6 +162,7 @@ no rule of the game; the digests are identical with and without it.
 | `DataProbe` | like `RandomProbe`; counts the rounds it started in a file in its data directory and reports what the file held (`data`) | shows that robot data persists within a battle and is cleared before the next |
 | `SandboxProbe` | none | tries what the sandbox must block; used by `sandboxCheck`, not recorded ([Foreign robots](#foreign-robots)) |
 | `SpinProbe` | none | computes for 20 s without calling the robot API after three turns; used by the stranded-thread check, not recorded ([Robot threads](#robot-threads-that-outlive-their-battle)) |
+| `MessageProbe` | none | a `TeamRobot` that broadcasts the turn it acts in and reports the messages it received in the turn (`msg`: the turn, then `sender:sentTurn:eventTurn` per message); it spins its radar and fires at enemies it scans. Three of them make the team `MessageTeam` |
 
 - **Commands:** every turn each command channel gets a new random command with a per-round probability: ahead,
   body, gun and radar turns, max velocity, max turn rate, the three adjust flags, fire.
@@ -216,6 +217,7 @@ end     round  turns
 | Ogi | two runs of Ogi against `RandomProbe` with one seed are identical |
 | Shared generator | `RandomProbe` and `UtilsDrawProbe` with one seed start round 1 at the same positions and round 2 elsewhere |
 | Fixed starts | 8 probes on 400×400 with a start each, one on top of another and one with an exponent in its heading: every robot round starts exactly there unless a robot is in the way (engine-model G-41), and each case occurs |
+| Team messages | `MessageTeam` against `RandomProbe`: in every turn a probe acted in, each message it received was sent in the turn before and stamped with this turn, and every teammate that acted in the turn before is among them (G-23). After the last enemy's death the round runs on without the probes acting; those turns do not count |
 | Own jar | the repository lists `cz.libors.Ogi <v>` from the robot jar and the team jar; `BattleRunner` picks the robot jar (G-42) |
 | Robot data | two battles in a row of `DataProbe` against `RandomProbe`: in both, the file is empty in round 1 (`getDataFile` creates it, G-47) and holds 1 in round 2 ([Robot data](#robot-data)) |
 | Stranded thread | `SpinProbe` stops calling the API and computes for 20 s, `sample.TrackFire` kills it, in a JVM of its own without debug mode (in debug mode the engine waits for the stuck turn instead, G-17): its thread is alive after the battle, takes most of a core and is gone once the probe stops by itself (G-48, [Robot threads](#robot-threads-that-outlive-their-battle)) |

@@ -20,6 +20,7 @@ import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.physics.Inactivity;
 import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.radar.MeleeRadar;
+import cz.libors.ogi.radar.TeamRadar;
 import cz.libors.ogi.shield.Shield;
 import cz.libors.ogi.shield.ShieldPlanner;
 import cz.libors.ogi.team.EnemySighting;
@@ -66,9 +67,9 @@ import java.util.Set;
 /**
  * Ogi, a team-first Robocode bot. One robot class serves 1v1, melee and team battles.
  *
- * <p>Radar lock in a duel, towards the stalest enemy in a melee; guess-factor and circular targeting chosen by
- * virtual hits; wave surfing in a duel (orbiting the target while no enemy wave is in the air), minimum risk with the
- * likely shooters' waves in a melee; shared scans.
+ * <p>Radar lock in a duel, towards the stalest enemy in a melee, the enemies shared out between the radars of a team;
+ * guess-factor and circular targeting chosen by virtual hits; wave surfing in a duel (orbiting the target while no
+ * enemy wave is in the air), minimum risk with the likely shooters' waves in a melee; shared scans.
  */
 public class Ogi extends TeamRobot {
 
@@ -216,6 +217,10 @@ public class Ogi extends TeamRobot {
     private OrbitMovement movement;
     private MeleeMovement melee;
     private final MeleeRadar meleeRadar = new MeleeRadar();
+    /** The enemies each teammate's radar watches ({@link TeamRadar}); null outside a team. */
+    private TeamRadar teamRadar;
+    /** The radar's turn commanded in this turn, mathematical; NaN before the first. */
+    private double radarTurn = Double.NaN;
     /** Our teammates alive this round; 0 outside a team. */
     private int teammatesAlive;
     private GuessFactorGun gun;
@@ -297,6 +302,7 @@ public class Ogi extends TeamRobot {
         melee = new MeleeMovement(field, new Random(roundSeed() * 7 + 3));
         teammatesAlive = getTeammates() == null ? 0 : getTeammates().length;
         feed = getTeammates() == null ? null : new TeamFeed();
+        teamRadar = getTeammates() == null ? null : new TeamRadar();
         gun = new GuessFactorGun(field);
         mirror = new MirrorAim(field);
         meleeGun = new MeleeGun(field, MELEE_MEMORY, MeleeGunParameters.DEFAULT);
@@ -392,15 +398,23 @@ public class Ogi extends TeamRobot {
     }
 
     /**
-     * Tells the teammates, once a turn after acting, where we are and where this turn's commands take us, whom we
-     * scanned and what we fired: one message, serialized once. They read it in the next turn (engine-model G-23).
+     * Tells the teammates, once a turn after acting, where we are and where this turn's commands take us and our
+     * radar, whom we scanned and what we fired: one message, serialized once. They read it in the next turn
+     * (engine-model G-23).
      */
     private void share() {
         if (getTeammates() != null && teammatesAlive > 0) {
             boolean planned = !Double.isNaN(next[0]);
+            double nextX = planned ? next[0] : getX();
+            double nextY = planned ? next[1] : getY();
+            double turn = Double.isNaN(radarTurn) ? 0
+                    : Math.max(-Rules.RADAR_TURN_RATE_RADIANS, Math.min(Rules.RADAR_TURN_RATE_RADIANS, radarTurn));
+            double nextRadar = Angles.normalizeAbsolute(Angles.fromRobocode(getRadarHeadingRadians()) + turn);
             TeammateState me = new TeammateState(getName(), getX(), getY(),
-                    Angles.fromRobocode(getHeadingRadians()), getVelocity(), getEnergy(),
-                    planned ? next[0] : getX(), planned ? next[1] : getY(), getTime(), getRoundNum());
+                    Angles.fromRobocode(getHeadingRadians()), getVelocity(), getEnergy(), nextX, nextY, nextRadar,
+                    getTime(), getRoundNum());
+            // The teammates plan the radars with this report in the next turn, and so do we.
+            teamRadar.reported(new TeamRadar.Watcher(getName(), nextX, nextY, nextRadar, getTime() + 1));
             try {
                 broadcastMessage(new TeamPacket(me, List.copyOf(sightingsToShare), List.copyOf(shotsToShare),
                         List.copyOf(eventsToShare)));
@@ -627,14 +641,19 @@ public class Ogi extends TeamRobot {
 
     private void steerRadar(EnemyState target, long now) {
         int enemies = getOthers() - teammatesAlive;
+        double radar = Angles.fromRobocode(getRadarHeadingRadians());
         if (enemies > 1) {
             List<MeleeRadar.Seen> seen = new ArrayList<>();
             for (EnemyState e : world.enemies()) {
                 seen.add(new MeleeRadar.Seen(e.name(), e.x(), e.y(), e.time()));
             }
-            double turn = meleeRadar.turn(now, getX(), getY(), Angles.fromRobocode(getRadarHeadingRadians()), seen,
-                    enemies, target == null ? null : target.name(), getGunHeat() <= 2 * getGunCoolingRate());
-            setTurnRadarRightRadians(-turn);
+            boolean gunSoon = getGunHeat() <= 2 * getGunCoolingRate();
+            List<MeleeRadar.Seen> watched = teamWatch(now, seen, enemies, target, gunSoon);
+            double turn = watched != null
+                    ? TeamRadar.sweep(radar, TeamRadar.arc(now, getX(), getY(), watched))
+                    : meleeRadar.turn(now, getX(), getY(), radar, seen, enemies,
+                    target == null ? null : target.name(), gunSoon);
+            turnRadar(turn);
             boolean sweep = FAST_FIRST_SWEEP && MeleeRadar.spinning(seen, enemies)
                     && getGunHeat() > (MELEE_AIM_TURNS + 1) * getGunCoolingRate();
             if (sweep != sweeping) {
@@ -646,14 +665,51 @@ public class Ogi extends TeamRobot {
             }
             return;
         }
+        if (enemies == 1 && teammatesAlive > 0 && world.enemyCount() == 1) {
+            // The last enemy, with teammates alive: each of us keeps it in the swept arc every turn, as in a duel.
+            EnemyState last = world.enemies().iterator().next();
+            turnRadar(TeamRadar.sweep(radar, TeamRadar.arc(now, getX(), getY(),
+                    List.of(new MeleeRadar.Seen(last.name(), last.x(), last.y(), last.time())))));
+            return;
+        }
         if (getOthers() == 1 && target != null && now - target.time() <= 1) {
             double bearing = Angles.bearing(getX(), getY(), target.x(), target.y());
-            double turn = Angles.robocodeTurn(Angles.fromRobocode(getRadarHeadingRadians()), bearing);
+            double turn = Angles.robocodeTurn(radar, bearing);
             // Overshooting keeps the target inside the swept arc every tick.
-            setTurnRadarRightRadians(2 * turn);
+            turnRadar(-2 * turn);
         } else {
-            setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
+            turnRadar(Double.NEGATIVE_INFINITY);
         }
+    }
+
+    /** Commands the radar's turn, mathematical (counter-clockwise positive). */
+    private void turnRadar(double turn) {
+        radarTurn = turn;
+        setTurnRadarRightRadians(-turn);
+    }
+
+    /**
+     * The enemies this robot's radar watches under the team's plan ({@link TeamRadar}), as its world last saw them;
+     * null when the melee radar decides: outside a team, until every enemy has been seen this round, while the gun's
+     * target goes first before a shot, and when the plan gives this robot no enemy.
+     */
+    private List<MeleeRadar.Seen> teamWatch(long now, List<MeleeRadar.Seen> seen, int enemies, EnemyState target,
+                                            boolean gunSoon) {
+        if (teamRadar == null || teammatesAlive == 0 || MeleeRadar.spinning(seen, enemies)
+                || gunSoon && target != null && now - target.time() > 1) {
+            return null;
+        }
+        List<String> names = teamRadar.watch(now, getName());
+        if (names == null || names.isEmpty()) {
+            return null;
+        }
+        List<MeleeRadar.Seen> watched = new ArrayList<>();
+        for (MeleeRadar.Seen s : seen) {
+            if (names.contains(s.name())) {
+                watched.add(s);
+            }
+        }
+        return watched.isEmpty() ? null : watched;
     }
 
     /** Fires last turn's plan if the gun is cool and reached its aim; returns whether it fired. */
@@ -961,6 +1017,9 @@ public class Ogi extends TeamRobot {
         EnemySighting sighting = new EnemySighting(e.getName(), x, y, Angles.fromRobocode(e.getHeadingRadians()),
                 e.getVelocity(), e.getEnergy(), e.getTime(), getRoundNum());
         world.observeEnemy(sighting);
+        if (teamRadar != null) {
+            teamRadar.scanned(e.getName(), x, y, e.getTime());
+        }
         meleeScan(sighting);
         gun.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity());
         shield.scanned(e.getName(), e.getTime(), x, y, sighting.heading(), e.getVelocity(), e.getEnergy());
@@ -1126,6 +1185,7 @@ public class Ogi extends TeamRobot {
         }
         TeammateState s = packet.state();
         world.teammateReported(s);
+        teamRadar.reported(new TeamRadar.Watcher(s.name(), s.nextX(), s.nextY(), s.nextRadarHeading(), s.time() + 1));
         surfer.teammateSeen(s.name(), s.time() + 1, s.nextX(), s.nextY());
         for (EnemySighting sighting : packet.sightings()) {
             if (world.dead(sighting.name())) {
@@ -1133,6 +1193,7 @@ public class Ogi extends TeamRobot {
                 continue;
             }
             world.observeEnemy(sighting);
+            teamRadar.scanned(sighting.name(), sighting.x(), sighting.y(), sighting.time());
             meleeScan(sighting);
             gun.scanned(sighting.name(), sighting.time(), sighting.x(), sighting.y(), sighting.heading(),
                     sighting.velocity());
@@ -1155,6 +1216,9 @@ public class Ogi extends TeamRobot {
             teammatesAlive--;
         }
         world.robotDied(e.getName());
+        if (teamRadar != null) {
+            teamRadar.died(e.getName());
+        }
         gun.robotDied(e.getName());
         meleeGun.robotDied(e.getName());
         if (logsGun()) {

@@ -10,8 +10,11 @@ val toolchainJava = providers.gradleProperty("javaVersion").get().toInt()
 val probePackage = "cz.libors.probe"
 val probeNames = listOf(
     "RandomProbe", "PassiveProbe", "WatchingProbe", "MathRandomProbe", "UtilsRandomProbe", "UtilsDrawProbe", "DataProbe",
-    "SandboxProbe", "SpinProbe",
+    "SandboxProbe", "SpinProbe", "MessageProbe",
 )
+/** A team of message probes (engine-model G-23). */
+val teamName = "MessageTeam"
+val teamMembers = List(3) { "$probePackage.MessageProbe" }
 
 dependencies {
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")
@@ -32,14 +35,17 @@ tasks.withType<JavaCompile>().configureEach {
 val generatedProbeFiles = layout.buildDirectory.dir("generated/probe")
 
 val generateProbeFiles = tasks.register("generateProbeFiles") {
-    description = "Generates the Robocode .properties files of the probe robots."
+    description = "Generates the Robocode .properties files of the probe robots and the .team file of their team."
     val outDir = generatedProbeFiles
     val packageDir = probePackage.replace('.', '/')
     val names = probeNames
     val version = botVersion
     val author = botAuthor
     val rcVersion = robocodeVersion
+    val team = teamName
+    val members = teamMembers.joinToString(",")
     inputs.property("names", names)
+    inputs.property("members", members)
     inputs.property("version", version)
     inputs.property("author", author)
     inputs.property("robocodeVersion", rcVersion)
@@ -61,6 +67,16 @@ val generateProbeFiles = tasks.register("generateProbeFiles") {
                 """.trimIndent() + "\n"
             )
         }
+        dir.resolve("$team.team").writeText(
+            """
+            team.members=$members
+            team.version=$version
+            team.author.name=$author
+            team.description=Engine probes for team messages, not a competitor
+            team.webpage=
+            robocode.version=$rcVersion
+            """.trimIndent() + "\n"
+        )
     }
 }
 

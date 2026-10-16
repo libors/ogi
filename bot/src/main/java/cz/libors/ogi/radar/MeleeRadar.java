@@ -31,6 +31,11 @@ public final class MeleeRadar {
     /** The direction of the last turn: 1 counter-clockwise, −1 clockwise. */
     private int direction = 1;
 
+    /** Whether the radar still spins: not every living enemy has been seen this round. */
+    public static boolean spinning(List<Seen> enemies, int others) {
+        return enemies.size() < others;
+    }
+
     /**
      * The radar's turn for the next turn, mathematical (counter-clockwise positive), from our position and the radar's
      * heading (mathematical) at the end of this turn.
@@ -39,11 +44,6 @@ public final class MeleeRadar {
      * @param target  the gun's target, or null
      * @param gunSoon whether our gun is cool within the next turns
      */
-    /** Whether the radar still spins: not every living enemy has been seen this round. */
-    public static boolean spinning(List<Seen> enemies, int others) {
-        return enemies.size() < others;
-    }
-
     public double turn(long now, double x, double y, double radarHeading, List<Seen> enemies, int others,
                        String target, boolean gunSoon) {
         if (enemies.size() < others) {
@@ -62,13 +62,20 @@ public final class MeleeRadar {
         if (chosen == null) {
             return direction * Double.POSITIVE_INFINITY;
         }
-        double distance = Math.max(Math.hypot(chosen.x() - x, chosen.y() - y), 1);
-        double moved = RobotMotion.MAX_VELOCITY * (now + 1 - chosen.time()) + RobotMotion.HALF_SIZE;
-        double margin = Math.min(MAX_TURN, Math.atan(moved / distance));
         double offset = Angles.normalizeRelative(Angles.bearing(x, y, chosen.x(), chosen.y()) - radarHeading);
         if (offset != 0) {
             direction = offset > 0 ? 1 : -1;
         }
-        return offset + direction * margin;
+        return offset + direction * margin(now, x, y, chosen);
+    }
+
+    /**
+     * The angle by which the enemy's bearing from ({@code x}, {@code y}) may differ from its scan's at the end of the
+     * next turn: the way it may have driven since, at full speed, plus half a robot; at most a turn of the radar.
+     */
+    static double margin(long now, double x, double y, Seen s) {
+        double distance = Math.max(Math.hypot(s.x() - x, s.y() - y), 1);
+        double moved = RobotMotion.MAX_VELOCITY * (now + 1 - s.time()) + RobotMotion.HALF_SIZE;
+        return Math.min(MAX_TURN, Math.atan(moved / distance));
     }
 }

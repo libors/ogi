@@ -145,6 +145,7 @@ public final class ProbeRecordings {
             checks.add(sharedGeneratorExperiment(runner, version, out, summaries));
             checks.add(fixedStartsExperiment(runner, version, out, summaries));
             checks.add(robotDataExperiment(runner, version, out, summaries));
+            checks.add(teamMessageExperiment(runner, version, out, summaries));
             checks.add(ownJarCheck(runner, version));
         }
         // Once this JVM's engine is closed, as the check starts one of its own on the same home.
@@ -317,6 +318,73 @@ public final class ProbeRecordings {
                 + "creates the file (G-47)", intact
                 && counts.get(0).equals(expected) && counts.get(1).equals(expected),
                 "the file before each round: first battle " + counts.get(0) + ", second " + counts.get(1));
+    }
+
+    /**
+     * Team messages (engine-model G-23): a team of three {@code MessageProbe}s, which broadcast the turn they act in
+     * and report what they received, against a {@code RandomProbe}. Every message must arrive in the turn after it was
+     * sent, stamped with that turn, and every teammate's message of the turn before must be there. Only the turns a
+     * probe acted in count: after the enemy's death the round runs on without them.
+     */
+    private static Check teamMessageExperiment(BattleRunner runner, String version, Path out,
+                                               List<Summary> summaries) throws IOException {
+        BattleSetup setup = new BattleSetup("team-messages", 800, 600, EXPERIMENT_ROUNDS,
+                List.of("cz.libors.probe.MessageTeam " + version, "cz.libors.probe.RandomProbe " + version),
+                EXPERIMENT_SEED);
+        Summary s = record(runner, setup, out.resolve("determinism").resolve("team-messages.rec.gz"));
+        summaries.add(s);
+        Recording rec = Recording.read(Path.of(s.file()));
+        Map<Integer, String> names = new HashMap<>();
+        rec.robots().forEach(r -> names.put(r.index(), r.name()));
+        // (round, turn, receiver) -> "sender:sentTurn" of every message received in that turn
+        Map<Long, Set<String>> received = new HashMap<>();
+        int messages = 0;
+        int late = 0;
+        for (DebugEntry d : rec.debug()) {
+            if (!d.key().equals("msg")) {
+                continue;
+            }
+            String[] parts = d.value().split(",");
+            long turn = Long.parseLong(parts[0]);
+            if (turn != d.turn()) {
+                // Once the enemy is dead the round runs on, but the robots no longer act: their last value stays.
+                continue;
+            }
+            Set<String> got = new HashSet<>();
+            for (int i = 1; i < parts.length; i++) {
+                int eventColon = parts[i].lastIndexOf(':');
+                int sentColon = parts[i].lastIndexOf(':', eventColon - 1);
+                long sent = Long.parseLong(parts[i].substring(sentColon + 1, eventColon));
+                long stamped = Long.parseLong(parts[i].substring(eventColon + 1));
+                messages++;
+                if (sent != turn - 1 || stamped != turn) {
+                    late++;
+                }
+                got.add(parts[i].substring(0, sentColon) + ":" + sent);
+            }
+            received.put(key(d.round(), d.turn(), d.robot()), got);
+        }
+        int missing = 0;
+        for (DebugEntry d : rec.debug()) {
+            if (!d.key().equals("msg")) {
+                continue;
+            }
+            Set<String> got = received.get(key(d.round(), d.turn(), d.robot()));
+            if (got == null) {
+                continue;
+            }
+            for (Map.Entry<Integer, String> sender : names.entrySet()) {
+                // Every teammate that acted (and so broadcast) in the turn before.
+                if (sender.getKey() != d.robot()
+                        && received.containsKey(key(d.round(), d.turn() - 1, sender.getKey()))
+                        && !got.contains(sender.getValue() + ":" + (d.turn() - 1))) {
+                    missing++;
+                }
+            }
+        }
+        return new Check("Team messages arrive in the next turn, every one of them (G-23)",
+                s.intact() && messages > 0 && late == 0 && missing == 0, String.format(Locale.ROOT,
+                "%d messages, %d not from the turn before, %d missing", messages, late, missing));
     }
 
     /**

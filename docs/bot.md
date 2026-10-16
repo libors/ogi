@@ -11,8 +11,9 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
 
 1. **Our state** goes to the surfer, and the enemy waves advance to our position at the end of this turn.
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's.
-3. **Radar:** locked on the target in 1v1; in a melee towards the enemy scanned longest ago
-   ([Melee radar](#melee-radar-meleeradar)).
+3. **Radar:** locked on the target in 1v1, and on the last enemy in a team battle; in a melee towards the enemy
+   scanned longest ago ([Melee radar](#melee-radar-meleeradar)); in a team battle on the enemies the team's plan
+   gives this robot ([Team radar](#team-radar-teamradar)).
 4. **Movement:** in a melee (more than one other robot alive), the safest place ([Melee movement](#melee-movement-meleemovement)).
    In a duel, until the enemy's trial fails, the bullet shield instead of the rest of this list
    ([Bullet shield](#bullet-shield-czliborsogishield)); not in the duel at the end of a battle that started as a
@@ -372,6 +373,40 @@ moved since (full speed for the turns since the scan, plus half a robot, at most
 holds the enemies. In the two turns before our gun is cool the gun's target goes first while its scan is more than a
 turn old, so that the shot is aimed from a fresh position.
 
+### Team radar (`TeamRadar`)
+
+In a team battle the robots share out the enemies for their radars, so that each enemy is scanned in every turn if
+they can manage it. Left to the melee radar, every robot turns towards the enemy the team saw longest ago, and a
+teammate's scan reaches the others a turn late, so about half of the scans repeat each other while an enemy goes
+unseen in two turns of five (measured on recordings of team battles, 2026-10-16).
+
+- **The same plan on every robot, without waiting for one another:** each robot computes it in every turn from what
+  the whole team knew at the end of the last turn: every robot's position and radar heading as it reported them
+  (`TeammateState.nextX`, `nextY`, `nextRadarHeading`; a robot uses its own report too) and every enemy's last scan
+  taken before this turn. Reports arrive exactly a turn later (engine-model G-23), so the inputs are equal; two scans
+  of one enemy in one turn, computed from two robots' positions, are chosen between by their value, not by which
+  arrived first.
+- **What one robot can watch:** a group of enemies whose arc, as it sees them, fits in one turn of the radar (45°):
+  it sweeps from one end of the arc to the other and back, and each enemy is scanned in every turn. Each enemy's part
+  of the arc is its bearing widened by the melee radar's margin (the way it may have driven since its scan). A wider
+  arc takes several turns a sweep. An enemy farther than the radar's 1200 px, less the way it may have driven, is out
+  of the robot's range.
+- **The assignment:** every enemy in some robot's range goes to exactly one robot, at the least cost over all
+  assignments (dynamic programming over subsets: with five robots and five enemies, all of them): first the turns
+  between an enemy's scans (0 for a group in one sweep), then 0.1 per turn a radar needs to reach its arc (so robots
+  do not swap enemies for nothing), then 0.01 per radar range of distance to the enemy (the nearer robot), and 0.05
+  for each enemy beyond the first in a group (one robot each where it does as well).
+- **Driving the radar:** to the end of its arc farther from where it points, across the arc; the next turn back.
+- **What stays the melee radar's:** the spin until every enemy has been seen this round, the gun's target before a
+  shot while its scan is older than a turn, and a robot the plan gives no enemy (it looks for the stalest ones, which
+  also finds enemies out of everybody's range).
+- **The last enemy**, with teammates alive: every robot keeps it in its swept arc, as in a duel (before, the radar
+  spun while teammates lived).
+- Measured (2026-10-16): an enemy is scanned in 94 % of the turns instead of 60 %, by two robots at once in 18 % of
+  them instead of 55 %; the score changed within noise (+0.2 ± 0.6 APS on the whole TeamRumble, the enemies hit us
+  2 % less), and the last enemy's lock likewise (+0.2 ± 0.7). Kept for what the sharp data allow later; doubling the
+  waves' weight with them did not pay (see [Team play](#team-play-czliborsogiteam)).
+
 ## Team play (`cz.libors.ogi.team`)
 
 `cz.libors.OgiTeam` is five copies of Ogi, the first the leader (200 energy). Each plays the melee bot above while
@@ -401,7 +436,8 @@ more than one enemy lives, and the duel when it is alone with one. What makes th
   team's fire detection and the melee gun's shared scans changed the score within noise (we were hit 7 % less, hit
   1 % more). Not kept: a droid as the fifth member (+0.6 ± 0.8), power 1.45 against enemies we hit rarely (−1.2), the
   melee gun weighing enemies by 100 / energy (−1.2, it hit 5 points less), counting only teammates in the risk's
-  robots-closer term (−1.6).
+  robots-closer term (−1.6), twice the waves' weight in the melee movement (−0.4, and −0.3 with the team radar's
+  sharp waves; the enemies' hit rate on us did not change).
 
 ## Bullet shield (`cz.libors.ogi.shield`)
 

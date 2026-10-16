@@ -7,9 +7,11 @@ import java.io.Serializable;
  * moved once more, so it also carries where the sender's commands take it by the end of that next turn: exact unless
  * the sender collides with a robot.
  *
- * @param heading mathematical heading in radians, at the end of turn {@code time}
- * @param nextX   the sender's predicted position at the end of turn {@code time + 1}
- * @param round   round number; states from another round are ignored
+ * @param heading          mathematical heading in radians, at the end of turn {@code time}
+ * @param nextX            the sender's predicted position at the end of turn {@code time + 1}
+ * @param nextRadarHeading where the sender's radar points at the end of turn {@code time + 1} (mathematical), as its
+ *                         command of turn {@code time} turns it
+ * @param round            round number; states from another round are ignored
  */
 public record TeammateState(
         String name,
@@ -20,6 +22,7 @@ public record TeammateState(
         double energy,
         double nextX,
         double nextY,
+        double nextRadarHeading,
         long time,
         int round) implements Serializable {
 
