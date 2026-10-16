@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MeleeMovementTest {
@@ -32,6 +33,30 @@ class MeleeMovementTest {
         double exposed = m.risk(400, 200, 500, 200, 100, alone, new double[][] {{0}});
         double shielded = m.risk(400, 200, 500, 200, 100, covered, new double[][] {{0, 290}, {290, 0}});
         assertTrue(shielded < exposed, shielded + " with a closer robot against " + exposed + " without");
+    }
+
+    @Test
+    void againstGangsTheOthersCloseInOnAGangedTeammate() {
+        // A teammate at (800, 500) with two enemies within 250 px of it; we are 600 px west of it.
+        List<Robot> robots = List.of(new Robot(800, 500, 0, false), new Robot(850, 520, 100, true),
+                new Robot(820, 380, 100, true));
+        double[] x = new double[2];
+        for (int on = 0; on < 2; on++) {
+            MeleeMovement m = new MeleeMovement(FIELD, new Random(3));
+            m.gangDefence(on == 1);
+            m.command(0, 200, 500, 0, 100, robots);
+            x[on] = m.destination()[0];
+        }
+        assertTrue(x[1] > x[0], "towards the ganged teammate with the defence on: " + x[1] + " against " + x[0]);
+        // Within the help distance the pull no longer draws: no change between two points that near.
+        MeleeMovement m = new MeleeMovement(FIELD, new Random(3));
+        m.gangDefence(true);
+        m.command(0, 600, 500, 0, 100, robots);
+        MeleeMovement off = new MeleeMovement(FIELD, new Random(3));
+        off.command(0, 600, 500, 0, 100, robots);
+        double[][] distances = {{0, 54, 152}, {54, 0, 141}, {152, 141, 0}};
+        assertEquals(off.risk(600, 500, 560, 500, 100, robots, distances),
+                m.risk(600, 500, 560, 500, 100, robots, distances), 1e-15);
     }
 
     @Test

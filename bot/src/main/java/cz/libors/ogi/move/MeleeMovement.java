@@ -80,6 +80,16 @@ public final class MeleeMovement {
     static final double WAVE_WEIGHT = 3;
     /** The waves' median damage counts as at least this much, so that a lone wave does not take over the score. */
     static final double MIN_WAVE_MEDIAN = 0.1;
+    /** A robot with this many enemies or more within {@link #GANG_RADIUS} is ganged. */
+    public static final int GANG_SIZE = 2;
+    public static final double GANG_RADIUS = 250;
+    /**
+     * In a team battle a ganged robot is drawn to its nearest teammate, and the others to the nearest ganged teammate:
+     * a destination's risk is multiplied by e^(pull · its change of distance to that robot / 100 px). 0: no pull.
+     */
+    static final double TEAM_PULL = 0.5;
+    /** Helpers are drawn to a ganged teammate down to this distance, not into the gang. */
+    static final double HELP_DISTANCE = 300;
 
     /** A robot to keep away from: position, energy, and whether it is an enemy (else a teammate). */
     public record Robot(double x, double y, double energy, boolean enemy) {
@@ -90,10 +100,21 @@ public final class MeleeMovement {
     private final Deque<double[]> history = new ArrayDeque<>();
     private double destinationX = Double.NaN;
     private double destinationY = Double.NaN;
+    /** The robot this turn's destinations are drawn to ({@link #TEAM_PULL}) and the distance it stops at; NaN: none. */
+    private double pullX = Double.NaN;
+    private double pullY = Double.NaN;
+    private double pullFloor;
+    /** Whether the enemies gang our robots, so that the pull is on ({@link #gangDefence}). */
+    private boolean gangDefence;
 
     public MeleeMovement(Field field, Random random) {
         this.field = field;
         this.random = random;
+    }
+
+    /** Turns the pull ({@link #TEAM_PULL}) on or off: on against enemies that gang our robots. */
+    public void gangDefence(boolean on) {
+        gangDefence = on;
     }
 
     /**
@@ -126,6 +147,7 @@ public final class MeleeMovement {
             }
         }
         double[][] distances = distances(robots);
+        pull(x, y, robots);
         // Candidates {x, y, risk, kept}: last turn's destination first, if it still counts.
         double[][] candidates = new double[CANDIDATES + 1][];
         int n = 0;
@@ -249,7 +271,62 @@ public final class MeleeMovement {
             double d2 = (p[0] - px) * (p[0] - px) + (p[1] - py) * (p[1] - py);
             crowd += HISTORY_WEIGHT / Math.max(d2, 1);
         }
+        if (!Double.isNaN(pullX)) {
+            double from = Math.max(pullFloor, Math.hypot(pullX - x, pullY - y));
+            double to = Math.max(pullFloor, Math.hypot(pullX - px, pullY - py));
+            crowd *= Math.exp(TEAM_PULL * (to - from) / 100);
+        }
         return sum * crowd;
+    }
+
+    /**
+     * The robot this turn's destinations are drawn to: if we are ganged, our nearest teammate; otherwise the nearest
+     * ganged teammate, down to {@link #HELP_DISTANCE}. None outside a team, without {@link #gangDefence} or with
+     * {@link #TEAM_PULL} 0.
+     */
+    private void pull(double x, double y, List<Robot> robots) {
+        pullX = Double.NaN;
+        pullY = Double.NaN;
+        if (TEAM_PULL == 0 || !gangDefence) {
+            return;
+        }
+        Robot nearestMate = null;
+        Robot nearestGanged = null;
+        for (Robot r : robots) {
+            if (r.enemy()) {
+                continue;
+            }
+            if (nearestMate == null || dist(r, x, y) < dist(nearestMate, x, y)) {
+                nearestMate = r;
+            }
+            if (enemiesNear(r.x(), r.y(), robots) >= GANG_SIZE
+                    && (nearestGanged == null || dist(r, x, y) < dist(nearestGanged, x, y))) {
+                nearestGanged = r;
+            }
+        }
+        if (nearestMate != null && enemiesNear(x, y, robots) >= GANG_SIZE) {
+            pullX = nearestMate.x();
+            pullY = nearestMate.y();
+            pullFloor = 0;
+        } else if (nearestGanged != null) {
+            pullX = nearestGanged.x();
+            pullY = nearestGanged.y();
+            pullFloor = HELP_DISTANCE;
+        }
+    }
+
+    private static int enemiesNear(double x, double y, List<Robot> robots) {
+        int n = 0;
+        for (Robot r : robots) {
+            if (r.enemy() && dist(r, x, y) <= GANG_RADIUS) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    private static double dist(Robot r, double x, double y) {
+        return Math.hypot(r.x() - x, r.y() - y);
     }
 
     private static double[][] distances(List<Robot> robots) {

@@ -217,6 +217,17 @@ public class Ogi extends TeamRobot {
     private OrbitMovement movement;
     private MeleeMovement melee;
     private final MeleeRadar meleeRadar = new MeleeRadar();
+    /**
+     * Our robot-turns in this battle's team rounds, ours and our teammates' as each robot sees them, and those with
+     * {@link MeleeMovement#GANG_SIZE} or more enemies within {@link MeleeMovement#GANG_RADIUS} (statics last for the
+     * battle). In recorded battles (2026-10-16) the teams that gang held one of our robots so 12–27 % of the time,
+     * the others under 1 %.
+     */
+    private static long teamRobotTurns;
+    private static long gangedRobotTurns;
+    /** The movement's gang defence is on once this share of our robot-turns was ganged, over at least so many. */
+    private static final double GANG_SHARE = 0.04;
+    private static final long GANG_MIN_TURNS = 200;
     /** The enemies each teammate's radar watches ({@link TeamRadar}); null outside a team. */
     private TeamRadar teamRadar;
     /** The radar's turn commanded in this turn, mathematical; NaN before the first. */
@@ -704,6 +715,29 @@ public class Ogi extends TeamRobot {
         setTurnRightRadians(cmd[1]);
     }
 
+    /**
+     * Counts this turn's robots of ours with {@link MeleeMovement#GANG_SIZE} or more enemies within
+     * {@link MeleeMovement#GANG_RADIUS}, and tells whether the enemies gang ({@link #GANG_SHARE}).
+     */
+    private boolean countGangs(long now) {
+        List<double[]> ours = new ArrayList<>();
+        ours.add(new double[] {getX(), getY()});
+        for (World.Teammate t : world.recentTeammates(now, MAX_TEAMMATE_AGE)) {
+            ours.add(new double[] {t.x(), t.y()});
+        }
+        for (double[] o : ours) {
+            int near = 0;
+            for (EnemyState e : world.enemies()) {
+                if (e.distanceTo(o[0], o[1]) <= MeleeMovement.GANG_RADIUS) {
+                    near++;
+                }
+            }
+            teamRobotTurns++;
+            gangedRobotTurns += near >= MeleeMovement.GANG_SIZE ? 1 : 0;
+        }
+        return teamRobotTurns >= GANG_MIN_TURNS && gangedRobotTurns >= GANG_SHARE * teamRobotTurns;
+    }
+
     /** Commands the radar's turn, mathematical (counter-clockwise positive). */
     private void turnRadar(double turn) {
         radarTurn = turn;
@@ -947,6 +981,9 @@ public class Ogi extends TeamRobot {
      */
     private double[] move(EnemyState target, long now) {
         if (getOthers() > 1) {
+            if (teammatesAlive > 0) {
+                melee.gangDefence(countGangs(now));
+            }
             List<MeleeMovement.Robot> robots = new ArrayList<>();
             for (EnemyState e : world.enemies()) {
                 robots.add(new MeleeMovement.Robot(e.x(), e.y(), e.energy(), true));

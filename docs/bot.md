@@ -437,6 +437,13 @@ more than one enemy lives, and the duel when it is alone with one. What makes th
   (`Names.base`): their danger model, our guns' data, the melee gun's records and our hit records.
 - **Spread:** a teammate repels in the melee movement's risk with 3 / d², as an enemy that nobody else stands near
   weighs 1–2: robots that keep apart are not hit by bullets aimed at each other and draw the enemies' fire apart.
+- **Gang defence:** a robot of ours with 2 or more enemies within 250 px is ganged. Against a team that gangs, the
+  ganged robot's destinations are drawn to its nearest teammate, and the other robots' to the nearest ganged
+  teammate down to 300 px: a destination's risk × e^(0.5 · its change of distance to that robot / 100 px). The
+  gangers follow their victim into our fire, and the helpers shoot from nearer. The defence is on once, over the
+  battle (statics), 4 % of our robot-turns were ganged (at least 200 counted; every robot counts ours and its
+  teammates' each turn): teams that gang held one of our robots so 12–27 % of the time in recordings, the others
+  under 1 %. Without the switch the pull cost as much against the other teams as it gained against the gangs.
 - Measured on the whole TeamRumble (2026-10-16, [harness.md](harness.md), 4 pairs per team): the packet with the
   teammates' bullets dodged +21.2 APS, the copies' shared learning +1.4, the spread +4.1 (weight 1) and +2.1 (3); the
   team's fire detection and the melee gun's shared scans changed the score within noise (we were hit 7 % less, hit
@@ -444,6 +451,12 @@ more than one enemy lives, and the duel when it is alone with one. What makes th
   melee gun weighing enemies by 100 / energy (−1.2, it hit 5 points less), counting only teammates in the risk's
   robots-closer term (−1.6), twice the waves' weight in the melee movement (−0.4, and −0.3 with the team radar's
   sharp waves; the enemies' hit rate on us did not change).
+- The gang defence (2026-10-16): +0.43 ± 0.38 APS on the whole TeamRumble (8 pairs per team), about +3 points of
+  share against each team that gangs; only the two parts together pay (the retreat alone −0.1, the help alone
+  +1.1 against those teams, both +3.3); a pull of 1.0 instead of 0.5 exposed us more for no gain. Not kept: values
+  of a hit in the melee gun's weights — a bonus for an enemy one hit from death (−0.1, hit rate −1.5 points), for an
+  enemy that gangs one of us (0.0 against the gangs), and Smith's rule, the enemy's recent damage to us per energy
+  (−0.85, hit rate −4 points): moving the aim off the likeliest hit costs more than the earlier kills save.
 
 ## Bullet shield (`cz.libors.ogi.shield`)
 
