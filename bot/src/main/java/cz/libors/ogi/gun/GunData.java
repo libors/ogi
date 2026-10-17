@@ -100,8 +100,9 @@ final class GunData {
     }
 
     /**
-     * The kernel weight of the nearest shots that covers each of {@code bins} guess factors spread evenly from −1 to
-     * 1: the sum {@link #bestGuessFactor} takes the highest of, for the overlay. Null without data.
+     * The share of the nearest shots' kernel weight whose hitting range covers each of {@code bins} guess factors
+     * spread evenly from −1 to 1: the chance to hit there as the gun estimates it, 0 to 1, whose highest
+     * {@link #bestGuessFactor} takes; for the overlay. Null without data.
      */
     double[] coverage(double[] query, int bins) {
         if (size == 0) {
@@ -110,16 +111,21 @@ final class GunData {
         double[] at = new double[2 * maxNeighbours];
         double[] w = new double[2 * maxNeighbours];
         int n = events(query, neighbours(), at, w, 0);
-        double[] sums = new double[bins];
+        double total = 0;
+        for (int i = 0; i + 1 < n; i += 2) {
+            total += w[i];
+        }
+        double[] shares = new double[bins];
         for (int b = 0; b < bins; b++) {
             double gf = -1 + 2.0 * b / (bins - 1);
             for (int i = 0; i + 1 < n; i += 2) {
                 if (at[i] <= gf && gf <= at[i + 1]) {
-                    sums[b] += w[i];
+                    shares[b] += w[i];
                 }
             }
+            shares[b] = total > 0 ? shares[b] / total : 0;
         }
-        return sums;
+        return shares;
     }
 
     /**

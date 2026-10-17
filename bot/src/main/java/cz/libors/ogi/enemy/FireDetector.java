@@ -157,6 +157,11 @@ public final class FireDetector {
         heat = h;
     }
 
+    /** The turns from {@code now} until the enemy's gun is cool by the model of its gun heat, 0 if it is. */
+    public long coolIn(long now) {
+        return firstCoolTurn(now) - now;
+    }
+
     /** Whether, by the model of its gun heat, the enemy's gun is cool at the end of turn {@code time}. */
     public boolean coolAt(long time) {
         return firstCoolTurn(time) <= time;

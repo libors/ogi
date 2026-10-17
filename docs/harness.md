@@ -490,6 +490,15 @@ and it flies each bullet along the replayed aim against every robot's recorded p
   `meleescan`, `meleedeath`, `meleeaim`, `meleefire`, `meleeend`, see [bot.md](bot.md#debug-overlay-czliborsogitrace)),
   and the recording keeps every live robot's position in every turn (`@positions`, [Format](#format)): about 1.1 MB
   per 10 rounds against the sample bots.
+- **Team battles:** against a team set `submitGunLogs` records five `OgiGunLog` as a team (`cz.libors.OgiGunLogTeam`)
+  with the same keys. Each of our robots' logs is replayed as a battle of its own, with a memory of its own, as each
+  robot played (`MeleeBattle.readAll`); a bullet whose first robot is a teammate of the logging robot counts as a
+  miss; the robots of one recorded battle stay together, as one cluster in the interval and in one half of the
+  tuning's split. The bot plays team battles with `MeleeGunParameters.TEAM`: once it differs from `DEFAULT`, give it
+  as `-Pbase`. Record them with `-Pdebug=true`: without debug mode five logging robots of ours, each logging 5–10
+  scans a turn, lose turns' logs (a lost turn repeats the turn before's log), and 0.9 % of the replayed aims differed
+  (7 battles, 2026-10-17). The index of a team recording has no turn counts of ours (`skippedTurns`, `turns` … are
+  0): `RecordJob` looks for robots named after the team, not its members.
 - **Replay:** per battle a fresh `MeleeGun.Memory`, per round a new `MeleeGun`, fed the logged scans and deaths in
   their order. At each aim that a bullet was fired on, the replayed gun aims. Bullets of the duel at the end come from
   the duel's guns and are not scored.
@@ -817,7 +826,8 @@ refuses melee sets. `recordBattles` and the recording jobs record a melee set's 
 ### Recordings as a job (`compare.RecordJob`)
 
 `./gradlew submitGunLogs -Popponents=<set> -Ppairs=2` queues the gun's logs of the working tree (a snapshot's
-`OgiGunLog`, keys `gunshot,gunpass,gunshield`) against a set, on the seeds of `compare` and `recordBattles`; `gunBench
+`OgiGunLog`, keys `gunshot,gunpass,gunshield`; against a melee or a team set the melee gun's keys, and against a team
+set five of them as `OgiGunLogTeam`, see [Melee bench](#melee-bench)) against a set, on the seeds of `compare` and `recordBattles`; `gunBench
 -Plogs=.robocode/queue/jobs/<id>/recordings/<version>` then replays them here. `./gradlew submitRecordings
 -Popponents=<set> -Ppairs=2` queues full recordings of the working tree's `Ogi` (robots, bullets and every debug
 property, about 2.3 MB per 1v1 battle; `-Pkeys` keeps only those debug properties and drops robots and bullets). The

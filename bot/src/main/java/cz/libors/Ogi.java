@@ -59,6 +59,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -127,6 +128,10 @@ public class Ogi extends TeamRobot {
      * robot in an enemy team together.
      */
     private static final Map<String, HitRecord> HIT_RECORDS = new HashMap<>();
+    /** Our bullets aimed at each enemy over the battle, by its own name, {ended, hit it}: for the overlay. */
+    private static final Map<String, int[]> AIMED_HITS = new HashMap<>();
+    /** The overlay shows our hit rate on an enemy once this many of our bullets aimed at it ended. */
+    private static final int INFO_MIN_BULLETS = 5;
     /** What the melee gun learned in this battle. */
     private static final MeleeGun.Memory MELEE_MEMORY = new MeleeGun.Memory();
     /** The gun searches its data only this many turns before it can fire. */
@@ -207,7 +212,25 @@ public class Ogi extends TeamRobot {
      * wins the energy race though its damage stays within the budget.
      */
     private static final int SHIELD_TRIAL_ROUNDS = 2;
-    /** Per enemy, for the battle: {the damage its bullets did to us while we shielded, its shots then, rounds lost}. */
+    /**
+     * We surf the enemy too once this many of its bullets ended while we shielded and fewer than this share of them
+     * were shot down: against strong bots of many weak bullets the budget above held for hundreds of hits over several
+     * rounds, while where the shield works it had shot down 85 % and more of the first 20 (2026-10-17).
+     * Not on the first bullets alone: before the aim models learn, a bot we later shoot down hits us too.
+     */
+    private static final int SHIELD_FAIL_BULLETS = 20;
+    private static final double SHIELD_FAIL_DOWN_SHARE = 0.5;
+    /**
+     * We surf the enemy too once this many of its bullets hit us while we shielded before we shot one down: against
+     * 275 bots the shield works on we were hit at most 3 times before the first one went down; some strong bots answer
+     * a standing robot with weak bullets (6 hits for 2–12 damage), which the budget took 8–11 hits to notice
+     * (2026-10-17).
+     */
+    private static final int SHIELD_FAIL_HITS = 6;
+    /**
+     * Per enemy, for the battle: {the damage its bullets did to us while we shielded, its shots then, rounds lost, its
+     * bullets we shot down then, its bullets that hit us then}.
+     */
     private static final Map<String, double[]> SHIELD_TRIALS = new HashMap<>();
     /** The enemies we stopped shielding against or never try it against, for the battle. */
     private static final Set<String> SHIELD_DROPPED = new HashSet<>();
@@ -216,6 +239,8 @@ public class Ogi extends TeamRobot {
      * enemy has seen us move all round, and a failed trial would cost the round we fought for.
      */
     private static boolean meleeBattle;
+    /** The battle's kind for the overlay ({@link Overlay#battle}), from its first round's start; −1 before. */
+    private static int battleKind = -1;
 
     /** Nearer than this to where we stand, along the body, we do not move back: the rest is the body's turning. */
     private static final double SHIELD_HOME_SLACK = 0.05;
@@ -329,6 +354,9 @@ public class Ogi extends TeamRobot {
 
     @Override
     public void run() {
+        if (battleKind < 0) {
+            battleKind = getTeammates() != null ? Overlay.TEAM : getOthers() > 1 ? Overlay.MELEE : Overlay.DUEL;
+        }
         world = new World();
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
         movement = new OrbitMovement(field, new Random(roundSeed()));
@@ -338,7 +366,8 @@ public class Ogi extends TeamRobot {
         teamRadar = getTeammates() == null ? null : new TeamRadar();
         gun = new GuessFactorGun(field);
         mirror = new MirrorAim(field);
-        meleeGun = new MeleeGun(field, MELEE_MEMORY, MeleeGunParameters.DEFAULT);
+        meleeGun = new MeleeGun(field, MELEE_MEMORY,
+                getTeammates() == null ? MeleeGunParameters.DEFAULT : MeleeGunParameters.TEAM);
         aimSpread = new Random(~roundSeed());
         randomAim = new Random(roundSeed() * 31 + 17);
         randomDraw = randomAim.nextDouble();
@@ -498,27 +527,36 @@ public class Ogi extends TeamRobot {
         return SHIELD && getOthers() == 1 && !meleeBattle && !SHIELD_DROPPED.contains(name);
     }
 
-    /** One of the enemy's bullets hit us while we shielded, it fired, or it won a round: the trial's account. */
-    private void shieldTrial(String name, double damage, boolean shot, boolean lost) {
+    /**
+     * One of the enemy's bullets hit us while we shielded ({@code damage}), we shot one down, it fired, or it won a
+     * round: the trial's account.
+     */
+    private void shieldTrial(String name, double damage, boolean down, boolean shot, boolean lost) {
         double[] trial = SHIELD_TRIALS.get(name);
         if (trial == null) {
-            trial = new double[3];
+            trial = new double[5];
             SHIELD_TRIALS.put(name, trial);
         }
         trial[0] += damage;
         trial[1] += shot ? 1 : 0;
         trial[2] += lost ? 1 : 0;
-        if ((trial[0] > SHIELD_TRIAL_DAMAGE + SHIELD_TRIAL_RATE * trial[1] || trial[2] >= SHIELD_TRIAL_ROUNDS)
-                && SHIELD_DROPPED.add(name)) {
-            setDebugProperty("shieldTrial", String.format(Locale.ROOT, "dropped damage %.1f shots %.0f lost %.0f",
-                    trial[0], trial[1], trial[2]));
+        trial[3] += down ? 1 : 0;
+        trial[4] += damage > 0 ? 1 : 0;
+        double ended = trial[3] + trial[4];
+        boolean failing = ended >= SHIELD_FAIL_BULLETS && trial[3] < SHIELD_FAIL_DOWN_SHARE * ended
+                || trial[3] == 0 && trial[4] >= SHIELD_FAIL_HITS;
+        if ((trial[0] > SHIELD_TRIAL_DAMAGE + SHIELD_TRIAL_RATE * trial[1] || trial[2] >= SHIELD_TRIAL_ROUNDS
+                || failing) && SHIELD_DROPPED.add(name)) {
+            setDebugProperty("shieldTrial", String.format(Locale.ROOT,
+                    "dropped damage %.1f shots %.0f lost %.0f down %.0f hit %.0f", trial[0], trial[1], trial[2],
+                    trial[3], trial[4]));
         }
     }
 
     @Override
     public void onDeath(DeathEvent e) {
         if (shieldedEnemy != null && getOthers() > 0) {
-            shieldTrial(shieldedEnemy, 0, false, true);
+            shieldTrial(shieldedEnemy, 0, false, false, true);
         }
     }
 
@@ -840,6 +878,8 @@ public class Ogi extends TeamRobot {
 
     /** Our bullets in the air, until they hit, miss or are shot down. */
     private final Map<Bullet, FiredShot> inFlight = new HashMap<>();
+    /** Our teammates' bullets reported while we paint, for the overlay's bullet powers (layer B). */
+    private final List<TeamShot> teamShotsShown = new ArrayList<>();
 
     /** A hook for {@link OgiGunLog}: this bullet was just fired from this plan. */
     protected void fired(Bullet bullet, GuessFactorGun.Plan plan) {
@@ -890,8 +930,9 @@ public class Ogi extends TeamRobot {
     }
 
     /**
-     * The melee gun's weights at the bearings of the enemy it aimed at, {bearings, weights}, for our wave's dots: the
-     * other enemies' positions lie off the wave's arc (the melee aim layer shows them all); null without a trace.
+     * The melee gun's chance to hit someone at the bearings of the positions it predicted for the enemy it aimed at,
+     * {bearings, chances}, for our wave's ticks: the other enemies' positions lie off the wave's arc (the melee aim
+     * layer shows them all); null without a trace.
      */
     private static double[][] aimedOnly(MeleeGun.Traced t) {
         if (t == null) {
@@ -905,7 +946,7 @@ public class Ogi extends TeamRobot {
         for (int i = 0, k = 0; i < t.enemies().length; i++) {
             if (t.enemies()[i].equals(t.aimedAt())) {
                 w[0][k] = t.bearings()[i];
-                w[1][k++] = t.density()[i];
+                w[1][k++] = t.chance()[i];
             }
         }
         return w;
@@ -1065,6 +1106,9 @@ public class Ogi extends TeamRobot {
         if (shot != null) {
             HIT_RECORDS.computeIfAbsent(Names.base(shot.target()), n -> new HitRecord())
                     .ended(shot.target().equals(victim));
+            int[] aimed = AIMED_HITS.computeIfAbsent(shot.target(), n -> new int[2]);
+            aimed[0]++;
+            aimed[1] += shot.target().equals(victim) ? 1 : 0;
         }
     }
 
@@ -1198,7 +1242,7 @@ public class Ogi extends TeamRobot {
                     e.getVelocity(), e.getEnergy());
             shot.ifPresent(shield::shotDetected);
             if (shot.isPresent() && shielding(e.getName())) {
-                shieldTrial(e.getName(), 0, true, false);
+                shieldTrial(e.getName(), 0, false, true, false);
             }
         }
         if (teammatesAlive > 0) {
@@ -1280,7 +1324,7 @@ public class Ogi extends TeamRobot {
             shield.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
                     Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
             if (shielding(e.getName())) {
-                shieldTrial(e.getName(), Rules.getBulletDamage(e.getPower()), false, false);
+                shieldTrial(e.getName(), Rules.getBulletDamage(e.getPower()), false, false, false);
             }
         }
     }
@@ -1323,6 +1367,9 @@ public class Ogi extends TeamRobot {
             shield.bulletHitBullet(e.getHitBullet().getName(), e.getTime(), e.getHitBullet().getX(),
                     e.getHitBullet().getY(), Angles.fromRobocode(e.getHitBullet().getHeadingRadians()),
                     e.getHitBullet().getPower());
+            if (shielding(e.getHitBullet().getName())) {
+                shieldTrial(e.getHitBullet().getName(), 0, true, false, false);
+            }
         }
     }
 
@@ -1354,8 +1401,8 @@ public class Ogi extends TeamRobot {
         }
         long now = getTime();
         paintedAt = now;
-        Overlay.battle(getTeammates() != null ? Overlay.TEAM
-                : meleeBattle || getOthers() > 1 ? Overlay.MELEE : Overlay.DUEL);
+        Overlay.battle(battleKind);
+        Overlay.duel(getOthers() - teammatesAlive == 1);
         trace.start(now, getBattleFieldWidth(), getBattleFieldHeight());
         positionTrails.ours(now, getX(), getY());
         for (EnemyState e : world.enemies()) {
@@ -1378,7 +1425,69 @@ public class Ogi extends TeamRobot {
         if (meleeAimView != null && now - meleeAimView.time() <= MELEE_AIM_SHOWN) {
             trace.meleeAim(meleeAimView);
         }
+        trace.powers(powerView(now));
+        trace.info(infoView(now));
         Overlay.paint(g, trace);
+    }
+
+    /**
+     * Beside each enemy for the overlay: the turns until its gun is cool, our hit rate on it, its on us and the age of
+     * our side's last scan of it.
+     */
+    private Trace.InfoView infoView(long now) {
+        List<double[]> enemies = new ArrayList<>();
+        for (EnemyState e : world.enemies()) {
+            int[] aimed = AIMED_HITS.get(e.name());
+            double rate = aimed != null && aimed[0] >= INFO_MIN_BULLETS ? (double) aimed[1] / aimed[0] : Double.NaN;
+            // The scan's age with two enemies or more: a duel's radar locks.
+            enemies.add(new double[] {e.x(), e.y(), surfer.coolIn(e.name(), now), rate,
+                    surfer.hitsOnUsPerShot(e.name(), INFO_MIN_BULLETS), getOthers() - teammatesAlive > 1
+                    ? now - e.time() : -1});
+        }
+        return new Trace.InfoView(enemies.toArray(new double[0][]));
+    }
+
+    /**
+     * The bullets' powers for the overlay: our bullets in flight as the engine reports them; our teammates' where they
+     * have flown since their shot, until they leave the field or reach a robot where we saw it last (their end we
+     * learn from nobody); each enemy's last shot as fire detection saw it.
+     */
+    private Trace.PowerView powerView(long now) {
+        List<double[]> ours = new ArrayList<>();
+        for (Bullet b : inFlight.keySet()) {
+            if (b.isActive()) {
+                ours.add(new double[] {b.getX(), b.getY(), b.getPower()});
+            }
+        }
+        List<World.Teammate> mates = world.recentTeammates(now, MAX_TEAMMATE_AGE);
+        for (Iterator<TeamShot> it = teamShotsShown.iterator(); it.hasNext(); ) {
+            TeamShot shot = it.next();
+            // A bullet moves in the turn it is fired, from where its robot stood (engine-model G-03).
+            double flown = Rules.getBulletSpeed(shot.power()) * (now - shot.fireTime());
+            double x = shot.x() + flown * Math.cos(shot.heading());
+            double y = shot.y() + flown * Math.sin(shot.heading());
+            boolean ended = !field.contains(x, y, 0);
+            for (EnemyState e : world.enemies()) {
+                ended |= Math.abs(e.x() - x) <= Field.ROBOT_HALF_SIZE && Math.abs(e.y() - y) <= Field.ROBOT_HALF_SIZE;
+            }
+            for (World.Teammate t : mates) {
+                ended |= !t.name().equals(shot.shooter()) && Math.abs(t.x() - x) <= Field.ROBOT_HALF_SIZE
+                        && Math.abs(t.y() - y) <= Field.ROBOT_HALF_SIZE;
+            }
+            if (ended) {
+                it.remove();
+            } else {
+                ours.add(new double[] {x, y, shot.power()});
+            }
+        }
+        List<double[]> enemies = new ArrayList<>();
+        for (EnemyState e : world.enemies()) {
+            double power = surfer.shotPower(e.name());
+            if (!Double.isNaN(power)) {
+                enemies.add(new double[] {e.x(), e.y(), power});
+            }
+        }
+        return new Trace.PowerView(ours.toArray(new double[0][]), enemies.toArray(new double[0][]));
     }
 
     /** A key pressed in the battle view switches a layer of the overlay ({@link Overlay#key}). */
@@ -1416,6 +1525,9 @@ public class Ogi extends TeamRobot {
         for (TeamShot shot : packet.shots()) {
             surfer.teammateFired(shot.shooter(), shot.fireTime(), shot.x(), shot.y(), shot.heading(), shot.power(),
                     e.getTime());
+            if (paintedAt >= e.getTime() - 1) {
+                teamShotsShown.add(shot);
+            }
         }
     }
 

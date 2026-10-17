@@ -22,7 +22,7 @@ battles.
 
 | Command | What it does |
 |---|---|
-| `./gradlew build` | Compiles (the benches too), runs unit tests and packages `bot/build/robots/cz.libors.Ogi_<v>.jar`, `cz.libors.OgiTeam_<v>.jar` and `cz.libors.OgiGunLog_<v>.jar` |
+| `./gradlew build` | Compiles (the benches too), runs unit tests and packages `bot/build/robots/cz.libors.Ogi_<v>.jar`, `cz.libors.OgiTeam_<v>.jar`, `cz.libors.OgiGunLog_<v>.jar` and `cz.libors.OgiGunLogTeam_<v>.jar` |
 | `./gradlew skeletonCheck` | Headless battles against the sample bots; see [harness.md](harness.md) |
 | `./gradlew recordProbes` | Records probe battles turn by turn into `harness/build/recordings/` and checks integrity, coverage and determinism; see [harness.md](harness.md#recordings) |
 | `./gradlew engineTest` | Runs `recordProbes`, then replays the recordings through the bot's engine model (`harness/src/engineTest`) |
@@ -79,6 +79,7 @@ cd .robocode/1.11.1 && ./robocode.sh
 | `cz.libors.Ogi_<v>.jar` | classes, `cz/libors/Ogi.properties`, manifest `robots: cz.libors.Ogi` | 1v1 and melee |
 | `cz.libors.OgiTeam_<v>.jar` | the same classes plus `cz/libors/OgiTeam.team` (five `cz.libors.Ogi` members, the first is the leader) | team |
 | `cz.libors.OgiGunLog_<v>.jar` | the classes plus `cz.libors.OgiGunLog`, which logs the gun for the gun bench | none; the build fails if a rumble jar holds it |
+| `cz.libors.OgiGunLogTeam_<v>.jar` | the same plus `cz/libors/OgiGunLogTeam.team` (five `cz.libors.OgiGunLog`), for the melee gun's logs of team battles | none |
 | `cz.libors.probe_<v>.jar` (built by `probe/`) | the probe robots `cz.libors.probe.*` with their `.properties` | none, local recordings only |
 
 The version and author come from `botVersion` and `botAuthor` in `gradle.properties`.

@@ -8,18 +8,22 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * The melee gun's log of one recorded battle ({@link MeleeGunLog}) and every robot's position in every turn: per
- * round, the scans, deaths and shots in the order the bot acted on them.
+ * The melee gun's log of one logging robot in one recorded battle ({@link MeleeGunLog}) and every robot's position in
+ * every turn: per round, the scans, deaths and shots in the order the bot acted on them. A team battle holds one per
+ * robot of our team ({@link #readAll}).
  *
  * @param subjectIndex the logging robot's index in the recording
  * @param names        the robots' names by index, as the recording (and the bot's scans) name them
+ * @param teammates    the indexes of the logging robot's teammates: its bullets that reach them hit no enemy
  */
-public record MeleeBattle(Path file, int subjectIndex, List<String> names, int width, int height,
-                          List<Round> rounds) {
+public record MeleeBattle(Path file, int subjectIndex, List<String> names, Set<Integer> teammates, int width,
+                          int height, List<Round> rounds) {
 
     /**
      * One round.
@@ -47,23 +51,46 @@ public record MeleeBattle(Path file, int subjectIndex, List<String> names, int w
     public record Shot(MeleeGunLog.Aim aim, int fireTurn, MeleeGunLog.Fire fire, MeleeGunLog.End end) {
     }
 
-    /** Reads the log of the robot whose name starts with {@code subjectPrefix}. */
+    /** Reads the log of the first robot whose name starts with {@code subjectPrefix}. */
     public static MeleeBattle read(Path file, String subjectPrefix) throws IOException {
+        return readAll(file, subjectPrefix).get(0);
+    }
+
+    /** Reads the log of every robot whose name starts with {@code subjectPrefix}: in a team battle, our five. */
+    public static List<MeleeBattle> readAll(Path file, String subjectPrefix) throws IOException {
         Recording recording = Recording.read(file);
-        int subject = -1;
+        List<Integer> subjects = new ArrayList<>();
         List<String> names = new ArrayList<>();
+        Map<Integer, Integer> teamOf = new HashMap<>();
         for (Recording.RobotInfo robot : recording.robots()) {
-            if (subject < 0 && robot.name().startsWith(subjectPrefix)) {
-                subject = robot.index();
+            if (robot.name().startsWith(subjectPrefix)) {
+                subjects.add(robot.index());
             }
             while (names.size() <= robot.index()) {
                 names.add(null);
             }
             names.set(robot.index(), robot.name());
+            teamOf.put(robot.index(), robot.teamIndex());
         }
-        if (subject < 0) {
+        if (subjects.isEmpty()) {
             throw new IOException(file + ": no robot named " + subjectPrefix + "…");
         }
+        List<MeleeBattle> battles = new ArrayList<>();
+        for (int subject : subjects) {
+            Set<Integer> teammates = new HashSet<>();
+            int team = teamOf.get(subject);
+            for (Map.Entry<Integer, Integer> e : teamOf.entrySet()) {
+                if (team >= 0 && e.getValue() == team && e.getKey() != subject) {
+                    teammates.add(e.getKey());
+                }
+            }
+            battles.add(read(file, recording, subject, names, Set.copyOf(teammates)));
+        }
+        return battles;
+    }
+
+    private static MeleeBattle read(Path file, Recording recording, int subject, List<String> names,
+                                    Set<Integer> teammates) throws IOException {
         if (recording.positions().isEmpty()) {
             throw new IOException(file + ": no robot positions; record with the key @positions");
         }
@@ -146,7 +173,7 @@ public record MeleeBattle(Path file, int subjectIndex, List<String> names, int w
         }
         int width = (int) Double.parseDouble(recording.battle().get("width"));
         int height = (int) Double.parseDouble(recording.battle().get("height"));
-        return new MeleeBattle(file, subject, List.copyOf(names), width, height, List.copyOf(rounds));
+        return new MeleeBattle(file, subject, List.copyOf(names), teammates, width, height, List.copyOf(rounds));
     }
 
     private static long key(int round, long turn) {

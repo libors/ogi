@@ -22,7 +22,7 @@ packaged as `cz.libors.OgiTeam` plays in teams.
 - `./gradlew recordGunLogs -Pversions=0.1` and `./gradlew gunBench [-Pweights=...]`: the offline gun bench; replays
   the gun's logs of recorded battles with other gun parameters (`docs/harness.md`).
 - `./gradlew meleeBench -Plogs=<dir>`: the offline melee bench; replays the melee gun's logs of recorded melee battles
-  (`submitGunLogs` against a melee set) with other melee gun parameters (`docs/harness.md`).
+  or team battles (`submitGunLogs` against a melee or team set) with other melee gun parameters (`docs/harness.md`).
 - `./gradlew dangerBench -Precordings=<dir>`: the offline danger bench; replays the enemy bullets of full recordings
   (`submitRecordings`) through the surfer's danger model (`docs/harness.md`).
 - `./gradlew queueServer` and `./gradlew submit -Pbaseline=HEAD`: the queue; a server on this machine runs queued
@@ -33,7 +33,8 @@ packaged as `cz.libors.OgiTeam` plays in teams.
 ## Layout
 
 - `bot/`: robot code. Java 17 API only (`--release 17`), no external dependencies. `cz.libors.OgiGunLog` (Ogi
-  with the gun bench's log) has a jar of its own that never goes to a rumble.
+  with the gun bench's log) has a jar of its own, and five of them as `cz.libors.OgiGunLogTeam` another; neither goes
+  to a rumble.
 - `harness/`: battle runner, checks, turn recorder, comparisons and the queue on the Robocode control API; the
   offline benches in the `gunBench` source set.
 - `probe/`: probe robots for engine recordings; deployed locally only, never to a rumble.

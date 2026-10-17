@@ -174,9 +174,10 @@ public final class MeleeBench {
             if (files.isEmpty()) {
                 usage("no *.rec.gz in " + dirs);
             }
-            List<MeleeBattle> battles = files.parallelStream().map(f -> {
+            // A team battle gives one log per robot of ours, each replayed with a memory of its own, as it played.
+            List<MeleeBattle> battles = files.parallelStream().flatMap(f -> {
                 try {
-                    return MeleeBattle.read(f, robot);
+                    return MeleeBattle.readAll(f, robot).stream();
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
@@ -245,7 +246,13 @@ public final class MeleeBench {
     static Paired paired(List<MeleeBattle> battles, MeleeGunParameters base, MeleeGunParameters variant) {
         List<MeleeReplay.Tally[]> t = battles.parallelStream().map(b -> new MeleeReplay.Tally[] {
                 MeleeReplay.replay(b, base, false, false), MeleeReplay.replay(b, variant, false, false)}).toList();
-        return paired(t);
+        // The robots of one team battle fought the same enemies: one cluster.
+        Map<Path, MeleeReplay.Tally[]> byFile = new LinkedHashMap<>();
+        for (int i = 0; i < battles.size(); i++) {
+            byFile.merge(battles.get(i).file(), t.get(i),
+                    (a, b) -> new MeleeReplay.Tally[] {a[0].plus(b[0]), a[1].plus(b[1])});
+        }
+        return paired(new ArrayList<>(byFile.values()));
     }
 
     /**
@@ -326,18 +333,23 @@ public final class MeleeBench {
     }
 
     /**
-     * Tunes on half of the battles and reports both halves against the base. The battles are shuffled
-     * ({@code splitSeed}) and every other one goes to the training half.
+     * Tunes on half of the battles and reports both halves against the base. The recorded battles are shuffled
+     * ({@code splitSeed}) and every other one goes to the training half, with every log it holds (a team battle's
+     * five robots stay together).
      */
     private static void tune(List<MeleeBattle> battles, MeleeGunParameters base, MeleeGunParameters start,
                              int passes, long splitSeed, java.util.Set<Integer> fixed) {
-        List<MeleeBattle> shuffled = new ArrayList<>(battles);
-        shuffled.sort((a, b) -> a.file().toString().compareTo(b.file().toString()));
-        Collections.shuffle(shuffled, new Random(splitSeed));
+        List<Path> files = new ArrayList<>(battles.stream().map(MeleeBattle::file).distinct().toList());
+        files.sort((a, b) -> a.toString().compareTo(b.toString()));
+        Collections.shuffle(files, new Random(splitSeed));
+        java.util.Set<Path> training = new java.util.HashSet<>();
+        for (int i = 0; i < files.size(); i += 2) {
+            training.add(files.get(i));
+        }
         List<MeleeBattle> train = new ArrayList<>();
         List<MeleeBattle> test = new ArrayList<>();
-        for (int i = 0; i < shuffled.size(); i++) {
-            (i % 2 == 0 ? train : test).add(shuffled.get(i));
+        for (MeleeBattle b : battles) {
+            (training.contains(b.file()) ? train : test).add(b);
         }
         System.out.printf(Locale.ROOT, "Tuning on %d battles, testing on %d%n", train.size(), test.size());
         long t0 = System.nanoTime();

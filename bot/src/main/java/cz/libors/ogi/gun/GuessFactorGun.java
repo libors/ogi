@@ -304,9 +304,17 @@ public final class GuessFactorGun {
         Plan p = t.plan;
         double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR), hitRate(name, ANTI_SURFER),
                 hitRate(name, RANDOM), hitRate(name, MIRROR)};
+        GunModel model = MODELS.get(Names.base(name));
+        double[] bulletRates = new double[rates.length];
+        int[] bulletTries = new int[rates.length];
+        for (int g = 0; g < rates.length; g++) {
+            bulletRates[g] = model == null ? Double.NaN : model.bulletHitRate(g);
+            bulletTries[g] = model == null ? 0 : model.bulletTries(g);
+        }
         return new Trace.GunView(name, p.time(), p.originX(), p.originY(), p.targetX(), p.targetY(),
                 p.shot().reference(), p.shot().escape(), p.power(), p.shot().direction(), p.decision().aims().clone(),
-                p.decision().gun(), GUN_NAMES, rates, t.model.dataSize());
+                p.decision().gun(), GUN_NAMES, rates, t.model.dataSize(), bulletRates, bulletTries,
+                model != null && model.hardToHit());
     }
 
     private Target target(String name) {

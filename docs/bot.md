@@ -182,7 +182,13 @@ before scans (10), and painting (5) comes last (engine-model G-40). Then `act()`
     two robot half-widths on each side, weighted 1 / (feature distance + 0.8), so the neighbours weigh almost alike,
     and 1 / the enemy's distance to the power 0.245; the gun aims at the bearing with the most weight, over all
     enemies at once, and the bullet's record goes to the enemy that weighed most there.
-  - **Numbers:** the counts, ranges and weights above are `MeleeGunParameters.DEFAULT`, tuned on the melee bench
+  - **Numbers:** in a team battle the gun plays with `MeleeGunParameters.TEAM`, tuned on the melee bench over half
+    of 132 TeamRumble battles' logs (each of our five robots replayed) and checked on the other half: an enemy's
+    positions weigh 1 / its distance to the power 0.686 (nearer enemies count more than in a melee), a position covers
+    2.8 robot half-widths, a neighbour weighs 1 / (feature distance + 1.6), the turns since a reversal weigh 0.14; the
+    rest as below. Measured on the whole TeamRumble (2026-10-17, 8 pairs): our hit rate 31.2 → 31.6 %, +1.0 ± 0.4
+    APS, +2.6 ± 1.2 against the strong band.
+    The counts, ranges and weights above are `MeleeGunParameters.DEFAULT`, tuned on the melee bench
     ([harness.md](harness.md#melee-bench)): a coordinate search over half of 99 rumble draws, checked on the other
     half, with the counts then cut back for the gun's time (the search's 67 neighbours, 6000 records, a horizon of 196
     and an age of 128 turns took 12 times the gun's time of the first guess for 1.7 points of hit rate more; the
@@ -466,7 +472,11 @@ become predictable to the last bits; anything that makes us move spoils that.
 
 - **The trial** (`Ogi`, per enemy, for the battle): every duel starts with the shield. Once the damage the enemy's
   bullets did to us while we shielded exceeds 35 plus 0.25 per shot it fired meanwhile, or we lost 2 rounds while
-  shielding, we surf it for the rest of the battle. Never the other way round: guns that learn our movement learn a few
+  shielding, we surf it for the rest of the battle; also once 20 of its bullets ended while we shielded and we shot
+  down fewer than half of them (against strong bots of many weak bullets the budget held for hundreds of hits over
+  several rounds; where the shield works it had shot down 85 % and more of the first 20), and once 6 of its bullets
+  hit us before we shot one down (against 275 bots the shield works on at most 3 did; some strong bots answer a
+  standing robot with weak bullets, 6 hits for 2–12 damage, which the budget took 8–11 hits to notice; 2026-10-17). Never the other way round: guns that learn our movement learn a few
   rounds of surfing, and a shield tried after them fails. In shield mode we score about 60 a round (survival), so 0.25
   a shot at about 40 shots a round keeps a share of about 80 %. The start allows two full-power hits, since the aim
   models learn from the first bullets.
@@ -532,10 +542,15 @@ become predictable to the last bits; anything that makes us move spoils that.
 - **Robocode mirrors robot graphics** to battlefield coordinates (y up), so points in the mathematical convention are
   drawn as they are; arcs are polylines, never `Arc2D`.
 - **Layers**, each switched by its key while the battle view has the focus, listed in the top left corner (green
-  shown, red hidden; the choice lasts for the battle). At the battle's first paint a duel shows both kinds of waves,
-  a melee the movement and the melee aim, a team battle the radar (there the waves of all robots cover each other);
-  our positions show in every kind, the opponents' are hidden. The line from a wave's origin to its front is drawn
-  dark, so that it does not cover the rest. Robocode hands a key press to every robot whose class overrides
+  shown, red hidden; the choice lasts for the battle). The battle's kind comes from its first round's start (`Ogi`'s
+  `battleKind`): a duel offers neither the movement, the melee aim nor the team radar, a melee not the team radar;
+  a layer not offered is not listed and its key does nothing. At the battle's first paint a duel shows both kinds of
+  waves, a melee the movement and the melee aim, a team battle the radar (there the waves of all robots cover each
+  other); the position history, the bullet powers and the enemy info show in every kind. Once a melee's or a team
+  battle's round is down to one enemy it is a duel (the duel's guns aim and, in a melee, the surfer moves): both
+  kinds of waves with the gun panel show, the melee aim and, in a melee, the movement hide, until the next round
+  brings back what was shown before (`Overlay.duel`). The line from a
+  wave's origin to its front is drawn dark, so that it does not cover the rest. Robocode hands a key press to every robot whose class overrides
   `onKeyPressed` or another interactive handler (`JavaHost` marks it interactive, `Battle.sendInteractiveEvent`
   delivers to those), so in a team battle every Ogi switches together.
   - **E, enemy waves:** a grey arc around where the shooter stood, only over the maximum escape angle either side of
@@ -546,32 +561,58 @@ become predictable to the last bits; anything that makes us move spoils that.
     and standard deviation; green where our bullets shadow it), marks where head-on (a cross in a circle), linear (two
     lines along the bullet's way) and circular targeting (a circle) aimed at us (`SimpleAims`), and a thin yellow arc
     just outside the front over the headings that hit us as the wave passes.
-  - **G, our waves:** each of our bullets the same in dark red (the arc over the maximum escape angle at its speed),
-    the bullet itself in yellow with its power beside it while it flies, and, as small dots just behind the front,
-    what the gun expected when it aimed it, in the turn before the shot (`ShotTrails`): the guess-factor
-    gun's weight over 47 guess factors (`GunModel.coverage`, the sum its aim takes the highest of), or in a melee the
-    bearings of the positions the melee gun predicted for the enemy it aimed at, with the weight covering each
-    (`MeleeGun.traced`; layer A shows every enemy's), and the head-on, linear and circular aims at the enemy aimed at.
-    A wave stays until it has passed its target by 20 px. At the bottom left, one a line: per target with a plan its
-    data size and each gun's virtual hit rate, then the melee gun's bullets' hit rate on any enemy over the battle;
-    the gun that aimed our last bullet in yellow.
+  - **G, gun waves:** each of our bullets the same in dark red (the arc over the maximum escape angle at its speed),
+    the bullet itself in yellow with its power beside it while it flies, and, as ticks inward from just behind the
+    front, what the gun expected when it aimed it, in the turn before the shot (`ShotTrails`): its chance to hit at
+    each bearing, the tick 60 px long for a chance of 1 and coloured on a fixed scale (blue none, red 40 % and more),
+    so that a flat profile stays short and blue whatever its shape. For the guess-factor gun the chance at each of 47
+    guess factors is the share of its neighbours' kernel weight whose hitting range covers it (`GunModel.coverage`,
+    the highest of which its aim takes); in a melee the ticks stand at the bearings of the positions the melee gun
+    predicted for the enemy it aimed at, each the chance that a bullet along it hits someone: summed over the
+    enemies, the share of each enemy's own predicted weight that covers the bearing (`MeleeGun.Traced.chance`; layer A
+    shows every enemy's positions). Also the head-on, linear and circular aims at the enemy aimed at.
+    A wave stays until it has passed its target by 20 px. At the bottom left, a table per target with a plan: its data
+    size ("hard to hit" once the guess-factor gun's bullet record is not clearly above 20 %), then per gun two hit
+    rates, "waves" over all our waves (a wave without a bullet weighs 1/8), by which the guess-factor, circular and
+    mirror guns are chosen, and "bullets" over the waves our bullets flew with, as if that gun had aimed each (their
+    count in the column's head), by which the anti-surfer and random guns replace the chosen gun against a target that
+    is hard to hit (`GunModel.choose`); the rate that decides a gun's place is the brighter one. Then the melee gun's
+    bullets' hit rate on any enemy over the battle; the gun that aimed our last bullet in yellow.
   - **M, movement** (melee and team battles): `MeleeMovement`'s last choice. Every candidate destination as a dark
     area coloured by its risk on a log scale against the others (dark blue safest to dark red), unlike the bright dots
     of the waves; a grey ring round the candidates also scored against the waves, the chosen destination ringed in
     dark orange and joined to us by a dashed line, and a violet line to the robot the gang defence draws us to.
-  - **P (or H), our positions:** where we were at the end of each of the last 80 turns, violet dots fading with age
-    (`PositionTrails`).
-  - **O, opponents' positions:** every enemy at each of its scans (ours or a teammate's) in the last 80 turns,
-    turquoise dots fading likewise.
+  - **H, position history:** where we were at the end of each of the last 80 turns, violet dots fading with age
+    (`PositionTrails`), and every enemy at each of its scans (ours or a teammate's) in the last 80 turns, turquoise
+    dots fading likewise.
   - **A, melee aim** (shown at a melee's start): the melee gun's last aim, for 20 turns after it (about the bullet's
-    flight): every predicted position of every enemy where the bullet arrives (`MeleeGun.traced`), coloured by the
-    weight covering its bearing from us (blue little to red most: there the gun aims), the aimed enemy's larger; a
-    grey line from each enemy's last scan to the weighted middle of its positions, where the gun expects it to go;
-    and the aim itself in light orange.
-  - **R, team radar:** the plan of `TeamRadar`, the same on every robot: each of our robots ringed in a colour of its
-    own (the painting one thicker), a short line where its radar points, a faint wedge over the arc it sweeps and a
-    line to each enemy it watches; each enemy ringed in its watcher's colour (grey if none), with the turns since the
-    team's last scan of it (red from 3).
+    flight): every predicted position of every enemy where the bullet arrives (`MeleeGun.traced`) as an empty square
+    half a robot wide, coloured by the weight covering its bearing from us (blue little to red most: there the gun
+    aims), the aimed enemy's drawn thicker; a grey line from each enemy's last scan to the weighted middle of its
+    positions, where the gun expects it to go; and the aim itself in dark orange.
+  - **B, bullet powers** (shown in every kind): the power beside each of our bullets in flight and each of our
+    teammates' in our bullets' yellow (not while layer G labels ours), and at the top of the column beside each enemy,
+    in dark red, the power of its last shot as fire detection saw it in this round (where an enemy's bullet flies we
+    do not know). A teammate's bullet is drawn where it has flown since its reported shot, until it leaves the field
+    or reaches a robot where we saw it last: its end nobody reports.
+  - **I, enemy info** (shown in every kind), in the column beside each enemy below its last power: the turns until its
+    gun is cool by fire detection's model of its gun heat, "7t" (`FireDetector.coolIn`; bright red when it can fire);
+    in yellow, behind an arrow to the left, its hit rate on us: its shots over the battle that hit us, those ours shot
+    down left out (in a melee or a team its shots are aimed at anyone, and robots of one type share the record); in
+    green, behind an arrow to the right, ours on it: the share of our bullets aimed at it over the battle that hit it,
+    each rate from 5 shots on; with two enemies or more alive, the turns since our side (we or a teammate) last
+    scanned it, "r1" (red from 3; a duel's radar locks). The arrows are drawn: Robocode draws a robot's text upright
+    from its baseline (`MirroredGraphics.drawString`), so they stand 4 px above the baseline, at the numbers' middle.
+  - **The column** stands 32 px right of the enemy's centre, clear of its gun, one row each from the top: B's power,
+    then I's four numbers. A layer switched off leaves its rows empty, so the others stay put.
+  - **R, team radar:** the plan of `TeamRadar`, the same on every robot: for each of our robots, in a colour of its
+    own, a short line where its radar points (the painting robot's thicker), a faint wedge over the arc it sweeps and
+    a line to each enemy it watches. No rings round the robots: they made the robots hard to tell apart. The lines lag
+    behind robots that move. An enemy's line ends where the team last scanned it, a turn ago at best when a teammate
+    scanned it (its scan reaches us a turn late, engine-model G-23), longer when the radar did not sweep it every turn
+    (the scan's age in layer I). The plan painted is the one the robot made in the last turn (`onPaint` runs before
+    the robot acts), so the lines start where our teammates were a turn ago; only the painting robot's own report
+    already gives its current position.
 - **Only while painting:** the shots and positions are traced, and the melee gun and the movement keep their
   candidates, only in the turns whose `onPaint` ran, so a battle without the GUI computes nothing more and replays as before.
 - **Colours:** Ogi is white with an orange radar and scan arc and fires yellow bullets, to be found among the robots

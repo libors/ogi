@@ -143,6 +143,16 @@ public final class GunModel {
         return scores[gun][1] == 0 ? Double.NaN : scores[gun][0] / scores[gun][1];
     }
 
+    /** A gun's hit rate over the waves with a bullet, by which the anti-surfer and random guns replace; NaN before. */
+    public double bulletHitRate(int gun) {
+        return bullets[gun][1] == 0 ? Double.NaN : bullets[gun][0] / bullets[gun][1];
+    }
+
+    /** The waves with a bullet a gun was scored on. */
+    public int bulletTries(int gun) {
+        return (int) bullets[gun][1];
+    }
+
     /**
      * Each gun's aim for a shot and the gun to follow: the guess-factor gun once it has
      * {@link GunParameters#minTries()} weighted tries and the better record, or when the circular gun has no aim;
@@ -169,8 +179,8 @@ public final class GunModel {
     }
 
     /**
-     * The guess-factor gun's weight over {@code bins} guess factors from −1 to 1 for a shot in the situation
-     * {@code features} ({@link GunData#coverage}), for the overlay; null without data.
+     * The guess-factor gun's chance to hit at each of {@code bins} guess factors from −1 to 1 for a shot in the
+     * situation {@code features} ({@link GunData#coverage}), for the overlay; null without data.
      */
     public double[] coverage(double[] features, int bins) {
         return data.coverage(features, bins);
@@ -226,7 +236,7 @@ public final class GunModel {
     }
 
     /** Whether the guess-factor gun's record over our bullets is not clearly above {@link #HARD_TO_HIT}. */
-    private boolean hardToHit() {
+    public boolean hardToHit() {
         double n = bullets[GUESS_FACTOR][1];
         if (n == 0) {
             return true;

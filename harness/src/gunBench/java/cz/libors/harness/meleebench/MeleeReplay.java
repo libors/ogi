@@ -144,7 +144,7 @@ final class MeleeReplay {
                         open++;
                     } else {
                         shots++;
-                        if (v >= 0) {
+                        if (v >= 0 && !battle.teammates().contains(v)) {
                             hits++;
                             damage += BulletMotion.damage(shot.fire().power());
                             if (battle.names().get(v).equals(gun.aimedAt())) {
@@ -199,7 +199,7 @@ final class MeleeReplay {
                         int v = verdict(battle, r, shot.fireTurn(), shot.fire().x(), shot.fire().y(), aim, powers[k]);
                         if (v != OPEN) {
                             counts[k][band][0]++;
-                            if (v >= 0) {
+                            if (v >= 0 && !battle.teammates().contains(v)) {
                                 counts[k][band][1]++;
                             }
                         }

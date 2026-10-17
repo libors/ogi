@@ -222,6 +222,8 @@ public final class WaveSurfer {
      * reference): in a melee we keep out of their way.
      */
     private final List<HitRange> teamBullets = new ArrayList<>();
+    /** The power of each enemy's last shot fire detection saw in this round, for the overlay. */
+    private final Map<String, Double> shotPowers = new HashMap<>();
     /** Our own states at the end of recent turns: {x, y, heading, velocity}, by turn. */
     private final Map<Long, double[]> ourStates = new HashMap<>();
     private final RobotHistory ours = new RobotHistory();
@@ -321,7 +323,10 @@ public final class WaveSurfer {
             detector.nearOtherRobot();
         }
         Optional<DetectedShot> shot = detector.scanned(time, x, y, velocity, energy);
-        shot.ifPresent(s -> addWave(s, followedTo));
+        shot.ifPresent(s -> {
+            shotPowers.put(name, s.power());
+            addWave(s, followedTo);
+        });
         return shot;
     }
 
@@ -435,6 +440,27 @@ public final class WaveSurfer {
     public double hitRateOnUs(String name) {
         int[] r = FIRE_RECORDS.getOrDefault(Names.base(name), new int[3]);
         return (r[1] + PRIOR_HITS) / (Math.max(0, r[0] - r[2]) + PRIOR_SHOTS);
+    }
+
+    /** The turns until the enemy's gun is cool by fire detection's model of its gun heat, −1 if we know nothing. */
+    public long coolIn(String name, long now) {
+        FireDetector detector = detectors.get(name);
+        return detector == null ? -1 : detector.coolIn(now);
+    }
+
+    /** The power of the enemy's last shot fire detection saw in this round, NaN before its first. */
+    public double shotPower(String name) {
+        return shotPowers.getOrDefault(name, Double.NaN);
+    }
+
+    /**
+     * The share of the enemy's shots over the battle that hit us, its bullets ours shot down left out, without a
+     * prior; NaN before {@code minShots}. In a melee or a team its shots are aimed at anyone.
+     */
+    public double hitsOnUsPerShot(String name, int minShots) {
+        int[] r = FIRE_RECORDS.getOrDefault(Names.base(name), new int[3]);
+        int shots = Math.max(0, r[0] - r[2]);
+        return shots < minShots ? Double.NaN : (double) r[1] / shots;
     }
 
     /** The power of the enemy's last shot in the battle, or {@link #FIRST_POWER} before its first. */

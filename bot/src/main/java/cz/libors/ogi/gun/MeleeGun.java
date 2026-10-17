@@ -190,6 +190,8 @@ public final class MeleeGun {
      *
      * @param bearings  each position's bearing from the bullet's origin
      * @param density   the weight of all positions that cover that bearing: the sum the aim takes the highest of
+     * @param chance    the chance a bullet along that bearing hits someone, as the positions estimate it: summed over
+     *                  the enemies, the share of each enemy's own weight that covers the bearing
      * @param weights   each position's own weight (its record's nearness, the enemy's distance)
      * @param xs        the positions
      * @param enemies   the enemy each position belongs to
@@ -197,9 +199,9 @@ public final class MeleeGun {
      * @param aim       the heading chosen, NaN without one
      * @param aimedAt   the enemy that weighed most there, or null
      */
-    public record Traced(double originX, double originY, double[] bearings, double[] density, double[] weights,
-                         double[] xs, double[] ys, String[] enemies, Map<String, double[]> enemyX, double aim,
-                         String aimedAt) {
+    public record Traced(double originX, double originY, double[] bearings, double[] density, double[] chance,
+                         double[] weights, double[] xs, double[] ys, String[] enemies, Map<String, double[]> enemyX,
+                         double aim, String aimedAt) {
     }
 
     public MeleeGun(Field field, Memory memory, MeleeGunParameters parameters) {
@@ -391,6 +393,8 @@ public final class MeleeGun {
         double bestWeight = 0;
         aimedAt = null;
         double[] density = tracing ? new double[candidates.size()] : null;
+        double[] chance = tracing ? new double[candidates.size()] : null;
+        double[] ownWeight = tracing ? ownWeights(candidates, owners) : null;
         for (int i = 0; i < candidates.size(); i++) {
             double a = candidates.get(i)[0];
             double sum = 0;
@@ -406,6 +410,9 @@ public final class MeleeGun {
                     // A triangle over the robot's width: a bullet through its middle counts most.
                     double w = other[2] * (1 - off / other[1]);
                     sum += w;
+                    if (chance != null) {
+                        chance[i] += w / ownWeight[j];
+                    }
                     if (w > strongest) {
                         strongest = w;
                         owner = owners.get(j);
@@ -421,12 +428,25 @@ public final class MeleeGun {
                 aimedAt = owner;
             }
         }
-        traced = density == null ? null : trace(ox, oy, candidates, owners, density, best);
+        traced = density == null ? null : trace(ox, oy, candidates, owners, density, chance, best);
         return best;
     }
 
+    /** For each position, the summed weight of all positions of its enemy. */
+    private static double[] ownWeights(List<double[]> candidates, List<String> owners) {
+        Map<String, Double> sums = new HashMap<>();
+        for (int j = 0; j < candidates.size(); j++) {
+            sums.merge(owners.get(j), candidates.get(j)[2], Double::sum);
+        }
+        double[] own = new double[candidates.size()];
+        for (int j = 0; j < own.length; j++) {
+            own[j] = sums.get(owners.get(j));
+        }
+        return own;
+    }
+
     private Traced trace(double ox, double oy, List<double[]> candidates, List<String> owners, double[] density,
-                         double aim) {
+                         double[] chance, double aim) {
         int n = candidates.size();
         double[] bearings = new double[n];
         double[] weights = new double[n];
@@ -441,7 +461,7 @@ public final class MeleeGun {
             Enemy e = enemies.get(owners.get(i));
             at.put(owners.get(i), new double[] {e.x, e.y});
         }
-        return new Traced(ox, oy, bearings, density, weights, xs, ys, owners.toArray(new String[0]), at, aim,
+        return new Traced(ox, oy, bearings, density, chance, weights, xs, ys, owners.toArray(new String[0]), at, aim,
                 aimedAt);
     }
 

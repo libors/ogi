@@ -4,8 +4,8 @@ import java.util.Arrays;
 import java.util.Locale;
 
 /**
- * The tunable numbers of the melee gun ({@link MeleeGun}). The bot plays with {@link #DEFAULT}; the offline melee
- * bench replays recorded battles with others.
+ * The tunable numbers of the melee gun ({@link MeleeGun}). The bot plays with {@link #DEFAULT} in a melee and with
+ * {@link #TEAM} in a team battle; the offline melee bench replays recorded battles with others.
  *
  * @param weights             one per feature, in the order of {@link MeleeGun#FEATURES}; the distance between two
  *                            situations is the square root of the sum of their weighted squared differences
@@ -39,6 +39,17 @@ public record MeleeGunParameters(double[] weights, int neighbours, double wallRa
     public static final MeleeGunParameters DEFAULT = new MeleeGunParameters(
             new double[] {2.8, 1.4, 7.84, 22.4, 1.96, 0.5, 0.25, 0.5, 0.2, 0, 2, 2}, 24, 560, 1680, 0.8, 0.245, 2, 32,
             140, 1500, true, true, false);
+
+    /**
+     * In a team battle: the field (1200 × 1200), the distances and the enemies' movement differ from the melee
+     * rumble's, so the team has numbers of its own, tuned on the melee bench over half of 132 TeamRumble battles' logs
+     * (each of our five robots replayed), checked on the other half: nearer enemies weigh more, a position covers
+     * more of the robot's width and the neighbours weigh more alike than in a melee; the counts are the melee's. Our
+     * hit rate rose from 31.2 to 31.6 % and the TeamRumble score by 1.0 ± 0.4 APS (2026-10-17).
+     */
+    public static final MeleeGunParameters TEAM = new MeleeGunParameters(
+            new double[] {2.8, 1.4, 7.84, 22.4, 1.96, 0.5, 0.25, 0.5, 0.14, 0, 2, 2}, 24, 560, 1680, 1.6, 0.686, 2.8,
+            32, 140, 1500, true, true, false);
 
     public MeleeGunParameters {
         if (weights.length != MeleeGun.FEATURES) {

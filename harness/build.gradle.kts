@@ -376,9 +376,17 @@ fun recordArguments(robot: String, keys: ((String) -> String)?, home: String, fi
     }
 }
 
-/** The gun's debug properties, or against a melee set the melee gun's and every robot's position (melee bench). */
+/** The format of an opponent set ("1v1", "melee" or "team"), from its `format` line. */
+fun setFormat(opponentsFile: String): String =
+    File(opponentsFile).readLines().map { it.trim().split(Regex("\\s+")) }
+        .firstOrNull { it.size == 2 && it[0] == "format" }?.get(1) ?: "1v1"
+
+/**
+ * The gun's debug properties, or against a melee or team set the melee gun's and every robot's position (melee
+ * bench).
+ */
 fun gunLogKeys(opponentsFile: String): String =
-    if (File(opponentsFile).readLines().any { it.trim().split(Regex("\\s+")) == listOf("format", "melee") })
+    if (setFormat(opponentsFile) in setOf("melee", "team"))
         "meleescan,meleedeath,meleeaim,meleefire,meleeend,hitbybullet,duelstart,@positions"
     else "gunshot,gunpass,gunshield"
 
@@ -750,7 +758,7 @@ abstract class SnapshotJars : DefaultTask() {
             writeText(version)
         }
         val target = snapshots.get().asFile
-        val names = listOf("Ogi", "OgiTeam", "OgiGunLog").map { "cz.libors.${it}_$version.jar" }
+        val names = listOf("Ogi", "OgiTeam", "OgiGunLog", "OgiGunLogTeam").map { "cz.libors.${it}_$version.jar" }
         if (names.all { target.resolve(it).exists() }) {
             logger.lifecycle("Working tree snapshot $version: jars exist")
             return
@@ -765,7 +773,7 @@ abstract class SnapshotJars : DefaultTask() {
         exec.exec {
             workingDir = source
             commandLine("sh", "./gradlew", "--quiet", ":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar",
-                "-PbotVersion=$version")
+                ":bot:gunLogTeamJar", "-PbotVersion=$version")
         }
         target.mkdirs()
         names.forEach { source.resolve("bot/build/robots/$it").copyTo(target.resolve(it), overwrite = true) }
@@ -829,16 +837,19 @@ tasks.register<JavaExec>("submitGunLogs") {
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val passed = listOf("pairs", "draws", "seed", "rounds", "starts", "note", "timeout")
+    val passed = listOf("pairs", "draws", "seed", "rounds", "starts", "note", "timeout", "debug")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val versionFile = snapshotVersionFile
     val port = providers.gradleProperty("port").orElse("8765")
     argumentProviders.add(CommandLineArgumentProvider {
         val version = versionFile.get().asFile.readText().trim()
         val keys = gunLogKeys(localFile(opponents.get()))
-        listOf("state=" + queueDir.absolutePath, "type=record", "robot=cz.libors.OgiGunLog", "version=$version",
+        // Against a team set the subject is five OgiGunLog as a team.
+        val robot = if (setFormat(localFile(opponents.get())) == "team") "cz.libors.OgiGunLogTeam"
+            else "cz.libors.OgiGunLog"
+        listOf("state=" + queueDir.absolutePath, "type=record", "robot=$robot", "version=$version",
             "keys=$keys", "opponents=" + localFile(opponents.get()),
-            "jar=" + snapshotsDir.file("cz.libors.OgiGunLog_$version.jar").asFile.absolutePath,
+            "jar=" + snapshotsDir.file("${robot}_$version.jar").asFile.absolutePath,
             "port=" + port.get()) + passed
     })
 }

@@ -44,11 +44,17 @@ public final class Trace {
      *
      * @param time     the turn the plan was made in; it is the shot of the turn after
      * @param aims     each gun's aim, NaN if it had none
-     * @param hitRates each gun's virtual hit rate, NaN before it was scored
+     * @param hitRates each gun's virtual hit rate, NaN before it was scored: the guess-factor, circular and mirror
+     *                 guns are chosen by it
+     * @param bulletRates each gun's hit rate over the waves with a bullet, NaN before: the anti-surfer and random guns
+     *                 replace the chosen one by it, against a target that is hard to hit
+     * @param bulletTries the waves with a bullet each gun was scored on
+     * @param hardToHit whether the target is hard to hit, so that the anti-surfer and random guns may replace
      */
     public record GunView(String target, long time, double originX, double originY, double targetX, double targetY,
                           double reference, double escape, double power, int direction, double[] aims, int chosen,
-                          String[] gunNames, double[] hitRates, int data) {
+                          String[] gunNames, double[] hitRates, int data, double[] bulletRates, int[] bulletTries,
+                          boolean hardToHit) {
     }
 
     /**
@@ -87,6 +93,25 @@ public final class Trace {
      * @param enemies the enemies' scanned positions, {x, y, age in turns}
      */
     public record PositionView(double[][] ours, double[][] enemies) {
+    }
+
+    /**
+     * What the overlay shows beside each enemy (layer I).
+     *
+     * @param enemies {x, y, turns until its gun is cool by fire detection (−1 if unknown), the share of our bullets
+     *                aimed at it that hit it over the battle (NaN before enough ended), the share of its shots that hit
+     *                us over the battle (NaN before enough), the turns since our side's last scan of it (−1: not shown)}
+     */
+    public record InfoView(double[][] enemies) {
+    }
+
+    /**
+     * The bullets' powers (layer B).
+     *
+     * @param ours    our and our teammates' bullets in flight, {x, y, power}
+     * @param enemies each enemy's last shot as fire detection saw it, {x, y, power} at the enemy's last scan
+     */
+    public record PowerView(double[][] ours, double[][] enemies) {
     }
 
     /**
@@ -149,6 +174,8 @@ public final class Trace {
     private MoveView move;
     private PositionView positions;
     private MeleeAimView meleeAim;
+    private PowerView powers;
+    private InfoView info;
     private String lastShotTarget;
     private String lastShotGun;
     private double meleeHitRate = Double.NaN;
@@ -164,6 +191,8 @@ public final class Trace {
         move = null;
         positions = null;
         meleeAim = null;
+        powers = null;
+        info = null;
         lastShotTarget = null;
         lastShotGun = null;
         meleeHitRate = Double.NaN;
@@ -200,6 +229,24 @@ public final class Trace {
     /** The melee gun's last aim, null if none is shown. */
     public MeleeAimView meleeAim() {
         return meleeAim;
+    }
+
+    public void info(InfoView view) {
+        info = view;
+    }
+
+    /** What is shown beside each enemy, null if nothing. */
+    public InfoView info() {
+        return info;
+    }
+
+    public void powers(PowerView view) {
+        powers = view;
+    }
+
+    /** The bullets' powers, null if none are shown. */
+    public PowerView powers() {
+        return powers;
     }
 
     public void positions(PositionView view) {

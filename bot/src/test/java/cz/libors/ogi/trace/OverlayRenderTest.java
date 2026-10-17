@@ -167,6 +167,13 @@ class OverlayRenderTest {
         trace.radar(radar.describe(412, "ours (1)"));
         assertNotNull(trace.radar());
 
+        // The bullets' powers: two of our team's bullets in flight, two enemies' last shots.
+        trace.powers(new Trace.PowerView(new double[][] {{300, 520, 1.9}, {640, 300, 3.0}},
+                new double[][] {{600, 420, 2.4}, {820, 650, 0.9}}));
+        // Beside the enemies: the turns until their guns are cool (one can fire now), our hit rate on two of them.
+        trace.info(new Trace.InfoView(new double[][] {{600, 420, 7, 0.31, 0.12, 1}, {820, 650, 0, Double.NaN, 0.2, 4},
+                {750, 250, -1, 0.12, Double.NaN, -1}}));
+
         BufferedImage image = new BufferedImage((int) field.width(), (int) field.height(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
         g.setColor(new Color(30, 30, 30));

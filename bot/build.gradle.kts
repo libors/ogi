@@ -15,6 +15,8 @@ val teamName = "OgiTeam"
 val teamSize = 5
 // Ogi with the gun log for the offline gun bench; local and harness use only, never in a rumble jar.
 val gunLogName = "OgiGunLog"
+// Five of them as a team, for the melee gun's logs of team battles.
+val gunLogTeamName = "OgiGunLogTeam"
 
 dependencies {
     compileOnly("net.sf.robocode:robocode.api:$robocodeVersion")
@@ -53,6 +55,7 @@ val generateRobotFiles = tasks.register("generateRobotFiles") {
     val author = botAuthor
     val rcVersion = robocodeVersion
     val members = List(teamSize) { robotClass }.joinToString(",")
+    val gunLogMembers = List(teamSize) { "$robotPackage.$gunLogName" }.joinToString(",")
     inputs.property("version", version)
     inputs.property("author", author)
     inputs.property("robocodeVersion", rcVersion)
@@ -84,6 +87,16 @@ val generateRobotFiles = tasks.register("generateRobotFiles") {
             robocode.version=$rcVersion
             robot.java.source.included=false
             robot.include.source=false
+            """.trimIndent() + "\n"
+        )
+        dir.resolve("$gunLogTeamName.team").writeText(
+            """
+            team.members=$gunLogMembers
+            team.version=$version
+            team.author.name=$author
+            team.description=Five OgiGunLog for the melee gun's logs of team battles; not for a rumble
+            team.webpage=
+            robocode.version=$rcVersion
             """.trimIndent() + "\n"
         )
         dir.resolve("$teamName.team").writeText(
@@ -139,7 +152,7 @@ val teamJar = tasks.register<Jar>("teamJar") {
     )
     exclude(gunLogClasses)
     from(generateRobotFiles) {
-        exclude("**/$gunLogName.properties")
+        exclude("**/$gunLogName.properties", "**/$gunLogTeamName.team")
     }
     doLast { requireNoGunLog(archiveFile.get().asFile) }
 }
@@ -152,6 +165,17 @@ val gunLogJar = tasks.register<Jar>("gunLogJar") {
     }
 }
 
+val gunLogTeamJar = tasks.register<Jar>("gunLogTeamJar") {
+    description = "Packages five OgiGunLog as a team for the melee gun's logs of team battles; never for a rumble."
+    robocodeJar(
+        "$robotPackage.${gunLogTeamName}_$botVersion.jar",
+        List(teamSize) { "$robotPackage.$gunLogName" }.joinToString(","),
+    )
+    from(generateRobotFiles) {
+        include("**/$gunLogName.properties", "**/$gunLogTeamName.team")
+    }
+}
+
 tasks.assemble {
-    dependsOn(robotJar, teamJar, gunLogJar)
+    dependsOn(robotJar, teamJar, gunLogJar, gunLogTeamJar)
 }
