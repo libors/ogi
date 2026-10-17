@@ -33,9 +33,8 @@ import java.util.Arrays;
  * errors match within {@link #MATCH}; the model whose offset matches the most bullets predicts, the smaller offset on
  * a tie. Without bullets, head-on with no offset.
  *
- * <p>Some guns switch to an aim a bin off for runs of shots. Following such a run after two of its shots catches
- * more of them against some bots and provokes more of them against others (a guess-factor gun hit by the bullet
- * we did not shoot down), so the aim does not follow runs.
+ * <p>Some guns switch to an aim a bin off for runs of shots; the aim does not follow such runs (why: bot.md "Bullet
+ * shield", Where the enemy aims).
  *
  * <p>It also keeps how far its predictions missed the recent bullets, before each was learned: a gun that aims with a
  * little noise needs a wider margin than one that aims to the last bit ({@link #neededMargin}).

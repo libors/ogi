@@ -10,14 +10,8 @@ import cz.libors.ogi.gun.RobotHistory;
  * our lateral velocity rounded and one on it truncated to whole pixels per turn ({@link LateralHistory}). Then guns
  * that robots of the rumble use and the first ones miss: the linear lead without the arc sine, our lateral velocity
  * averaged over 5 turns, and half, three quarters and five quarters of the linear lead. Such a gun aims in the turn
- * before it fires, from its position and its scan of us then. Measured on foreign robots (2026-10-09, full
- * recordings): head-on bots match exactly, linear bots one of the two linear aims within a few milliradians.
- *
- * <p>The windows and the match length are ours (2026-10-11, full recordings against foreign robots): of the windows
- * 5 … 60, 20 and 40 explained most of the bullets of the robots that average our lateral velocity; matches of at
- * most 20, 40 and 60 symbols explained about as many bullets of the robots that match its pattern, more than 10. The
- * last five came from the danger bench on recordings against the whole rumble (2026-10-12): each explained more
- * bullets of some bots than the others together, and the five together of 143 bots.
+ * before it fires, from its position and its scan of us then. How these guns, windows and match lengths were found on
+ * recordings of foreign robots: bot.md "Movement", An ensemble.
  */
 public final class SimpleAims {
 

@@ -36,19 +36,12 @@ public record DangerParameters(double[] weights, double neighbourScale, int maxN
                                double simpleBandwidth, double temper, double decay, double share, double flatPrior,
                                int flatWindow) {
 
-    /** One histogram of all bullets, as the surfer had until 2026-10-09: the baseline of the danger bench. */
+    /** One histogram of all bullets, the surfer's first model: the baseline of the danger bench. */
     public static final DangerParameters HISTOGRAM =
             new DangerParameters(new double[] {3, 3, 1.5, 2.5, 2, 1.5, 3, 1, 1.5, 2}, 1, 50, 1, 0, 1, 1, 0, 1, 1, 1,
                     0, 0, 1000);
 
-    /**
-     * Tuned on the danger bench (2026-10-09): coordinate searches on full recordings of 125 foreign opponents, checked
-     * on other seeds. The bullet's flight time weighs most, then our lateral velocity; the turns since our last
-     * reversal and the curve of our path not at all. The simple guns start at 0.28 of the data each and the flattener
-     * at 0.3; all follow their record softly (temper 0.245), forgetting 8 % of it per observed bullet. The tuning saw
-     * the first four simple guns; the averaged and pattern guns came later with the same prior, checked on the bench
-     * and in battles but not tuned.
-     */
+    /** Tuned on the danger bench, the later simple guns with the same prior (bot.md "Movement", Danger). */
     public static final DangerParameters DEFAULT =
             new DangerParameters(new double[] {8.23, 3, 1.44, 1.225, 0, 1.05, 2.1, 1.4, 1.029, 0}, 1.4, 18, 0.686, 1,
                     9.8, 8, 0.28, 0.686, 0.245, 0.92, 0, 0.3, 1000);

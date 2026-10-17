@@ -4,6 +4,7 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.move.MeleeMovement;
 import cz.libors.ogi.move.MeleeMovementParameters;
+import cz.libors.ogi.move.Move;
 import cz.libors.ogi.physics.BulletMotion;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.physics.RobotBox;
@@ -220,9 +221,9 @@ public final class PositionBench {
         double[][] path = new double[horizon + 1][];
         path[0] = new double[] {r.x, r.y};
         for (int k = 1; k <= horizon; k++) {
-            double[] cmd = MeleeMovement.driveTo(r.x, r.y, Angles.fromRobocode(r.bodyHeading), dx, dy);
-            r.distanceRemaining = cmd[0];
-            r.bodyTurnRemaining = cmd[1];
+            Move cmd = Move.to(r.x, r.y, Angles.fromRobocode(r.bodyHeading), dx, dy);
+            r.distanceRemaining = cmd.distance();
+            r.bodyTurnRemaining = cmd.rightTurn();
             RobotMotion.move(r, battle.width(), battle.height(), battle.coolingRate());
             path[k] = new double[] {r.x, r.y};
         }

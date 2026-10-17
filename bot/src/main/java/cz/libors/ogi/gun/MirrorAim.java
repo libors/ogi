@@ -15,8 +15,8 @@ import java.util.Map;
  *
  * <p>For every lag k from 0 to {@link #MAX_LAG} turns, the enemy's position at the end of turn t is fitted by least
  * squares on ours at the end of turn t − k, as an affine map (any mirror, any centre, a shrink at the walls). The sums
- * last for the battle (static, per robot, engine-model G-22) and grow by one pair per lag in every turn with a scan;
- * the lag with the least residual wins, once it has {@link #MIN_PAIRS} pairs and the map explains at least
+ * last for the battle (a {@link Memory}, which the bot keeps in a static, engine-model G-22) and grow by one pair per
+ * lag in every turn with a scan; the lag with the least residual wins, once it has {@link #MIN_PAIRS} pairs and the map explains at least
  * {@link #MIN_FIT} of the variance of the enemy's position. Robots that drive at us fit too (they go where we were),
  * robots that orbit us do not.
  *
@@ -34,8 +34,10 @@ public final class MirrorAim {
     static final double MIN_FIT = 0.5;
     private static final int MAX_FLIGHT_TURNS = 150;
     private static final int SUMS = 13;
-    /** Per enemy and lag, the sums of the least squares over the battle. */
-    private static final Map<String, double[][]> SUMS_BY_ENEMY = new HashMap<>();
+    /** Per enemy, by its own name, and per lag, the sums of the least squares over the battle. */
+    public static final class Memory {
+        final Map<String, double[][]> sums = new HashMap<>();
+    }
 
     /** A fitted map: the target at turn t is (a11 x + a12 y + bx, a21 x + a22 y + by) of our position at t − lag. */
     public record Fit(double a11, double a12, double a21, double a22, double bx, double by, int lag, double explained) {
@@ -50,14 +52,21 @@ public final class MirrorAim {
     }
 
     private final Field field;
+    private final Memory memory;
     /** Our positions at the end of the last turns of this round, by turn modulo the buffer. */
     private final double[] ourX = new double[MAX_LAG + 1];
     private final double[] ourY = new double[MAX_LAG + 1];
     private final long[] ourTime = new long[MAX_LAG + 1];
     private long latest = -1;
 
+    /** A mirror gun with a memory of its own, as for a battle of one round. */
     public MirrorAim(Field field) {
+        this(field, new Memory());
+    }
+
+    public MirrorAim(Field field, Memory memory) {
         this.field = field;
+        this.memory = memory;
         Arrays.fill(ourTime, -1);
     }
 
@@ -75,7 +84,7 @@ public final class MirrorAim {
      * known.
      */
     public void scanned(String name, long time, double x, double y) {
-        double[][] sums = SUMS_BY_ENEMY.computeIfAbsent(name, n -> new double[MAX_LAG + 1][SUMS]);
+        double[][] sums = memory.sums.computeIfAbsent(name, n -> new double[MAX_LAG + 1][SUMS]);
         for (int k = 0; k <= MAX_LAG; k++) {
             int i = index(time - k);
             if (ourTime[i] == time - k) {
@@ -86,7 +95,7 @@ public final class MirrorAim {
 
     /** The map of the lag with the least residual, or null while none explains enough of the enemy's moves. */
     public Fit fit(String name) {
-        double[][] sums = SUMS_BY_ENEMY.get(name);
+        double[][] sums = memory.sums.get(name);
         if (sums == null) {
             return null;
         }

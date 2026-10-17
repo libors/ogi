@@ -262,7 +262,7 @@ class GunTest {
     void aBulletShotDownIsLearnedAsVirtual() {
         for (boolean shotDown : new boolean[] {false, true}) {
             String name = "standing-" + shotDown;
-            GuessFactorGun gun = new GuessFactorGun(FIELD);
+            VirtualGuns gun = new VirtualGuns(FIELD);
             Boolean real = null;
             for (long t = 0; t <= 100 && real == null; t++) {
                 gun.scanned(name, t, 500, 300, 0, 0);

@@ -9,7 +9,9 @@ import java.util.Random;
 
 /**
  * Orbits the target at a preferred distance, switches direction at random intervals, smooths along walls and keeps
- * away from teammates. Walking-skeleton movement, not a strategy.
+ * away from teammates: the duel's movement while no enemy wave is in the air, the enemy's gun is hot and it does not
+ * drive at us (bot.md "A turn"). Kept apart from the surfer's orbit on purpose (bot.md "Movement", Without an enemy
+ * wave).
  */
 public final class OrbitMovement {
 

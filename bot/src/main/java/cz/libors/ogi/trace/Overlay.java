@@ -1,5 +1,7 @@
 package cz.libors.ogi.trace;
 
+import cz.libors.ogi.world.BattleKind;
+
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -158,12 +160,8 @@ public final class Overlay {
     private static final int MELEE_AIM = 5;
     private static final int POWERS = 6;
     private static final int INFO = 7;
-    /** The kinds of battle, for the layers offered and shown at its start ({@link #battle}). */
-    public static final int DUEL = 0;
-    public static final int MELEE = 1;
-    public static final int TEAM = 2;
-    /** The kind of this battle, set at its first paint; −1 before. */
-    private static int kind = -1;
+    /** The kind of this battle, set at its first paint; null before. */
+    private static BattleKind kind;
     /**
      * The layers shown before a melee's or a team battle's round came down to one enemy ({@link #duel}), null while
      * it has not.
@@ -179,21 +177,21 @@ public final class Overlay {
      * the melee aim, and in a team battle the radar, where the waves of all robots would cover each other; the position
      * history, the bullet powers and the enemy info in every kind. Keys change them afterwards.
      */
-    public static void battle(int battleKind) {
-        if (kind >= 0) {
+    public static void battle(BattleKind battleKind) {
+        if (kind != null) {
             return;
         }
         kind = battleKind;
         Arrays.fill(OFFERED, true);
-        OFFERED[MOVE] = kind != DUEL;
-        OFFERED[MELEE_AIM] = kind != DUEL;
-        OFFERED[RADAR] = kind == TEAM;
-        SHOWN[ENEMY_WAVES] = kind == DUEL;
-        SHOWN[GUN_WAVES] = kind == DUEL;
-        SHOWN[MOVE] = kind == MELEE;
-        SHOWN[RADAR] = kind == TEAM;
+        OFFERED[MOVE] = kind != BattleKind.DUEL;
+        OFFERED[MELEE_AIM] = kind != BattleKind.DUEL;
+        OFFERED[RADAR] = kind == BattleKind.TEAM;
+        SHOWN[ENEMY_WAVES] = kind == BattleKind.DUEL;
+        SHOWN[GUN_WAVES] = kind == BattleKind.DUEL;
+        SHOWN[MOVE] = kind == BattleKind.MELEE;
+        SHOWN[RADAR] = kind == BattleKind.TEAM;
         SHOWN[HISTORY] = true;
-        SHOWN[MELEE_AIM] = kind == MELEE;
+        SHOWN[MELEE_AIM] = kind == BattleKind.MELEE;
         SHOWN[POWERS] = true;
         SHOWN[INFO] = true;
     }
@@ -204,7 +202,7 @@ public final class Overlay {
      * the next round, when the layers shown before come back. Keys change them meanwhile.
      */
     public static void duel(boolean duel) {
-        if (kind == DUEL || kind < 0) {
+        if (kind == null || kind == BattleKind.DUEL) {
             return;
         }
         if (duel && beforeDuel == null) {
@@ -212,7 +210,7 @@ public final class Overlay {
             SHOWN[ENEMY_WAVES] = true;
             SHOWN[GUN_WAVES] = true;
             SHOWN[MELEE_AIM] = false;
-            SHOWN[MOVE] &= kind == TEAM;
+            SHOWN[MOVE] &= kind == BattleKind.TEAM;
         } else if (!duel && beforeDuel != null) {
             System.arraycopy(beforeDuel, 0, SHOWN, 0, SHOWN.length);
             beforeDuel = null;
@@ -221,7 +219,7 @@ public final class Overlay {
 
     /** Offers and shows every layer, for a test that paints them all. */
     static void showAll() {
-        kind = TEAM;
+        kind = BattleKind.TEAM;
         Arrays.fill(OFFERED, true);
         Arrays.fill(SHOWN, true);
     }
@@ -496,13 +494,13 @@ public final class Overlay {
      */
     private static void paintPowers(Graphics2D g, Trace.PowerView v) {
         g.setColor(BULLET);
-        for (double[] b : SHOWN[GUN_WAVES] ? new double[0][] : v.ours()) {
-            g.drawString(String.format(Locale.ROOT, "%.1f", b[2]), (float) (b[0] + 6), (float) (b[1] + 4));
+        for (Trace.PowerMark b : SHOWN[GUN_WAVES] ? List.<Trace.PowerMark>of() : v.ours()) {
+            g.drawString(String.format(Locale.ROOT, "%.1f", b.power()), (float) (b.x() + 6), (float) (b.y() + 4));
         }
         g.setColor(ENEMY_SHOT);
-        for (double[] e : v.enemies()) {
-            g.drawString(String.format(Locale.ROOT, "%.1f", e[2]), (float) (e[0] + LABEL_X),
-                    (float) (e[1] + ROW_POWER));
+        for (Trace.PowerMark e : v.enemies()) {
+            g.drawString(String.format(Locale.ROOT, "%.1f", e.power()), (float) (e.x() + LABEL_X),
+                    (float) (e.y() + ROW_POWER));
         }
     }
 
@@ -513,26 +511,26 @@ public final class Overlay {
      */
     private static void paintInfo(Graphics2D g, Trace.InfoView v) {
         g.setStroke(new BasicStroke(1.2f));
-        for (double[] e : v.enemies()) {
-            float x = (float) (e[0] + LABEL_X);
+        for (Trace.EnemyInfo e : v.enemies()) {
+            float x = (float) (e.x() + LABEL_X);
             float rate = (float) (x + ARROW_LENGTH + ARROW_GAP);
-            if (e[2] >= 0) {
-                g.setColor(e[2] == 0 ? GUN_COOL : GUN_HOT);
-                g.drawString(Math.round(e[2]) + "t", x, (float) (e[1] + ROW_COOL));
+            if (e.coolIn() >= 0) {
+                g.setColor(e.coolIn() == 0 ? GUN_COOL : GUN_HOT);
+                g.drawString(e.coolIn() + "t", x, (float) (e.y() + ROW_COOL));
             }
-            if (!Double.isNaN(e[4])) {
+            if (!Double.isNaN(e.theirRate())) {
                 g.setColor(THEIR_RATE);
-                arrow(g, x, e[1] + ROW_THEIRS + 4, false);
-                g.drawString(Math.round(100 * e[4]) + "%", rate, (float) (e[1] + ROW_THEIRS));
+                arrow(g, x, e.y() + ROW_THEIRS + 4, false);
+                g.drawString(Math.round(100 * e.theirRate()) + "%", rate, (float) (e.y() + ROW_THEIRS));
             }
-            if (!Double.isNaN(e[3])) {
+            if (!Double.isNaN(e.ourRate())) {
                 g.setColor(OUR_RATE);
-                arrow(g, x, e[1] + ROW_OURS + 4, true);
-                g.drawString(Math.round(100 * e[3]) + "%", rate, (float) (e[1] + ROW_OURS));
+                arrow(g, x, e.y() + ROW_OURS + 4, true);
+                g.drawString(Math.round(100 * e.ourRate()) + "%", rate, (float) (e.y() + ROW_OURS));
             }
-            if (e[5] >= 0) {
-                g.setColor(e[5] >= STALE_AGE ? STALE : TEXT);
-                g.drawString("r" + Math.round(e[5]), x, (float) (e[1] + ROW_SCAN_AGE));
+            if (e.scanAge() >= 0) {
+                g.setColor(e.scanAge() >= STALE_AGE ? STALE : TEXT);
+                g.drawString("r" + e.scanAge(), x, (float) (e.y() + ROW_SCAN_AGE));
             }
         }
         g.setStroke(new BasicStroke(1f));
@@ -545,7 +543,7 @@ public final class Overlay {
     private static void paintStates(Graphics2D g, Trace.StateView v) {
         g.setColor(STATE_TEXT);
         for (int i = 0; i < v.states().size(); i++) {
-            String s = v.states().get(i);
+            String s = v.states().get(i).label();
             g.drawString(s, (float) (v.x() - g.getFontMetrics().stringWidth(s) / 2.0),
                     (float) (v.y() + STATE_ROW + STATE_ROW_GAP * i));
         }

@@ -126,7 +126,11 @@ public class RandomProbe extends AdvancedRobot {
         if (fires() && chance(fireChance)) {
             double p = firePower();
             power = p;
+            double heat = getGunHeat();
+            double energy = getEnergy();
             fired = setFireBullet(p) != null;
+            // engine-model G-49: the getters include the shot set in this turn.
+            report("fireGetters", getTime(), p, heat, energy, getGunHeat(), getEnergy(), fired);
         }
         finishCommands();
         report("cmd", getTime(), getDistanceRemaining(), getTurnRemainingRadians(), getGunTurnRemainingRadians(),

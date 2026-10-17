@@ -1,7 +1,7 @@
 package cz.libors;
 
-import cz.libors.ogi.gun.GuessFactorGun;
 import cz.libors.ogi.gun.GunLog;
+import cz.libors.ogi.gun.VirtualGuns;
 import robocode.Bullet;
 import robocode.BulletHitBulletEvent;
 import robocode.HitByBulletEvent;
@@ -42,7 +42,7 @@ public class OgiGunLog extends Ogi {
     }
 
     @Override
-    protected void fired(Bullet bullet, GuessFactorGun.Plan plan) {
+    protected void fired(Bullet bullet, VirtualGuns.Plan plan) {
         if (bullet != null) {
             planOf.put(bullet, plan.time());
         }

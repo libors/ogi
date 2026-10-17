@@ -96,36 +96,72 @@ public final class Trace {
     }
 
     /**
-     * What the overlay shows beside each enemy (layer I).
+     * What the overlay shows beside one enemy (layer I), at its last scan's position.
      *
-     * @param enemies {x, y, turns until its gun is cool by fire detection (−1 if unknown), the share of our bullets
-     *                aimed at it that hit it over the battle (NaN before enough ended), the share of its shots that hit
-     *                us over the battle (NaN before enough), the turns since our side's last scan of it (−1: not shown)}
+     * @param coolIn    the turns until its gun is cool by fire detection, −1 if unknown
+     * @param ourRate   the share of our bullets aimed at it that hit it over the battle, NaN before enough ended
+     * @param theirRate the share of its shots that hit us over the battle, NaN before enough
+     * @param scanAge   the turns since our side's last scan of it, −1: not shown
      */
-    public record InfoView(double[][] enemies) {
+    public record EnemyInfo(double x, double y, long coolIn, double ourRate, double theirRate, long scanAge) {
     }
 
-    /** The names of our special states, in the order they are listed above us (layer I). */
-    public static final String[] STATES = {"shield", "anti-ram", "long-orbit", "ram", "saving-energy", "searching",
-            "ganged", "gang-buddy"};
+    /** What the overlay shows beside each enemy (layer I). */
+    public record InfoView(List<EnemyInfo> enemies) {
+    }
+
+    /** Our special states, in the order they are listed above us (layer I). */
+    public enum State {
+        /** Shooting the enemy's bullets down. */
+        SHIELD("shield"),
+        /** The surfer's ways against a robot that drives at us. */
+        ANTI_RAM("anti-ram"),
+        /** The orbit with no wave to surf. */
+        LONG_ORBIT("long-orbit"),
+        /** Ramming a disabled enemy. */
+        RAM("ram"),
+        /** The energy race's power. */
+        SAVING_ENERGY("saving-energy"),
+        /** The radar looking for enemies: the round's first look in a melee or a team, or no enemy seen lately. */
+        SEARCHING("searching"),
+        /** The gang defence draws us to a teammate. */
+        GANGED("ganged"),
+        /** The gang defence draws us to a ganged teammate. */
+        GANG_BUDDY("gang-buddy");
+
+        private final String label;
+
+        State(String label) {
+            this.label = label;
+        }
+
+        /** The state's name as the overlay writes it. */
+        public String label() {
+            return label;
+        }
+    }
 
     /**
      * Our special states in the last turn (layer I).
      *
-     * @param states the names of those that were on, from {@link #STATES}
+     * @param states those that were on, in the order of {@link State}
      * @param ganged whether the gang defence draws us to a teammate: we are ganged
      * @param helpX  the ganged teammate the gang defence draws us to as its helper, NaN if none
      */
-    public record StateView(double x, double y, List<String> states, boolean ganged, double helpX, double helpY) {
+    public record StateView(double x, double y, List<State> states, boolean ganged, double helpX, double helpY) {
+    }
+
+    /** A bullet's power where it is (layer B). */
+    public record PowerMark(double x, double y, double power) {
     }
 
     /**
      * The bullets' powers (layer B).
      *
-     * @param ours    our and our teammates' bullets in flight, {x, y, power}
-     * @param enemies each enemy's last shot as fire detection saw it, {x, y, power} at the enemy's last scan
+     * @param ours    our and our teammates' bullets in flight
+     * @param enemies each enemy's last shot as fire detection saw it, at the enemy's last scan
      */
-    public record PowerView(double[][] ours, double[][] enemies) {
+    public record PowerView(List<PowerMark> ours, List<PowerMark> enemies) {
     }
 
     /**

@@ -3,9 +3,9 @@ package cz.libors.ogi.trace;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.gun.CircularAim;
-import cz.libors.ogi.gun.GuessFactorGun;
 import cz.libors.ogi.gun.MeleeGun;
 import cz.libors.ogi.gun.MeleeGunParameters;
+import cz.libors.ogi.gun.VirtualGuns;
 import cz.libors.ogi.move.MeleeMovement;
 import cz.libors.ogi.radar.TeamRadar;
 import cz.libors.ogi.world.EnemyState;
@@ -43,7 +43,7 @@ class OverlayRenderTest {
         trace.start(400, field.width(), field.height());
 
         // Our bullet: a gun that has learned a target orbiting us at 300 px, reversing every 37 turns.
-        GuessFactorGun gun = new GuessFactorGun(field);
+        VirtualGuns gun = new VirtualGuns(field);
         EnemyState state = null;
         for (long t = 0; t <= 400; t++) {
             boolean forward = t % 74 < 37;
@@ -168,13 +168,16 @@ class OverlayRenderTest {
         assertNotNull(trace.radar());
 
         // The bullets' powers: two of our team's bullets in flight, two enemies' last shots.
-        trace.powers(new Trace.PowerView(new double[][] {{300, 520, 1.9}, {640, 300, 3.0}},
-                new double[][] {{600, 420, 2.4}, {820, 650, 0.9}}));
+        trace.powers(new Trace.PowerView(
+                List.of(new Trace.PowerMark(300, 520, 1.9), new Trace.PowerMark(640, 300, 3.0)),
+                List.of(new Trace.PowerMark(600, 420, 2.4), new Trace.PowerMark(820, 650, 0.9))));
         // Beside the enemies: the turns until their guns are cool (one can fire now), our hit rate on two of them.
-        trace.info(new Trace.InfoView(new double[][] {{600, 420, 7, 0.31, 0.12, 1}, {820, 650, 0, Double.NaN, 0.2, 4},
-                {750, 250, -1, 0.12, Double.NaN, -1}}));
+        trace.info(new Trace.InfoView(List.of(new Trace.EnemyInfo(600, 420, 7, 0.31, 0.12, 1),
+                new Trace.EnemyInfo(820, 650, 0, Double.NaN, 0.2, 4),
+                new Trace.EnemyInfo(750, 250, -1, 0.12, Double.NaN, -1))));
         // Our states: ganged and helped by the teammate at (300, 520).
-        trace.states(new Trace.StateView(400, 400, java.util.List.of("anti-ram", "ganged"), true, 300, 520));
+        trace.states(new Trace.StateView(400, 400, List.of(Trace.State.ANTI_RAM, Trace.State.GANGED), true, 300,
+                520));
         assertNotNull(trace.states());
 
         BufferedImage image = new BufferedImage((int) field.width(), (int) field.height(), BufferedImage.TYPE_INT_RGB);

@@ -72,35 +72,37 @@ class WaveSurferTest {
      */
     @Test
     void movesAwayFromAHeadOnShot() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         String enemy = "head-on";
         double ex = 650;
         double ey = 300;
         for (long t = 0; t <= 40; t++) {
             // Guns start hot (engine-model G-05); the enemy fires 2.0 in turn 32, the scan of turn 33 shows the drop.
-            surfer.scanned(enemy, t, ex, ey, 0, 0, t <= 32 ? 100 : 98);
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.update(t);
+            waves.scanned(enemy, t, ex, ey, 0, 0, t <= 32 ? 100 : 98);
+            waves.ourState(t, 250, 300, Math.PI / 2, 0);
+            waves.update(t);
         }
         EngineRobot me = new EngineRobot();
         me.x = 250;
         me.y = 300;
         me.bodyHeading = Angles.toRobocode(Math.PI / 2);
-        Optional<double[]> command = surfer.command(me, 40);
+        Optional<Move> command = surfer.command(me, 40);
         assertTrue(command.isPresent(), "a wave is in the air");
-        assertTrue(command.get()[0] != 0, "standing still in front of a head-on gun");
+        assertTrue(command.get().distance() != 0, "standing still in front of a head-on gun");
     }
 
     /** A dead robot's bullets keep flying and hitting (engine-model G-44), so the surfer still dodges them. */
     @Test
     void keepsTheWavesOfAShooterThatDied() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         for (long t = 0; t <= 40; t++) {
-            surfer.scanned("died", t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.update(t);
+            waves.scanned("died", t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
+            waves.ourState(t, 250, 300, Math.PI / 2, 0);
+            waves.update(t);
         }
-        surfer.robotDied("died");
+        waves.robotDied("died");
         assertTrue(surfer.command(us(250, 300), 40).isPresent(), "its bullet is still in the air");
     }
 
@@ -108,14 +110,15 @@ class WaveSurferTest {
     @Test
     void aRamAmongOtherRobotsIsNoShot() {
         for (boolean otherNear : new boolean[] {true, false}) {
-            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+            WaveSurfer surfer = new WaveSurfer(waves);
             for (long t = 0; t <= 40; t++) {
                 if (otherNear) {
-                    surfer.teammateSeen("teammate", t, 700, 330);
+                    waves.teammateSeen("teammate", t, 700, 330);
                 }
-                surfer.scanned("rams-" + otherNear, t, 650, 300, 0, 0, t <= 32 ? 100 : 99.4);
-                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-                surfer.update(t);
+                waves.scanned("rams-" + otherNear, t, 650, 300, 0, 0, t <= 32 ? 100 : 99.4);
+                waves.ourState(t, 250, 300, Math.PI / 2, 0);
+                waves.update(t);
             }
             assertEquals(!otherNear, surfer.command(us(250, 300), 40).isPresent(),
                     otherNear ? "a ram is no wave" : "alone, the same drop is a shot");
@@ -131,18 +134,19 @@ class WaveSurferTest {
     void movesAwayFromAnEnemyThatDrivesAtUs() {
         double[] away = new double[2];
         for (int driving = 0; driving <= 1; driving++) {
-            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+            WaveSurfer surfer = new WaveSurfer(waves);
             String name = driving == 1 ? "rammer" : "standing";
             long fire = 300;
             for (long t = 0; t <= fire + 8; t++) {
-                surfer.scanned(name, t, 400, 300, Math.PI, 8 * driving, t <= fire ? 100 : 98);
-                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-                surfer.update(t);
+                waves.scanned(name, t, 400, 300, Math.PI, 8 * driving, t <= fire ? 100 : 98);
+                waves.ourState(t, 250, 300, Math.PI / 2, 0);
+                waves.update(t);
             }
-            double[] command = surfer.command(us(250, 300), fire + 8).orElseThrow();
-            assertTrue(command[0] != 0, "stood in the way of " + name);
-            double heading = Angles.fromRobocode(us(250, 300).bodyHeading + command[1]);
-            double drive = command[0] < 0 ? heading + Math.PI : heading;
+            Move command = surfer.command(us(250, 300), fire + 8).orElseThrow();
+            assertTrue(command.distance() != 0, "stood in the way of " + name);
+            double heading = Angles.fromRobocode(us(250, 300).bodyHeading + command.rightTurn());
+            double drive = command.distance() < 0 ? heading + Math.PI : heading;
             assertTrue(-Math.cos(drive) > 0, name + ": drives towards the enemy: " + drive);
             away[driving] = -Math.cos(drive);
         }
@@ -155,23 +159,24 @@ class WaveSurferTest {
      */
     @Test
     void evadesAnEnemyThatDrivesAtUsBeforeItFires() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         String name = "charger";
         for (long t = 0; t <= 300; t++) {
-            surfer.scanned(name, t, 400, 300, Math.PI, 8, 100);
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.update(t);
+            waves.scanned(name, t, 400, 300, Math.PI, 8, 100);
+            waves.ourState(t, 250, 300, Math.PI / 2, 0);
+            waves.update(t);
         }
         for (long t = 301; t <= 305; t++) {
-            surfer.scanned(name, t, 700, 300, Math.PI, 8, 100);
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.update(t);
+            waves.scanned(name, t, 700, 300, Math.PI, 8, 100);
+            waves.ourState(t, 250, 300, Math.PI / 2, 0);
+            waves.update(t);
         }
         assertTrue(surfer.command(us(250, 300), 305).isEmpty(), "no wave is in the air");
-        double[] command = surfer.evade(us(250, 300), name, 305).orElseThrow();
-        double heading = Angles.fromRobocode(us(250, 300).bodyHeading + command[1]);
-        double drive = command[0] < 0 ? heading + Math.PI : heading;
-        assertTrue(command[0] == 0 || Math.cos(drive) <= 0, "drives towards it: " + drive);
+        Move command = surfer.evade(us(250, 300), name, 305).orElseThrow();
+        double heading = Angles.fromRobocode(us(250, 300).bodyHeading + command.rightTurn());
+        double drive = command.distance() < 0 ? heading + Math.PI : heading;
+        assertTrue(command.distance() == 0 || Math.cos(drive) <= 0, "drives towards it: " + drive);
         assertTrue(surfer.evade(us(250, 300), "someone else", 305).isEmpty(), "an enemy we never saw drives at us");
     }
 
@@ -181,12 +186,13 @@ class WaveSurferTest {
      */
     @Test
     void surfsTheWaveACoolGunCanFireNext() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         String enemy = "holds-fire";
         for (long t = 0; t <= 35; t++) {
-            surfer.scanned(enemy, t, 650, 300, 0, 0, 100);
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.update(t);
+            waves.scanned(enemy, t, 650, 300, 0, 0, 100);
+            waves.ourState(t, 250, 300, Math.PI / 2, 0);
+            waves.update(t);
             if (t == 20) {
                 assertTrue(surfer.gunHeatCommand(us(250, 300), enemy, t).isEmpty(), "its gun is still hot");
             }
@@ -203,18 +209,19 @@ class WaveSurferTest {
     @Test
     void aBulletOursShotDownIsLearnedWhereTheEngineReportsIt() {
         for (int back = 1; back <= 2; back++) {
-            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+            WaveSurfer surfer = new WaveSurfer(waves);
             String enemy = "shot-down-" + back;
             for (long t = 0; t <= 40; t++) {
-                surfer.scanned(enemy, t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
-                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-                surfer.update(t);
+                waves.scanned(enemy, t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
+                waves.ourState(t, 250, 300, Math.PI / 2, 0);
+                waves.update(t);
             }
             Trace trace = new Trace();
-            surfer.describe(40, trace);
+            waves.describe(40, trace);
             Trace.WaveView wave = trace.waves().get(0);
             double reported = wave.radius() - back * (20 - 3 * 2.0);
-            surfer.bulletHitBullet(enemy, 40, wave.x() - reported, wave.y(), Math.PI, 2.0);
+            waves.bulletHitBullet(enemy, 40, wave.x() - reported, wave.y(), Math.PI, 2.0);
             assertTrue(surfer.command(us(250, 300), 40).isEmpty(),
                     "the wave of the bullet shot down " + back + " moves back is still there");
         }
@@ -226,24 +233,25 @@ class WaveSurferTest {
      */
     @Test
     void aWaveWhoseBulletHitUsStillTeachesTheFlattener() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         String enemy = "hit-flattener";
         boolean hit = false;
         for (long t = 0; t <= 80; t++) {
-            surfer.scanned(enemy, t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
+            waves.scanned(enemy, t, 650, 300, 0, 0, t <= 32 ? 100 : 98);
             Trace trace = new Trace();
-            surfer.describe(t, trace);
+            waves.describe(t, trace);
             // The bullet reaches our box (we stand 400 px west of it) at the end of its move in turn t.
             if (!hit && !trace.waves().isEmpty() && trace.waves().get(0).radius() >= 400 - 18) {
                 Trace.WaveView wave = trace.waves().get(0);
-                surfer.hitByBullet(enemy, t, wave.x() - wave.radius(), wave.y(), Math.PI, 2.0);
+                waves.hitByBullet(enemy, t, wave.x() - wave.radius(), wave.y(), Math.PI, 2.0);
                 hit = true;
             }
-            surfer.ourState(t, 250, 300, Math.PI / 2, 0);
-            surfer.update(t);
+            waves.ourState(t, 250, 300, Math.PI / 2, 0);
+            waves.update(t);
         }
         assertTrue(hit, "the bullet reached us");
-        double[] visits = WaveSurfer.model(enemy)
+        double[] visits = waves.model(enemy)
                 .predict(new double[TargetingFeatures.COUNT], new double[SimpleAims.COUNT]).visits();
         double uniform = 1.0 / DangerModel.BINS;
         assertTrue(visits[DangerModel.bin(0)] > 2 * uniform, "no visit at guess factor 0: " + visits[DangerModel.bin(0)]);
@@ -263,9 +271,9 @@ class WaveSurferTest {
 
     @Test
     void aShadowAcrossTheOppositeBearingStaysNarrow() {
-        double[] across = WaveSurfer.shadowRange(0, 1, 0.5, Math.PI - 0.01, -Math.PI + 0.01);
+        double[] across = EnemyWaves.shadowRange(0, 1, 0.5, Math.PI - 0.01, -Math.PI + 0.01);
         assertEquals(0.04, across[1] - across[0], 1e-9, "0.02 rad of shadow at an escape angle of 0.5");
-        double[] ahead = WaveSurfer.shadowRange(0, -1, 0.5, 0.1, 0.2);
+        double[] ahead = EnemyWaves.shadowRange(0, -1, 0.5, 0.1, 0.2);
         assertEquals(-0.4, ahead[0], 1e-12);
         assertEquals(-0.2, ahead[1], 1e-12);
     }
@@ -293,16 +301,17 @@ class WaveSurferTest {
     @Test
     void aTeammatesBulletCountsOnlyOnAWayAcrossItsLine() {
         for (double heading : new double[] {0, Math.PI}) {
-            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+            WaveSurfer surfer = new WaveSurfer(waves);
             for (long t = 0; t <= 10; t++) {
-                surfer.ourState(t, 400, 300, Math.PI / 2, 0);
-                surfer.update(t);
+                waves.ourState(t, 400, 300, Math.PI / 2, 0);
+                waves.update(t);
             }
-            surfer.teammateFired("teammate", 10, 100, 300, heading, 2, 11);
-            surfer.ourState(11, 400, 300, Math.PI / 2, 0);
-            surfer.update(11);
-            double stay = surfer.meleeDanger(us(400, 300), 11, 400, 300);
-            double away = surfer.meleeDanger(us(400, 300), 11, 400, 500);
+            waves.teammateFired("teammate", 10, 100, 300, heading, 2, 11);
+            waves.ourState(11, 400, 300, Math.PI / 2, 0);
+            waves.update(11);
+            double stay = waves.meleeDanger(us(400, 300), 11, 400, 300);
+            double away = waves.meleeDanger(us(400, 300), 11, 400, 500);
             assertEquals(heading == 0 ? BulletMotion.damage(2) : 0, stay, 1e-12, "standing, heading " + heading);
             assertEquals(0, away, 1e-12, "out of its line, heading " + heading);
         }
@@ -320,23 +329,24 @@ class WaveSurferTest {
         for (int c = 0; c < 4; c++) {
             boolean team = c >= 2;
             boolean teammateNearer = c % 2 == 1;
-            WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+            EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+            WaveSurfer surfer = new WaveSurfer(waves);
             if (team) {
-                surfer.teamBattle();
+                waves.teamBattle();
             }
             for (long t = 0; t <= 34; t++) {
-                surfer.teammateSeen("teammate", t, teammateNearer ? 560 : 100, 500);
-                surfer.seen("friend-of-shooter", t, 640, 420, 0, 0, true);
-                surfer.seen("shooter", t, 650, 300, 0, 0, true);
-                surfer.ourState(t, 250, 300, Math.PI / 2, 0);
+                waves.teammateSeen("teammate", t, teammateNearer ? 560 : 100, 500);
+                waves.seen("friend-of-shooter", t, 640, 420, 0, 0, true);
+                waves.seen("shooter", t, 650, 300, 0, 0, true);
+                waves.ourState(t, 250, 300, Math.PI / 2, 0);
                 // Guns start hot (engine-model G-05); it fires 2.0 in turn 32, the scan of turn 33 shows the drop,
                 // and the team hands that scan on in turn 34.
                 if (t >= 1) {
-                    surfer.energySeen("shooter", t - 1, 650, 300, 0, t - 1 <= 32 ? 100 : 98, t);
+                    waves.energySeen("shooter", t - 1, 650, 300, 0, t - 1 <= 32 ? 100 : 98, t);
                 }
-                surfer.update(t);
+                waves.update(t);
             }
-            dangers[c] = surfer.meleeDanger(us(250, 300), 34, 250, 300);
+            dangers[c] = waves.meleeDanger(us(250, 300), 34, 250, 300);
         }
         assertTrue(dangers[0] > 0, "the wave counts");
         assertEquals(dangers[0], dangers[1], 1e-12, "in a melee the other enemy nearer to the shooter takes its aim");
@@ -354,41 +364,43 @@ class WaveSurferTest {
 
     @Test
     void orbitIsPerpendicularToTheWaveAndSlidesAlongWalls() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         Wave wave = new Wave("e", 650, 300, 0, 2);
         EngineRobot me = new EngineRobot();
         me.x = 650 - WaveSurfer.PREFERRED_DISTANCE;
         me.y = 300;
         me.bodyHeading = Angles.toRobocode(Math.PI / 2);
         // At the preferred distance, orbiting left (counter-clockwise around the origin) is heading south.
-        double[] left = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_LEFT);
-        assertEquals(-100, left[0], 1e-12, "drives backwards instead of turning around");
-        assertEquals(0, left[1], 1e-9);
-        double[] stop = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.STOP);
-        assertEquals(0, stop[0]);
+        Move left = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_LEFT);
+        assertEquals(-100, left.distance(), 1e-12, "drives backwards instead of turning around");
+        assertEquals(0, left.rightTurn(), 1e-9);
+        Move stop = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.STOP);
+        assertEquals(0, stop.distance());
         me.y = 560;
-        double[] nearTop = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
-        double heading = Angles.fromRobocode(me.bodyHeading + nearTop[1]);
-        double driveHeading = nearTop[0] < 0 ? heading + Math.PI : heading;
+        Move nearTop = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
+        double heading = Angles.fromRobocode(me.bodyHeading + nearTop.rightTurn());
+        double driveHeading = nearTop.distance() < 0 ? heading + Math.PI : heading;
         assertTrue(Math.sin(driveHeading) < 0.5, "turned away from the top wall: " + driveHeading);
     }
 
     @Test
     void beyondThePreferredDistanceTheWallSmoothingTurnsTowardsTheOrigin() {
-        WaveSurfer surfer = new WaveSurfer(FIELD, 0.1);
+        EnemyWaves waves = new EnemyWaves(FIELD, 0.1);
+        WaveSurfer surfer = new WaveSurfer(waves);
         Wave wave = new Wave("e", 650, 300, 0, 2);
         // 520 px from the origin, under the top wall: orbiting right (clockwise) heads for the wall.
         EngineRobot me = us(200, 560);
-        double[] right = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
-        double heading = Angles.fromRobocode(me.bodyHeading + right[1]);
-        double driveHeading = right[0] < 0 ? heading + Math.PI : heading;
+        Move right = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
+        double heading = Angles.fromRobocode(me.bodyHeading + right.rightTurn());
+        double driveHeading = right.distance() < 0 ? heading + Math.PI : heading;
         double towards = Math.cos(driveHeading - Angles.bearing(me.x, me.y, wave.x(), wave.y()));
         assertTrue(towards > 0.5, "turned towards the origin, not away from it: " + driveHeading);
         // Nearer than the preferred distance, it turns away from the origin.
         me = us(480, 560);
         right = surfer.orbit(me, wave.x(), wave.y(), WaveSurfer.ORBIT_RIGHT);
-        heading = Angles.fromRobocode(me.bodyHeading + right[1]);
-        driveHeading = right[0] < 0 ? heading + Math.PI : heading;
+        heading = Angles.fromRobocode(me.bodyHeading + right.rightTurn());
+        driveHeading = right.distance() < 0 ? heading + Math.PI : heading;
         towards = Math.cos(driveHeading - Angles.bearing(me.x, me.y, wave.x(), wave.y()));
         assertTrue(towards < 0, "turned away from the origin: " + driveHeading);
     }

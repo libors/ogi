@@ -22,7 +22,8 @@ import java.util.Optional;
  * gun turns towards it, and once the gun can fire in the next turn the plan is committed and fired then. Each enemy
  * bullet that hits us or one of ours teaches the enemy's {@code ShieldAim} where it aims.
  *
- * <p>The aim models last for the battle (static, per robot, engine-model G-22); targets and histories are per round.
+ * <p>The aim models and the powers last for the battle (a {@link Memory}, which the bot keeps in a static,
+ * engine-model G-22); targets and histories are per round.
  */
 public final class Shield {
 
@@ -35,9 +36,12 @@ public final class Shield {
     /** The margin we want against an enemy whose aim we have seen too few bullets of, in radians. */
     private static final double UNKNOWN_MARGIN = 1e-4;
 
-    private static final Map<String, ShieldAim> AIMS = new HashMap<>();
-    /** Per enemy, for the battle: {the sum of its shots' powers, their count}. */
-    private static final Map<String, double[]> POWERS = new HashMap<>();
+    /** What lasts for the battle, per enemy by its own name: how it aims, and its shots' powers. */
+    public static final class Memory {
+        final Map<String, ShieldAim> aims = new HashMap<>();
+        /** {the sum of its shots' powers, their count}. */
+        final Map<String, double[]> powers = new HashMap<>();
+    }
 
     /** An enemy bullet we mean to shoot down. */
     private static final class Target {
@@ -66,6 +70,7 @@ public final class Shield {
 
     private final Field field;
     private final double coolingRate;
+    private final Memory memory;
     /** Our states {x, y, heading, velocity, lateral direction to the enemy} at the end of recent turns. */
     private final Map<Long, double[]> ours = new HashMap<>();
     /** The last lateral direction we moved in relative to the enemy: 1 counter-clockwise, −1 clockwise. */
@@ -83,9 +88,15 @@ public final class Shield {
     private double lastPower = Double.NaN;
     private String event;
 
+    /** A shield with a memory of its own, as for a battle of one round. */
     public Shield(Field field, double coolingRate) {
+        this(field, coolingRate, new Memory());
+    }
+
+    public Shield(Field field, double coolingRate, Memory memory) {
         this.field = field;
         this.coolingRate = coolingRate;
+        this.memory = memory;
     }
 
     /** Our state at the end of turn {@code time}; heading mathematical. */
@@ -117,10 +128,10 @@ public final class Shield {
     public void shotDetected(DetectedShot shot) {
         lastDetected = shot.detectedAt();
         lastPower = shot.power();
-        double[] powers = POWERS.get(shot.shooter());
+        double[] powers = memory.powers.get(shot.shooter());
         if (powers == null) {
             powers = new double[2];
-            POWERS.put(shot.shooter(), powers);
+            memory.powers.put(shot.shooter(), powers);
         }
         powers[0] += shot.power();
         powers[1]++;
@@ -245,8 +256,8 @@ public final class Shield {
     }
 
     /** The mean power of this enemy's shots over the battle, or {@code fallback} before its first. */
-    public static double typicalPower(String name, double fallback) {
-        double[] powers = POWERS.get(name);
+    public double typicalPower(String name, double fallback) {
+        double[] powers = memory.powers.get(name);
         return powers == null ? fallback : powers[0] / powers[1];
     }
 
@@ -298,12 +309,12 @@ public final class Shield {
         }
     }
 
-    private static ShieldAim aim(String name) {
+    private ShieldAim aim(String name) {
         // No lambda: its first call costs milliseconds, enough to skip a turn.
-        ShieldAim aim = AIMS.get(name);
+        ShieldAim aim = memory.aims.get(name);
         if (aim == null) {
             aim = new ShieldAim();
-            AIMS.put(name, aim);
+            memory.aims.put(name, aim);
         }
         return aim;
     }

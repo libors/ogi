@@ -29,10 +29,7 @@ public record MeleeMovementParameters(double teammateWeight, double distanceExpo
                                       double waveWeight, double minWaveMedian, double teamPull, double helpDistance,
                                       double finishDistance, double finishEnergy, double finishPull) {
 
-    /**
-     * What the bot plays with. A teammate's weight 1 gained about 4 APS on the team rumble against 0.3, and 3 another
-     * 2; 10 gained nothing more (2026-10-16).
-     */
+    /** What the bot plays with (bot.md "Melee movement" and "Team play"). */
     public static final MeleeMovementParameters DEFAULT = new MeleeMovementParameters(3, 2, 1, true, 1, 0.5, 2, 400,
             0.9, 8, 3, 0.1, 0.5, 300, 350, 30, 1.0);
 

@@ -9,8 +9,8 @@ import cz.libors.ogi.geom.Angles;
  * <p>Five guns: the guess-factor gun over every wave (a wave without a bullet counts
  * {@link GunParameters#virtualWeight()}), circular targeting, the anti-surfer gun over the waves of our bullets
  * only, a random gun, and a mirror gun ({@link MirrorAim}). The anti-surfer gun takes a few nearest neighbours from
- * each of several views, the latest 30 and 150 bullets and all of them, their kernels summed. A surfer dodges our bullets, not our waves, and keeps
- * going where our bullets missed it until one hits it there, so the latest bullets say where it goes now (most of what
+ * each of several views, the latest 30 and 150 bullets and all of them, their kernels summed. A surfer dodges our
+ * bullets, not our waves, and keeps going where our bullets missed it until one hits it there, so the latest bullets say where it goes now (most of what
  * a bullet says about that is gone after about a round's worth of bullets); the longer views keep what does not
  * change. The random gun aims uniformly inside the target's {@link EscapeRange}, which a surfer cannot learn; it is
  * scored by the share of that range that would have hit, not by its one aim. The guess-factor gun is chosen over
@@ -20,7 +20,7 @@ import cz.libors.ogi.geom.Angles;
  * The mirror gun aims only at a robot whose position follows ours ({@link MirrorAim}); it replaces the guess-factor
  * or circular gun once it has {@link #MIRROR_MIN_TRIES} weighted tries and the better record.
  *
- * <p>The bot runs it inside {@link GuessFactorGun}; the offline gun bench runs it on the {@link GunLog} lines of a
+ * <p>The bot runs it inside {@link VirtualGuns}; the offline gun bench runs it on the {@link GunLog} lines of a
  * recorded battle. With the bot's parameters the bench therefore decides exactly as the bot did.
  */
 public final class GunModel {

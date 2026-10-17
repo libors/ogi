@@ -131,7 +131,17 @@ to-test.
   - **Bites when:** waves of a robot are dropped when it dies (melee and team battles).
   - **Source:** `RobotPeer.kill`, `BulletPeer.update`, `Battle.updateBullets`. · **Status:** tested:
     `BulletMotionReplayTest` ("hit robot, owner dead"; in `watch-melee` seed 1 a power-3 bullet hit 64 turns after
-    its owner died). `WaveSurfer` keeps a dead robot's waves.
+    its owner died). `EnemyWaves` keeps a dead robot's waves.
+- **G-49 The robot's getters include the shot it set in this turn.**
+  - **What:** once `setFireBullet(p)` (or `setFire`) is accepted, `getGunHeat()` returns the turn's heat plus
+    1 + p/5 and `getEnergy()` the turn's energy less p for the rest of the turn (p clamped as in G-06), although the
+    engine fires the bullet only when the turn's commands load (tick order step 2). A second shot in the turn is
+    therefore refused. Both are back to the engine's values at the next turn's status.
+  - **Bites when:** code that fires and then reads the getters in the same turn adds the shot itself and counts it
+    twice. Ogi's aim, planned after its shot, wants the heat and energy after it.
+  - **Source:** `BasicRobotProxy.setFireImpl` (`firedHeat`, `firedEnergy`), `getGunHeatImpl`, `getEnergyImpl`, reset
+    in `executeImpl`. · **Status:** tested: `FireGettersTest` (every shot the probes tried in the golden recordings:
+    the getters before and after `setFireBullet`).
 
 ## Movement
 

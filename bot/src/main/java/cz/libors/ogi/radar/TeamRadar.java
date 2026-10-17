@@ -20,8 +20,8 @@ import java.util.Set;
  * robots can manage it.
  *
  * <p>Left to themselves the robots all turn towards the enemy the team saw longest ago, and a teammate's scan reaches
- * the others a turn late, so about half of the scans repeat each other while an enemy goes unseen in two turns of
- * five. Here every robot computes the same assignment from what the whole team knew at the end of the last turn:
+ * the others a turn late, so their scans repeat each other while enemies go unseen (bot.md "Team radar"). Here every
+ * robot computes the same assignment from what the whole team knew at the end of the last turn:
  * where each of our robots is and where its radar points (as each reported), and every enemy's last scan taken before
  * this turn. No robot waits for another's decision, and they agree because their inputs and the computation are the
  * same (engine-model G-23: every report of the last turn is in).

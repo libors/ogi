@@ -33,11 +33,8 @@ import java.util.Optional;
 public final class ShieldPlanner {
 
     /**
-     * How far a standing robot may step aside for a shot, in pixels. A pixel gives ten times the margin, but guns
-     * that learn our movement learn a pixel's steps too and then miss us by them: against such bots steps of a pixel
-     * at the start of each round cost more hits than the margin saved. Of 0.05, 0.1 and 0.25 px, 0.1 lost the fewest
-     * points: half of it let more bullets of the slightly noisy guns through, and a quarter pixel taught the learning
-     * ones too.
+     * How far a standing robot may step aside for a shot, in pixels: a pixel gives ten times the margin, but guns that
+     * learn our movement learn a pixel's steps too (bot.md "Bullet shield", Standing).
      */
     public static final double WIGGLE = 0.1;
     /** The moves offered to a standing robot, relative to where it stands, and how large each counts. */

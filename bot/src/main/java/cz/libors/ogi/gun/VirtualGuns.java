@@ -18,8 +18,8 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Guess-factor targeting with nearest neighbours ("dynamic clustering"), chosen against circular targeting, an
- * anti-surfer gun, a random gun and a mirror gun by how often each would have hit.
+ * The virtual guns at each target: guess-factor targeting with nearest neighbours ("dynamic clustering"), circular
+ * targeting, an anti-surfer gun, a random gun and a mirror gun, chosen by how often each would have hit.
  *
  * <p>Each turn has a wave: the shot that could have been fired in it. When the wave has passed the target, its
  * {@link HitRange} says which guess factors would have hit, and the shot's features and that range join the data.
@@ -35,11 +35,12 @@ import java.util.Optional;
  * aim for a shot in turn t+1 is chosen in turn t, from our predicted position at the end of turn t+1 and the target's
  * scan of turn t. That plan becomes turn t+1's wave, fired or not, with the same features and the same reference.
  *
- * <p>What it knows about each enemy ({@link GunModel}: the data, the scores, the choice of gun) lives in a static
- * map, so it lasts for the whole battle; statics are per robot (engine-model G-22). The rest is per round. Every plan
+ * <p>What it knows about each enemy ({@link GunModel}: the data, the scores, the choice of gun) lasts for the whole
+ * battle in a {@link Memory}, which the bot keeps in a static (statics are per robot, engine-model G-22). The rest is
+ * per round. Every plan
  * and every passed wave can be logged ({@link GunLog}), so that the offline gun bench can replay the battle.
  */
-public final class GuessFactorGun {
+public final class VirtualGuns {
 
     public static final int GUESS_FACTOR = GunModel.GUESS_FACTOR;
     public static final int CIRCULAR = GunModel.CIRCULAR;
@@ -48,8 +49,13 @@ public final class GuessFactorGun {
     public static final int MIRROR = GunModel.MIRROR;
     private static final String[] GUN_NAMES = {"gf", "circular", "anti-surfer", "random", "mirror"};
 
-    /** What the guns learned of each enemy; the copies of one robot in an enemy team share it ({@link Names#base}). */
-    private static final Map<String, GunModel> MODELS = new HashMap<>();
+    /**
+     * What the guns learned of each enemy over the battle, by its base name: the copies of one robot in an enemy team
+     * share it ({@link Names#base}).
+     */
+    public static final class Memory {
+        final Map<String, GunModel> models = new HashMap<>();
+    }
 
     /**
      * The shot planned in turn {@code time} for turn {@code time + 1}.
@@ -89,12 +95,19 @@ public final class GuessFactorGun {
     }
 
     private final Field field;
+    private final Memory memory;
     private final Map<String, Target> targets = new HashMap<>();
     /** The waves that passed in the last {@link #update}, in the order they were learned. */
     private final List<GunModel.Pass> passed = new ArrayList<>();
 
-    public GuessFactorGun(Field field) {
+    /** Guns with a memory of their own, as for a battle of one round. */
+    public VirtualGuns(Field field) {
+        this(field, new Memory());
+    }
+
+    public VirtualGuns(Field field, Memory memory) {
         this.field = field;
+        this.memory = memory;
     }
 
     /** A scan of an enemy at the end of turn {@code time}, ours or a teammate's; heading mathematical. */
@@ -108,13 +121,13 @@ public final class GuessFactorGun {
 
     /** Past shots stored for this enemy. */
     public int dataSize(String name) {
-        GunModel model = MODELS.get(Names.base(name));
+        GunModel model = memory.models.get(Names.base(name));
         return model == null ? 0 : model.dataSize();
     }
 
     /** A gun's weighted virtual hit rate against this enemy, or NaN before it was scored. */
     public double hitRate(String name, int gun) {
-        GunModel model = MODELS.get(Names.base(name));
+        GunModel model = memory.models.get(Names.base(name));
         return model == null ? Double.NaN : model.hitRate(gun);
     }
 
@@ -304,7 +317,7 @@ public final class GuessFactorGun {
         Plan p = t.plan;
         double[] rates = {hitRate(name, GUESS_FACTOR), hitRate(name, CIRCULAR), hitRate(name, ANTI_SURFER),
                 hitRate(name, RANDOM), hitRate(name, MIRROR)};
-        GunModel model = MODELS.get(Names.base(name));
+        GunModel model = memory.models.get(Names.base(name));
         double[] bulletRates = new double[rates.length];
         int[] bulletTries = new int[rates.length];
         for (int g = 0; g < rates.length; g++) {
@@ -318,7 +331,7 @@ public final class GuessFactorGun {
     }
 
     private Target target(String name) {
-        return targets.computeIfAbsent(name,
-                n -> new Target(MODELS.computeIfAbsent(Names.base(n), k -> new GunModel(GunParameters.DEFAULT))));
+        return targets.computeIfAbsent(name, n -> new Target(
+                memory.models.computeIfAbsent(Names.base(n), k -> new GunModel(GunParameters.DEFAULT))));
     }
 }

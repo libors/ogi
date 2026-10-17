@@ -6,9 +6,8 @@ package cz.libors.ogi.move;
  * It drives at us while the average is above {@link #THRESHOLD}.
  *
  * <p>Scans further away count as 0, so a robot that is seldom close never qualifies, however it approaches; and the
- * average follows a robot that starts or stops ramming in the middle of a battle within about a hundred scans. On
- * recordings against the population (2026-10-11), robots that drive into us stayed above the threshold for most of
- * the battle, and robots that only close to a distance of their own stayed below it nearly all the time.
+ * average follows a robot that starts or stops ramming in the middle of a battle within about a hundred scans (how
+ * it tells rammers apart on recordings: bot.md "Movement", Against an enemy that drives at us).
  */
 public final class RamDetector {
 

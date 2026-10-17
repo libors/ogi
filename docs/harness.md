@@ -173,6 +173,8 @@ no rule of the game; the digests are identical with and without it.
   - `cmd`: time, then the commands sent for the next turn: distance, body, gun and radar turn remaining, max
     velocity, max turn rate (radians), the adjust flags gun-for-robot, radar-for-gun and radar-for-robot, the fire
     power requested (`-` if none) and whether the robot API accepted it.
+  - `fireGetters`: in a turn it tries to fire: time, the power requested, `getGunHeat()` and `getEnergy()` before
+    `setFireBullet` and after it, and whether the robot API accepted the shot (engine-model G-49).
   - `ev`: one per event received (scans, hits, collisions, misses, deaths, skipped turns): type, event time, fields.
   - Values are comma-separated; numbers are printed by `Double.toString`; angles are in radians, Robocode's
     convention.

@@ -11,9 +11,8 @@ import cz.libors.ogi.physics.RobotMotion;
  * wave's radius reaches its distance. The range is the lowest and the highest bearing it reaches on the way, widened
  * by half a robot's width, in guess factors.
  *
- * <p>No movement leaves it: in recordings of the whole rumble, under 0.2 % of the bullets found their target outside
- * it (2026-10-12). So a gun that aims uniformly inside it hits any movement about equally often, about as often as a
- * robot's width over the range's, and a surfer cannot learn where it aims.
+ * <p>Almost no movement leaves it (bot.md "Gun", Random gun). So a gun that aims uniformly inside it hits any movement
+ * about equally often, about as often as a robot's width over the range's, and a surfer cannot learn where it aims.
  */
 final class EscapeRange {
 

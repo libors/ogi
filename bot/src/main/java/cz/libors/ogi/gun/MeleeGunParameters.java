@@ -30,22 +30,14 @@ public record MeleeGunParameters(double[] weights, int neighbours, double wallRa
                                  int horizon, int maxRecords, boolean everyRound, boolean reachingOnly,
                                  boolean singleEnemy) {
 
-    /**
-     * Tuned on the melee bench (coordinate search over half of 99 rumble draws, checked on the other half), with the
-     * counts cut back for the gun's time, and the weights searched again with the four movement features: the wall
-     * ahead and the turn rate weigh most, the closest robot's bearing and the turns since a reversal least, the turns
-     * since slowing down not at all.
-     */
+    /** In a melee: tuned on the melee bench, the counts cut back for the gun's time (bot.md "Melee gun"). */
     public static final MeleeGunParameters DEFAULT = new MeleeGunParameters(
             new double[] {2.8, 1.4, 7.84, 22.4, 1.96, 0.5, 0.25, 0.5, 0.2, 0, 2, 2}, 24, 560, 1680, 0.8, 0.245, 2, 32,
             140, 1500, true, true, false);
 
     /**
-     * In a team battle: the field (1200 × 1200), the distances and the enemies' movement differ from the melee
-     * rumble's, so the team has numbers of its own, tuned on the melee bench over half of 132 TeamRumble battles' logs
-     * (each of our five robots replayed), checked on the other half: nearer enemies weigh more, a position covers
-     * more of the robot's width and the neighbours weigh more alike than in a melee; the counts are the melee's. Our
-     * hit rate rose from 31.2 to 31.6 % and the TeamRumble score by 1.0 ± 0.4 APS (2026-10-17).
+     * In a team battle, whose field, distances and enemies differ from the melee rumble's: tuned on the melee bench
+     * over TeamRumble logs, the counts the melee's (bot.md "Melee gun").
      */
     public static final MeleeGunParameters TEAM = new MeleeGunParameters(
             new double[] {2.8, 1.4, 7.84, 22.4, 1.96, 0.5, 0.25, 0.5, 0.14, 0, 2, 2}, 24, 560, 1680, 1.6, 0.686, 2.8,

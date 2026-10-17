@@ -37,7 +37,7 @@ import java.util.Random;
  * the last turn competes with its score lowered, so that a near tie does not turn us back and forth.
  *
  * <p>The enemy waves in the air count too: for the candidates with the least risk, the damage we expect on the way
- * there ({@link WaveSurfer#meleeDanger}), each wave weighted by the chance that its shooter aimed at us. A
+ * there ({@link EnemyWaves#meleeDanger}), each wave weighted by the chance that its shooter aimed at us. A
  * candidate's score is its risk over the median risk of those candidates plus a weight times its waves' damage over
  * their median.
  *
@@ -157,22 +157,21 @@ public final class MeleeMovement {
     }
 
     /**
-     * The commands for the next turn, {distance, right turn in radians} as the engine takes them, towards the safest
-     * destination, by the position alone.
+     * The movement for the next turn towards the safest destination, by the position alone.
      *
      * @param heading our body heading, mathematical
      */
-    public double[] command(long now, double x, double y, double heading, double energy, List<Robot> robots) {
+    public Move command(long now, double x, double y, double heading, double energy, List<Robot> robots) {
         return command(now, x, y, heading, energy, robots, null, null);
     }
 
     /**
-     * The same with the enemy waves in the air counted ({@link WaveSurfer#meleeDanger}) if {@code surfer} is not null.
+     * The same with the enemy waves in the air counted ({@link EnemyWaves#meleeDanger}) unless {@code inAir} is null.
      *
      * @param me our state at the end of this turn, in the engine's convention, without commands
      */
-    public double[] command(long now, double x, double y, double heading, double energy, List<Robot> robots,
-                            WaveSurfer surfer, EngineRobot me) {
+    public Move command(long now, double x, double y, double heading, double energy, List<Robot> robots,
+                        EnemyWaves inAir, EngineRobot me) {
         remember(now, x, y);
         double closest = Double.POSITIVE_INFINITY;
         for (Robot r : robots) {
@@ -198,7 +197,7 @@ public final class MeleeMovement {
             }
         }
         double[][] candidates = Arrays.copyOf(points, n);
-        WaveSource waves = surfer == null ? null : new SurferWaves(surfer, me, now);
+        WaveSource waves = inAir == null ? null : new InAir(inAir, me, now);
         List<double[]> waved = tracing ? new ArrayList<>() : null;
         double[] best = choose(x, y, energy, robots, candidates, waves, waved);
         double bestX = best[0];
@@ -213,7 +212,7 @@ public final class MeleeMovement {
         logLine = logging && now % HISTORY_EVERY == 0
                 ? logLine(now, x, y, heading, energy, robots, candidates, waves) : null;
         traced = tracing ? trace(x, y, scored, n, waved) : null;
-        return driveTo(x, y, heading, bestX, bestY);
+        return Move.to(x, y, heading, bestX, bestY);
     }
 
     /** Our position goes to the recent ones every {@link #HISTORY_EVERY} turns (the bench replays it so too). */
@@ -262,21 +261,21 @@ public final class MeleeMovement {
         return new double[] {best[0], best[1]};
     }
 
-    /** The enemy waves' damage on the way to a point, as {@link WaveSurfer#meleeDanger} predicts it. */
-    private static final class SurferWaves implements WaveSource {
-        private final WaveSurfer surfer;
+    /** The enemy waves' damage on the way to a point, as {@link EnemyWaves#meleeDanger} predicts it. */
+    private static final class InAir implements WaveSource {
+        private final EnemyWaves waves;
         private final EngineRobot me;
         private final long now;
 
-        SurferWaves(WaveSurfer surfer, EngineRobot me, long now) {
-            this.surfer = surfer;
+        InAir(EnemyWaves waves, EngineRobot me, long now) {
+            this.waves = waves;
             this.me = me;
             this.now = now;
         }
 
         @Override
         public double damage(double x, double y) {
-            return surfer.meleeDanger(me, now, x, y);
+            return waves.meleeDanger(me, now, x, y);
         }
     }
 
@@ -473,7 +472,7 @@ public final class MeleeMovement {
         }
     }
 
-    private static int enemiesNear(double x, double y, List<Robot> robots) {
+    static int enemiesNear(double x, double y, List<Robot> robots) {
         int n = 0;
         for (Robot r : robots) {
             if (r.enemy() && dist(r, x, y) <= GANG_RADIUS) {
@@ -498,14 +497,4 @@ public final class MeleeMovement {
         return d;
     }
 
-    /** Drives towards the point, backwards if that turns us less; {distance, right turn} in the engine's convention. */
-    public static double[] driveTo(double x, double y, double heading, double px, double py) {
-        double distance = Math.hypot(px - x, py - y);
-        double turn = Angles.normalizeRelative(Angles.bearing(x, y, px, py) - heading);
-        if (Math.abs(turn) > Math.PI / 2) {
-            turn = Angles.normalizeRelative(turn + Math.PI);
-            distance = -distance;
-        }
-        return new double[] {distance, -turn};
-    }
 }

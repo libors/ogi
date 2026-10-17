@@ -17,10 +17,7 @@ import java.util.Locale;
 public record GunParameters(double[] weights, double neighbourScale, int maxNeighbours, double virtualWeight,
                             double minTries) {
 
-    /**
-     * Tuned on the gun bench (coordinate search over half of a rumble sample, checked on the other half). Turns since
-     * the last reversal barely count, and the wall behind and the path's curve not at all.
-     */
+    /** Tuned on the gun bench (bot.md "Gun", Features). */
     public static final GunParameters DEFAULT =
             new GunParameters(new double[] {12, 3, 4.2, 1.75, 0.17, 2.1, 2.1, 0, 2.1, 0}, 1, 100, 0.125, 0);
 

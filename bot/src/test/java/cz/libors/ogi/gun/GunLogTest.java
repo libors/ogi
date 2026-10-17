@@ -109,7 +109,7 @@ class GunLogTest {
     @Test
     void aReplayOfTheLogDecidesAsTheGunDid() {
         String name = "replay-target";
-        GuessFactorGun gun = new GuessFactorGun(FIELD);
+        VirtualGuns gun = new VirtualGuns(FIELD);
         double ourX = 200;
         double ourY = 300;
         Random random = new Random(7);
@@ -132,7 +132,7 @@ class GunLogTest {
             EnemyState state = new EnemyState(name, x, y, heading, 6, 0, 100, t);
             double circular = CircularAim.aim(ourX, ourY, state, 14, t + 1, FIELD);
             gun.aim(name, t, ourX, ourY, 2, t % 15 > 10, circular);
-            GuessFactorGun.Plan plan = gun.plan(name, t).orElseThrow();
+            VirtualGuns.Plan plan = gun.plan(name, t).orElseThrow();
             shotLines.add(GunLog.line(plan.shot(), plan.decision()));
         }
 

@@ -20,8 +20,7 @@ import cz.libors.ogi.physics.RobotMotion;
  * whatever the two energies are. A weak bullet costs us almost nothing, so against an enemy that hits us rarely and
  * keeps firing, its own shots run it down first; against one that hits us often, our damage has to end the round
  * sooner. A faster bullet hits more often: h(p) is our measured hit rate scaled by the maximum escape angle of the
- * power it was measured at over that of p (on the power sweep of 2026-10-14 the escape angles' ratio of 1.48 and 1.98,
- * 1.12, matched the hit rates' 1.11).
+ * power it was measured at over that of p (bot.md "Bullet power").
  */
 public final class RacePower {
 
