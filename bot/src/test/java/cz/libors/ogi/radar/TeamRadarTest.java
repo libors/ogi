@@ -4,6 +4,7 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.radar.MeleeRadar.Seen;
 import cz.libors.ogi.radar.TeamRadar.Arc;
 import cz.libors.ogi.radar.TeamRadar.Watcher;
+import cz.libors.ogi.trace.Trace;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -135,5 +136,31 @@ class TeamRadarTest {
         assertEquals(first.watch(NOW, "a"), second.watch(NOW, "a"));
         assertEquals(first.watch(NOW, "b"), second.watch(NOW, "b"));
         assertTrue(first.watch(NOW, "a").size() + first.watch(NOW, "b").size() == 1);
+    }
+
+    /** The overlay's view is the plan the robot follows, the same whichever robot paints it. */
+    @Test
+    void theOverlaySeesThePlanEveryRobotFollows() {
+        TeamRadar radar = new TeamRadar();
+        assertNull(radar.describe(NOW, "a"), "no plan yet");
+        radar.reported(new Watcher("a", 200, 600, 0, NOW));
+        radar.reported(new Watcher("b", 1000, 600, Math.PI / 2, NOW));
+        for (Seen s : THREE) {
+            radar.scanned(s.name(), s.x(), s.y(), s.time());
+        }
+        radar.scanned("e3", 1000, 1000, NOW);
+        List<String> mine = radar.watch(NOW, "a");
+        Trace.RadarView view = radar.describe(NOW, "a");
+        assertEquals(List.of("a", "b"), view.watchers().stream().map(Trace.RadarWatcher::name).toList());
+        assertTrue(view.watchers().get(0).me());
+        assertEquals(List.of("e1", "e2", "e3"), view.enemies().stream().map(Trace.RadarEnemy::name).toList());
+        for (Trace.RadarEnemy e : view.enemies()) {
+            assertEquals(mine.contains(e.name()) ? 0 : 1, e.watcher(), e.name());
+        }
+        assertEquals(1, view.enemies().get(0).age());
+        assertEquals(0, view.enemies().get(2).age(), "this turn's scan, not yet in the plan");
+        Trace.RadarWatcher a = view.watchers().get(0);
+        assertTrue(Math.abs(Angles.normalizeRelative(a.arcCentre() - Angles.bearing(200, 600, 600, 600))) < 0.01);
+        assertNull(radar.describe(NOW + TeamRadar.MAX_REPORT_AGE + 1, "a"), "the plan is too old");
     }
 }

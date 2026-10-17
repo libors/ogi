@@ -181,6 +181,26 @@ public final class MeleeGun {
     private final Map<String, Enemy> enemies = new HashMap<>();
     /** The enemy whose positions weighed most in the last aim, or null. */
     private String aimedAt;
+    private boolean tracing;
+    private Traced traced;
+    private final List<double[]> tracedPositions = new ArrayList<>();
+
+    /**
+     * The last aim, for the overlay: every enemy's predicted positions where the bullet arrives.
+     *
+     * @param bearings  each position's bearing from the bullet's origin
+     * @param density   the weight of all positions that cover that bearing: the sum the aim takes the highest of
+     * @param weights   each position's own weight (its record's nearness, the enemy's distance)
+     * @param xs        the positions
+     * @param enemies   the enemy each position belongs to
+     * @param enemyX    each enemy's position at its last scan, by name
+     * @param aim       the heading chosen, NaN without one
+     * @param aimedAt   the enemy that weighed most there, or null
+     */
+    public record Traced(double originX, double originY, double[] bearings, double[] density, double[] weights,
+                         double[] xs, double[] ys, String[] enemies, Map<String, double[]> enemyX, double aim,
+                         String aimedAt) {
+    }
 
     public MeleeGun(Field field, Memory memory, MeleeGunParameters parameters) {
         this.field = field;
@@ -274,11 +294,22 @@ public final class MeleeGun {
         return aimedAt;
     }
 
+    /** Whether {@link #aim} keeps its candidates for the overlay ({@link #traced}); it costs an array per aim. */
+    public void tracing(boolean on) {
+        tracing = on;
+    }
+
+    /** The last aim's predicted positions for the overlay ({@link Traced}); null unless {@link #tracing}. */
+    public Traced traced() {
+        return traced;
+    }
+
     /**
      * The heading (mathematical) for a bullet of {@code speed} fired in turn {@code fireTime} from ({@code ox},
      * {@code oy}) at the end of that turn, or NaN without any enemy's records to go by.
      */
     public double aim(long fireTime, double ox, double oy, double speed) {
+        tracedPositions.clear();
         List<double[]> candidates = new ArrayList<>();
         List<String> owners = new ArrayList<>();
         for (Map.Entry<String, Enemy> entry : enemies.entrySet()) {
@@ -351,11 +382,15 @@ public final class MeleeGun {
                 candidates.add(new double[] {Angles.bearing(ox, oy, px, py),
                         p.kernelWidth() * Math.atan(RobotMotion.HALF_SIZE / distance), weight});
                 owners.add(entry.getKey());
+                if (tracing) {
+                    tracedPositions.add(new double[] {px, py});
+                }
             }
         }
         double best = Double.NaN;
         double bestWeight = 0;
         aimedAt = null;
+        double[] density = tracing ? new double[candidates.size()] : null;
         for (int i = 0; i < candidates.size(); i++) {
             double a = candidates.get(i)[0];
             double sum = 0;
@@ -377,13 +412,37 @@ public final class MeleeGun {
                     }
                 }
             }
+            if (density != null) {
+                density[i] = sum;
+            }
             if (sum > bestWeight) {
                 bestWeight = sum;
                 best = a;
                 aimedAt = owner;
             }
         }
+        traced = density == null ? null : trace(ox, oy, candidates, owners, density, best);
         return best;
+    }
+
+    private Traced trace(double ox, double oy, List<double[]> candidates, List<String> owners, double[] density,
+                         double aim) {
+        int n = candidates.size();
+        double[] bearings = new double[n];
+        double[] weights = new double[n];
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        Map<String, double[]> at = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            bearings[i] = candidates.get(i)[0];
+            weights[i] = candidates.get(i)[2];
+            xs[i] = tracedPositions.get(i)[0];
+            ys[i] = tracedPositions.get(i)[1];
+            Enemy e = enemies.get(owners.get(i));
+            at.put(owners.get(i), new double[] {e.x, e.y});
+        }
+        return new Traced(ox, oy, bearings, density, weights, xs, ys, owners.toArray(new String[0]), at, aim,
+                aimedAt);
     }
 
     /**

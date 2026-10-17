@@ -253,22 +253,45 @@ public final class GuessFactorGun {
         }
     }
 
-    /** Adds the waves in flight and the latest plans to the trace. */
+    /** The name of gun {@code gun} ({@link GunModel}'s index), as the trace shows it. */
+    public static String gunName(int gun) {
+        return GUN_NAMES[gun];
+    }
+
+    /**
+     * Adds the latest plans to the trace. The waves of our bullets are the overlay's own ({@link
+     * cz.libors.ogi.trace.ShotTrails}): in a melee the melee gun aims them.
+     */
     public void describe(long now, Trace trace) {
         for (Map.Entry<String, Target> e : targets.entrySet()) {
             Target t = e.getValue();
-            for (GunWave w : t.waves) {
-                Wave wave = w.range.wave();
-                boolean hits = w.range.hits();
-                trace.add(new Trace.WaveView(wave.x(), wave.y(), wave.radius(now), w.real, false,
-                        w.range.reference(), hits ? w.range.minOffset() : Double.NaN,
-                        hits ? w.range.maxOffset() : Double.NaN));
-            }
             // Robocode paints before the robot acts, so the plan on screen is usually last turn's: this turn's shot.
             if (t.plan != null && t.plan.time() >= now - 1) {
                 trace.add(view(e.getKey(), t));
             }
         }
+    }
+
+    /**
+     * The guess-factor gun's weight along the escape angle of this enemy's latest plan, as {bearings, weights} over
+     * {@code bins} guess factors from −1 to 1, for the overlay; null without a plan or data.
+     */
+    public double[][] planCoverage(String name, int bins) {
+        Target t = targets.get(name);
+        if (t == null || t.plan == null) {
+            return null;
+        }
+        GunModel.Shot shot = t.plan.shot();
+        double[] weights = t.model.coverage(shot.features(), bins);
+        if (weights == null) {
+            return null;
+        }
+        double[] bearings = new double[bins];
+        for (int b = 0; b < bins; b++) {
+            double gf = -1 + 2.0 * b / (bins - 1);
+            bearings[b] = shot.reference() + shot.direction() * gf * shot.escape();
+        }
+        return new double[][] {bearings, weights};
     }
 
     /** The plan made in turn {@code now} for this enemy, as the trace shows it. */

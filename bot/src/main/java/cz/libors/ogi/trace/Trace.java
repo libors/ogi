@@ -10,14 +10,33 @@ import java.util.List;
  */
 public final class Trace {
 
+    /** The indices of {@link WaveView#aims()}. */
+    public static final int HEAD_ON = 0;
+    public static final int LINEAR = 1;
+    public static final int CIRCULAR = 2;
+
     /**
-     * A wave in flight. Offsets are relative to {@code reference}; NaN while no heading has hit.
+     * A wave in flight, an enemy's or one of our bullets'. Bearings are absolute (mathematical, from the wave's origin).
      *
-     * @param real  whether a bullet was fired with it (always for an enemy's)
-     * @param enemy whether an enemy fired it; the hit range is then the one on us
+     * @param enemy     whether an enemy fired it
+     * @param power     its bullet's power (an enemy's as its energy drop showed it)
+     * @param reference the bearing from the origin to the wave's target when it was aimed: a head-on aim
+     * @param escape    the maximum escape angle at the bullet's speed: the target can be only within it either side
+     * @param hitLow    the lowest bearing of an enemy wave that hits us as it passes, NaN while none does
+     * @param hitHigh   the highest such bearing
+     * @param bearings  bearings of the wave with what the aiming side expects at each ({@code values}): for an enemy
+     *                  wave the share of its aim our danger model puts there, for ours the gun's weight; null for a
+     *                  plain wave
+     * @param values    the expectation at each bearing; only their order matters
+     * @param shadowed  per bearing, whether our bullets shadow it; null if none does
+     * @param aims      where head-on, linear and circular targeting aim along the wave ({@link #HEAD_ON},
+     *                  {@link #LINEAR}, {@link #CIRCULAR}), NaN where unknown; null for a plain wave
+     * @param bulletX   our bullet's position while it flies, NaN for an enemy wave or an ended bullet
      */
-    public record WaveView(double x, double y, double radius, boolean real, boolean enemy, double reference,
-                           double minOffset, double maxOffset) {
+    public record WaveView(double x, double y, double radius, boolean enemy, double power, double reference,
+                           double escape, double hitLow,
+                           double hitHigh, double[] bearings, double[] values, boolean[] shadowed, double[] aims,
+                           double bulletX, double bulletY) {
     }
 
     /**
@@ -30,6 +49,75 @@ public final class Trace {
     public record GunView(String target, long time, double originX, double originY, double targetX, double targetY,
                           double reference, double escape, double power, int direction, double[] aims, int chosen,
                           String[] gunNames, double[] hitRates, int data) {
+    }
+
+    /**
+     * The melee movement's choice in this turn ({@code MeleeMovement}).
+     *
+     * @param candidates every candidate destination, {x, y, risk}; the lower the risk, the safer
+     * @param waved      the candidates whose way was also scored against the enemy waves, {x, y}
+     * @param pullX      the robot the destinations are drawn to (the gang defence), NaN if none
+     */
+    public record MoveView(double x, double y, double[][] candidates, double[][] waved, double destinationX,
+                           double destinationY, double pullX, double pullY) {
+    }
+
+    /**
+     * The melee gun's last aim: where it predicts each enemy to be when the bullet arrives.
+     *
+     * @param time      the turn of the aim
+     * @param aim       the heading chosen, NaN without one
+     * @param xs        the predicted positions ({@code ys})
+     * @param density   per position, the weight of all positions covering its bearing from the origin: where the
+     *                  most lies, the gun aims
+     * @param weights   per position, its own weight
+     * @param enemy     per position, the index of its enemy in {@code enemyX}
+     * @param enemyX    each enemy's position at its last scan ({@code enemyY})
+     * @param aimedAt   the index of the enemy that weighed most at the aim, −1 if none
+     */
+    public record MeleeAimView(long time, double originX, double originY, double aim, double[] xs, double[] ys,
+                               double[] density, double[] weights, int[] enemy, double[] enemyX, double[] enemyY,
+                               int aimedAt) {
+    }
+
+    /**
+     * Where we and the enemies we scanned have been ({@link PositionTrails}).
+     *
+     * @param ours    our positions, {x, y, age in turns}
+     * @param enemies the enemies' scanned positions, {x, y, age in turns}
+     */
+    public record PositionView(double[][] ours, double[][] enemies) {
+    }
+
+    /**
+     * The team's radar plan, the same on every robot: which robot watches which enemies.
+     *
+     * @param watchers our robots in the plan, in the plan's order
+     * @param enemies  the enemies the team knows
+     */
+    public record RadarView(List<RadarWatcher> watchers, List<RadarEnemy> enemies) {
+    }
+
+    /**
+     * One of our robots in the radar plan, as it reported itself.
+     *
+     * @param me           whether it is the robot that paints
+     * @param radarHeading where its radar points at the end of the turn, mathematical
+     * @param arcCentre    the centre of the arc its radar sweeps over its enemies, NaN if it watches none
+     * @param arcHalfWidth half that arc's width
+     * @param reach        the distance to the farthest enemy it watches
+     */
+    public record RadarWatcher(String name, double x, double y, double radarHeading, boolean me, double arcCentre,
+                               double arcHalfWidth, double reach) {
+    }
+
+    /**
+     * An enemy as the team last scanned it.
+     *
+     * @param age     turns since the team's last scan of it
+     * @param watcher the index of the robot that watches it in {@link RadarView#watchers()}, −1 if none does
+     */
+    public record RadarEnemy(String name, double x, double y, long age, int watcher) {
     }
 
     /**
@@ -53,20 +141,40 @@ public final class Trace {
     }
 
     private long time;
+    private double fieldWidth;
     private double fieldHeight;
     private final List<WaveView> waves = new ArrayList<>();
     private final List<GunView> guns = new ArrayList<>();
+    private RadarView radar;
+    private MoveView move;
+    private PositionView positions;
+    private MeleeAimView meleeAim;
+    private String lastShotTarget;
+    private String lastShotGun;
+    private double meleeHitRate = Double.NaN;
 
     /** Clears the trace for a new turn. */
-    public void start(long turn, double height) {
+    public void start(long turn, double width, double height) {
         time = turn;
+        fieldWidth = width;
         fieldHeight = height;
         waves.clear();
         guns.clear();
+        radar = null;
+        move = null;
+        positions = null;
+        meleeAim = null;
+        lastShotTarget = null;
+        lastShotGun = null;
+        meleeHitRate = Double.NaN;
     }
 
     public long time() {
         return time;
+    }
+
+    public double fieldWidth() {
+        return fieldWidth;
     }
 
     public double fieldHeight() {
@@ -81,11 +189,70 @@ public final class Trace {
         guns.add(gun);
     }
 
+    public void radar(RadarView view) {
+        radar = view;
+    }
+
+    public void meleeAim(MeleeAimView view) {
+        meleeAim = view;
+    }
+
+    /** The melee gun's last aim, null if none is shown. */
+    public MeleeAimView meleeAim() {
+        return meleeAim;
+    }
+
+    public void positions(PositionView view) {
+        positions = view;
+    }
+
+    /** Where we and the enemies have been, null without trails. */
+    public PositionView positions() {
+        return positions;
+    }
+
+    public void move(MoveView view) {
+        move = view;
+    }
+
+    /** The melee movement's choice, null outside a melee or before one was traced. */
+    public MoveView move() {
+        return move;
+    }
+
+    /** Our last bullet: the enemy it was fired at and the gun that aimed it ("melee" for the melee gun). */
+    public void lastShot(String target, String gun) {
+        lastShotTarget = target;
+        lastShotGun = gun;
+    }
+
+    /** The share of the melee gun's bullets over the battle that hit an enemy; NaN before one ended. */
+    public void meleeHitRate(double rate) {
+        meleeHitRate = rate;
+    }
+
+    public String lastShotTarget() {
+        return lastShotTarget;
+    }
+
+    public String lastShotGun() {
+        return lastShotGun;
+    }
+
+    public double meleeHitRate() {
+        return meleeHitRate;
+    }
+
     public List<WaveView> waves() {
         return waves;
     }
 
     public List<GunView> guns() {
         return guns;
+    }
+
+    /** The team's radar plan, null outside a team battle or without a plan. */
+    public RadarView radar() {
+        return radar;
     }
 }

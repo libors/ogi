@@ -78,6 +78,11 @@ public final class World {
         return enemies.values();
     }
 
+    /** The enemy's last known state, empty if we never saw it or it died. */
+    public Optional<EnemyState> enemy(String name) {
+        return Optional.ofNullable(enemies.get(name));
+    }
+
     /** Teammates seen within the last {@code maxAge} ticks. */
     public List<Teammate> recentTeammates(long now, long maxAge) {
         List<Teammate> result = new ArrayList<>();

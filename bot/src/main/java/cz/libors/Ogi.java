@@ -30,6 +30,8 @@ import cz.libors.ogi.team.TeamPacket;
 import cz.libors.ogi.team.TeamShot;
 import cz.libors.ogi.team.TeammateState;
 import cz.libors.ogi.trace.Overlay;
+import cz.libors.ogi.trace.PositionTrails;
+import cz.libors.ogi.trace.ShotTrails;
 import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.trace.TurnClock;
 import cz.libors.ogi.world.EnemyState;
@@ -52,6 +54,7 @@ import robocode.TeamRobot;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -130,6 +133,14 @@ public class Ogi extends TeamRobot {
     private static final int AIM_LEAD_TURNS = 4;
     /** In a melee the melee gun aims ({@link MeleeGun}) in this many turns before the gun is cool, and while it is. */
     private static final int MELEE_AIM_TURNS = 2;
+    /** The overlay shows the guess-factor gun's weight at this many guess factors. */
+    private static final int TRACED_BINS = 47;
+    /** The melee gun's last aim stays on the overlay this many turns: the bullet's flight, about. */
+    private static final int MELEE_AIM_SHOWN = 20;
+    /** The melee gun's name in the overlay. */
+    private static final String MELEE_GUN = "melee";
+    /** The melee gun's bullets over the battle, for the overlay: {hits on an enemy, ended}; shot down left out. */
+    private static final int[] MELEE_BULLETS = new int[2];
     /**
      * In a melee, while the radar spins at the round's start and the gun is too hot to fire soon, the gun spins along
      * and carries the radar (engine-model G-09): 65° a turn instead of 45°.
@@ -259,6 +270,17 @@ public class Ogi extends TeamRobot {
     private Random randomAim;
     private double randomDraw;
     private final Trace trace = new Trace();
+    /** Our bullets' waves for the overlay, fed only while the robot paints. */
+    private final ShotTrails shotTrails = new ShotTrails();
+    /** Where we and the enemies have been, for the overlay, fed only while the robot paints. */
+    private final PositionTrails positionTrails = new PositionTrails();
+    /** The turn of the last {@link #onPaint}: Robocode paints before the robot acts, so in this turn we paint. */
+    private long paintedAt = -1;
+    /** The melee gun's last aim while painting, for the overlay; shown for {@link #MELEE_AIM_SHOWN} turns. */
+    private Trace.MeleeAimView meleeAimView;
+    /** Our last bullet's target and the gun that aimed it, for the overlay. */
+    private String lastShotTarget;
+    private String lastShotGun;
     private final TurnClock clock = new TurnClock();
     /** Whether last turn's plan for this turn is a shot we can afford. */
     private boolean plannedShot;
@@ -328,7 +350,10 @@ public class Ogi extends TeamRobot {
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
-        setColors(new Color(40, 44, 52), new Color(229, 192, 123), new Color(97, 175, 239));
+        // White with an orange radar and yellow bullets: easy to find among the robots of a team battle.
+        setColors(Color.WHITE, Color.WHITE, new Color(255, 140, 0));
+        setBulletColor(new Color(255, 230, 40));
+        setScanColor(new Color(255, 140, 0));
         while (true) {
             act();
             share();
@@ -788,6 +813,13 @@ public class Ogi extends TeamRobot {
             boolean melee = meleeAimTime == now - 1;
             String aimedAt = melee && meleeGun.aimedAt() != null ? meleeGun.aimedAt() : target.name();
             inFlight.put(bullet, new FiredShot(aimedAt, plan.get().time(), melee));
+            lastShotTarget = aimedAt;
+            lastShotGun = melee ? MELEE_GUN : GuessFactorGun.gunName(plan.get().decision().gun());
+            if (paintedAt == now) {
+                shotTrails.fired(now, bullet.getX(), bullet.getY(), bullet.getPower(),
+                        () -> bullet.isActive() ? new double[] {bullet.getX(), bullet.getY()} : null,
+                        () -> world.enemy(aimedAt).map(e -> new double[] {e.x(), e.y()}).orElse(null));
+            }
             if (teammatesAlive > 0) {
                 shotsToShare.add(new TeamShot(getName(), bullet.getX(), bullet.getY(),
                         Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower(), now, getRoundNum()));
@@ -834,7 +866,11 @@ public class Ogi extends TeamRobot {
         }
         meleeAimTime = -1;
         if (getOthers() - teammatesAlive > 1 && getGunHeat() <= MELEE_AIM_TURNS * getGunCoolingRate() + 1e-9) {
+            meleeGun.tracing(paintedAt == now);
             double melee = meleeGun.aim(now + 1, nextX, nextY, Rules.getBulletSpeed(planned));
+            if (paintedAt == now && meleeGun.traced() != null) {
+                meleeAimView = meleeAimView(now, meleeGun.traced());
+            }
             if (logsGun()) {
                 setDebugProperty(MeleeGunLog.AIM, MeleeGunLog.aimLine(now + 1, nextX, nextY,
                         Rules.getBulletSpeed(planned), melee, meleeGun.aimedAt()));
@@ -848,6 +884,77 @@ public class Ogi extends TeamRobot {
         if (!Double.isNaN(aim) && !sweeping) {
             setTurnGunRightRadians(Angles.robocodeTurn(Angles.fromRobocode(getGunHeadingRadians()), aim));
         }
+        if (paintedAt == now && plannedShot && getGunHeat() <= getGunCoolingRate() + 1e-9) {
+            shotTrails.planned(tracedPlan(target, now, nextX, nextY, Rules.getBulletSpeed(planned)));
+        }
+    }
+
+    /**
+     * The melee gun's weights at the bearings of the enemy it aimed at, {bearings, weights}, for our wave's dots: the
+     * other enemies' positions lie off the wave's arc (the melee aim layer shows them all); null without a trace.
+     */
+    private static double[][] aimedOnly(MeleeGun.Traced t) {
+        if (t == null) {
+            return null;
+        }
+        int n = 0;
+        for (String e : t.enemies()) {
+            n += e.equals(t.aimedAt()) ? 1 : 0;
+        }
+        double[][] w = new double[2][n];
+        for (int i = 0, k = 0; i < t.enemies().length; i++) {
+            if (t.enemies()[i].equals(t.aimedAt())) {
+                w[0][k] = t.bearings()[i];
+                w[1][k++] = t.density()[i];
+            }
+        }
+        return w;
+    }
+
+    /** The melee gun's aim as the overlay shows it: the enemies by index. */
+    private static Trace.MeleeAimView meleeAimView(long now, MeleeGun.Traced t) {
+        List<String> names = new ArrayList<>(t.enemyX().keySet());
+        names.sort(null);
+        int[] enemy = new int[t.enemies().length];
+        for (int i = 0; i < enemy.length; i++) {
+            enemy[i] = names.indexOf(t.enemies()[i]);
+        }
+        double[] ex = new double[names.size()];
+        double[] ey = new double[names.size()];
+        for (int k = 0; k < names.size(); k++) {
+            ex[k] = t.enemyX().get(names.get(k))[0];
+            ey[k] = t.enemyX().get(names.get(k))[1];
+        }
+        return new Trace.MeleeAimView(now, t.originX(), t.originY(), t.aim(), t.xs(), t.ys(), t.density(), t.weights(),
+                enemy, ex, ey, t.aimedAt() == null ? -1 : names.indexOf(t.aimedAt()));
+    }
+
+    /**
+     * What the gun expected of the shot planned in this turn, for the overlay: the enemy aimed at (the melee gun's
+     * choice in a melee), the guns' weights over bearings, and where head-on, linear and circular targeting aim.
+     */
+    private ShotTrails.Planned tracedPlan(EnemyState target, long now, double ox, double oy, double speed) {
+        EnemyState aimed = target;
+        double[][] weights;
+        if (meleeAimTime == now) {
+            String name = meleeGun.aimedAt();
+            if (name != null) {
+                aimed = world.enemy(name).orElse(target);
+            }
+            weights = aimedOnly(meleeGun.traced());
+        } else {
+            weights = gun.planCoverage(target.name(), TRACED_BINS);
+        }
+        double headOn = Angles.bearing(ox, oy, aimed.x(), aimed.y());
+        EnemyState straight = new EnemyState(aimed.name(), aimed.x(), aimed.y(), aimed.heading(), aimed.velocity(), 0,
+                aimed.energy(), aimed.time());
+        double[] aims = new double[3];
+        aims[Trace.HEAD_ON] = headOn;
+        aims[Trace.LINEAR] = CircularAim.aim(ox, oy, straight, speed, now + 1, field);
+        aims[Trace.CIRCULAR] = CircularAim.aim(ox, oy, aimed, speed, now + 1, field);
+        return new ShotTrails.Planned(now, aimed.name(), aimed.x(), aimed.y(), headOn,
+                Math.asin(RobotMotion.MAX_VELOCITY / speed), weights == null ? null : weights[0],
+                weights == null ? null : weights[1], aims);
     }
 
     /**
@@ -991,6 +1098,7 @@ public class Ogi extends TeamRobot {
             for (World.Teammate t : world.recentTeammates(now, MAX_TEAMMATE_AGE)) {
                 robots.add(new MeleeMovement.Robot(t.x(), t.y(), 0, false));
             }
+            melee.tracing(paintedAt == now);
             double[] cmd = melee.command(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getEnergy(),
                     robots, surfer, ourEngineState());
             setAhead(cmd[0]);
@@ -1146,6 +1254,7 @@ public class Ogi extends TeamRobot {
         FiredShot shot = inFlight.remove(e.getBullet());
         logMeleeEnd(shot, 'h', e.getName());
         bulletEnded(shot, e.getName());
+        meleeEnded(shot, !isTeammate(e.getName()));
         surfer.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
             if (feed != null) {
@@ -1181,6 +1290,15 @@ public class Ogi extends TeamRobot {
         FiredShot shot = inFlight.remove(e.getBullet());
         logMeleeEnd(shot, 'm', null);
         bulletEnded(shot, null);
+        meleeEnded(shot, false);
+    }
+
+    /** One of our bullets ended, an enemy hit or not: the melee gun's record for the overlay. */
+    private static void meleeEnded(FiredShot shot, boolean hitEnemy) {
+        if (shot != null && shot.melee()) {
+            MELEE_BULLETS[0] += hitEnemy ? 1 : 0;
+            MELEE_BULLETS[1]++;
+        }
     }
 
     /** For the melee bench: how a bullet the melee gun aimed ended ({@link MeleeGunLog#END}). */
@@ -1225,16 +1343,48 @@ public class Ogi extends TeamRobot {
         hitWall = true;
     }
 
-    /** Called only while painting is enabled for this robot in the GUI. */
+    /**
+     * Called only while painting is enabled for this robot in the GUI, before the robot acts: the shots planned and
+     * fired from now on are traced too.
+     */
     @Override
     public void onPaint(Graphics2D g) {
         if (gun == null) {
             return;
         }
-        trace.start(getTime(), getBattleFieldHeight());
-        gun.describe(getTime(), trace);
-        surfer.describe(getTime(), trace);
+        long now = getTime();
+        paintedAt = now;
+        Overlay.battle(getTeammates() != null ? Overlay.TEAM
+                : meleeBattle || getOthers() > 1 ? Overlay.MELEE : Overlay.DUEL);
+        trace.start(now, getBattleFieldWidth(), getBattleFieldHeight());
+        positionTrails.ours(now, getX(), getY());
+        for (EnemyState e : world.enemies()) {
+            positionTrails.enemy(e.name(), e.time(), e.x(), e.y());
+        }
+        positionTrails.describe(now, trace);
+        gun.describe(now, trace);
+        surfer.describe(now, trace);
+        shotTrails.describe(now, trace);
+        trace.lastShot(lastShotTarget, lastShotGun);
+        if (MELEE_BULLETS[1] > 0) {
+            trace.meleeHitRate((double) MELEE_BULLETS[0] / MELEE_BULLETS[1]);
+        }
+        if (teamRadar != null) {
+            trace.radar(teamRadar.describe(now, getName()));
+        }
+        if (getOthers() > 1) {
+            trace.move(melee.traced());
+        }
+        if (meleeAimView != null && now - meleeAimView.time() <= MELEE_AIM_SHOWN) {
+            trace.meleeAim(meleeAimView);
+        }
         Overlay.paint(g, trace);
+    }
+
+    /** A key pressed in the battle view switches a layer of the overlay ({@link Overlay#key}). */
+    @Override
+    public void onKeyPressed(KeyEvent e) {
+        Overlay.key(e.getKeyChar());
     }
 
     @Override

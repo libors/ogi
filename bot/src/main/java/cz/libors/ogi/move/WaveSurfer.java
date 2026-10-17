@@ -114,6 +114,12 @@ public final class WaveSurfer {
     static final int MELEE_HORIZON = 30;
     /** In a melee, waves whose shooter aimed at us with less chance than this are left out of a way's danger. */
     static final double MIN_AIM_CHANCE = 0.1;
+    /**
+     * The overlay shows the danger of this many waves ({@link #describe}): those that reach us first among the waves
+     * whose shooter aimed at us with at least {@link #DESCRIBED_AIM_CHANCE}.
+     */
+    static final int DESCRIBED = 2;
+    static final double DESCRIBED_AIM_CHANCE = 0.25;
     /** The chance that a melee shooter aimed at us falls with this power of 1 + the enemies it had closer than us. */
     static final double AIM_EXPONENT = 2;
     /** How far in time another enemy's scan may lie from a shot to say where it was then. */
@@ -1310,14 +1316,64 @@ public final class WaveSurfer {
         }
     }
 
-    /** Adds the enemy waves in flight to the trace. */
+    /**
+     * Adds the enemy waves in flight to the trace: the {@link #DESCRIBED} that reach us first among those aimed at us
+     * with a chance of at least {@link #DESCRIBED_AIM_CHANCE} with the danger model's profile, our bullets' shadows
+     * and the simple guns' aims; the others plain.
+     */
     public void describe(long now, Trace trace) {
+        List<EnemyWave> detailed = new ArrayList<>();
+        if (!ours.isEmpty()) {
+            List<EnemyWave> candidates = new ArrayList<>();
+            for (EnemyWave w : waves) {
+                if (w.aimedAtUs >= DESCRIBED_AIM_CHANCE && w.prediction != null && turnsToReach(w, now) > -1) {
+                    candidates.add(w);
+                }
+            }
+            candidates.sort((a, b) -> Double.compare(turnsToReach(a, now), turnsToReach(b, now)));
+            detailed.addAll(candidates.subList(0, Math.min(DESCRIBED, candidates.size())));
+        }
         for (EnemyWave w : waves) {
             boolean hits = w.range.hits();
-            trace.add(new Trace.WaveView(w.wave.x(), w.wave.y(), w.wave.radius(now), true, true,
-                    w.range.reference(), hits ? w.range.minOffset() : Double.NaN,
-                    hits ? w.range.maxOffset() : Double.NaN));
+            double reference = w.range.reference();
+            double hitLow = hits ? reference + w.range.minOffset() : Double.NaN;
+            double hitHigh = hits ? reference + w.range.maxOffset() : Double.NaN;
+            double[] bearings = null;
+            double[] values = null;
+            boolean[] shadowed = null;
+            double[] aims = null;
+            if (detailed.contains(w)) {
+                double[] profile = w.prediction.profile();
+                bearings = new double[profile.length];
+                values = profile.clone();
+                shadowed = new boolean[profile.length];
+                for (int i = 0; i < profile.length; i++) {
+                    double gf = (i - DangerModel.BINS / 2) / (double) (DangerModel.BINS / 2);
+                    bearings[i] = reference + w.direction * gf * w.escape;
+                    for (List<double[]> intervals : w.shadows.values()) {
+                        for (double[] s : intervals) {
+                            shadowed[i] |= gf >= s[0] && gf <= s[1];
+                        }
+                    }
+                }
+                double[] simple = w.prediction.simple();
+                aims = new double[] {simpleAim(w, simple, SimpleAims.HEAD_ON), simpleAim(w, simple, SimpleAims.LINEAR),
+                        simpleAim(w, simple, SimpleAims.CIRCULAR)};
+            }
+            trace.add(new Trace.WaveView(w.wave.x(), w.wave.y(), w.wave.radius(now), true, w.wave.power(), reference,
+                    w.escape, hitLow, hitHigh, bearings, values, shadowed, aims, Double.NaN, Double.NaN));
         }
+    }
+
+    /** The turns until the wave reaches our latest position, negative once it has passed it. */
+    private double turnsToReach(EnemyWave w, long now) {
+        return (Math.hypot(ours.x() - w.wave.x(), ours.y() - w.wave.y()) - w.wave.radius(now)) / w.wave.speed();
+    }
+
+    /** The bearing at which simple gun {@code gun} aimed along the wave, NaN if it did not. */
+    private static double simpleAim(EnemyWave w, double[] simple, int gun) {
+        return simple == null || gun >= simple.length || Double.isNaN(simple[gun]) ? Double.NaN
+                : w.range.reference() + w.direction * simple[gun] * w.escape;
     }
 
     private FireDetector detector(String name) {

@@ -527,14 +527,55 @@ become predictable to the last bits; anything that makes us move spoils that.
 
 ## Debug overlay (`cz.libors.ogi.trace`)
 
-- **`Trace`** holds what the bot decided this turn, as consumers see it; the gun and the surfer describe themselves
-  into it. **`Overlay`** is the one place that paints it.
+- **`Trace`** holds what the bot decided this turn, as consumers see it; the gun, the surfer, the team radar and
+  `ShotTrails` describe themselves into it. **`Overlay`** is the one place that paints it.
 - **Robocode mirrors robot graphics** to battlefield coordinates (y up), so points in the mathematical convention are
   drawn as they are; arcs are polylines, never `Arc2D`.
-- **What is drawn:** our gun waves (grey, a fired one orange) with their hit ranges on the target (green), enemy waves
-  (red) with their hit range on us (yellow), the gun's reference and escape angles, each gun's aim (guess factor
-  green, circular blue, anti-surfer orange, random violet, mirror pink; the chosen one thick), and per target the
-  guns' virtual hit rates and the data size.
+- **Layers**, each switched by its key while the battle view has the focus, listed in the top left corner (green
+  shown, red hidden; the choice lasts for the battle). At the battle's first paint a duel shows both kinds of waves,
+  a melee the movement and the melee aim, a team battle the radar (there the waves of all robots cover each other);
+  our positions show in every kind, the opponents' are hidden. The line from a wave's origin to its front is drawn
+  dark, so that it does not cover the rest. Robocode hands a key press to every robot whose class overrides
+  `onKeyPressed` or another interactive handler (`JavaHost` marks it interactive, `Battle.sendInteractiveEvent`
+  delivers to those), so in a team battle every Ogi switches together.
+  - **E, enemy waves:** a grey arc around where the shooter stood, only over the maximum escape angle either side of
+    the head-on aim (where we can be when it arrives), a dark line from there towards where we were at the shot to
+    the wave's front, and the bullet's power to one decimal beyond it (where the enemy's bullet flies we do not know).
+    The two waves that reach us first among those aimed at us with a chance of at least 0.25 have their arc coloured
+    by the danger model's profile instead (47 guess factors, blue unlikely to red likely, each against the wave's mean
+    and standard deviation; green where our bullets shadow it), marks where head-on (a cross in a circle), linear (two
+    lines along the bullet's way) and circular targeting (a circle) aimed at us (`SimpleAims`), and a thin yellow arc
+    just outside the front over the headings that hit us as the wave passes.
+  - **G, our waves:** each of our bullets the same in dark red (the arc over the maximum escape angle at its speed),
+    the bullet itself in yellow with its power beside it while it flies, and, as small dots just behind the front,
+    what the gun expected when it aimed it, in the turn before the shot (`ShotTrails`): the guess-factor
+    gun's weight over 47 guess factors (`GunModel.coverage`, the sum its aim takes the highest of), or in a melee the
+    bearings of the positions the melee gun predicted for the enemy it aimed at, with the weight covering each
+    (`MeleeGun.traced`; layer A shows every enemy's), and the head-on, linear and circular aims at the enemy aimed at.
+    A wave stays until it has passed its target by 20 px. At the bottom left, one a line: per target with a plan its
+    data size and each gun's virtual hit rate, then the melee gun's bullets' hit rate on any enemy over the battle;
+    the gun that aimed our last bullet in yellow.
+  - **M, movement** (melee and team battles): `MeleeMovement`'s last choice. Every candidate destination as a dark
+    area coloured by its risk on a log scale against the others (dark blue safest to dark red), unlike the bright dots
+    of the waves; a grey ring round the candidates also scored against the waves, the chosen destination ringed in
+    dark orange and joined to us by a dashed line, and a violet line to the robot the gang defence draws us to.
+  - **P (or H), our positions:** where we were at the end of each of the last 80 turns, violet dots fading with age
+    (`PositionTrails`).
+  - **O, opponents' positions:** every enemy at each of its scans (ours or a teammate's) in the last 80 turns,
+    turquoise dots fading likewise.
+  - **A, melee aim** (shown at a melee's start): the melee gun's last aim, for 20 turns after it (about the bullet's
+    flight): every predicted position of every enemy where the bullet arrives (`MeleeGun.traced`), coloured by the
+    weight covering its bearing from us (blue little to red most: there the gun aims), the aimed enemy's larger; a
+    grey line from each enemy's last scan to the weighted middle of its positions, where the gun expects it to go;
+    and the aim itself in light orange.
+  - **R, team radar:** the plan of `TeamRadar`, the same on every robot: each of our robots ringed in a colour of its
+    own (the painting one thicker), a short line where its radar points, a faint wedge over the arc it sweeps and a
+    line to each enemy it watches; each enemy ringed in its watcher's colour (grey if none), with the turns since the
+    team's last scan of it (red from 3).
+- **Only while painting:** the shots and positions are traced, and the melee gun and the movement keep their
+  candidates, only in the turns whose `onPaint` ran, so a battle without the GUI computes nothing more and replays as before.
+- **Colours:** Ogi is white with an orange radar and scan arc and fires yellow bullets, to be found among the robots
+  of a team battle.
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
   screen is the shot of the current turn.
@@ -564,8 +605,8 @@ become predictable to the last bits; anything that makes us move spoils that.
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).
-- **Without the GUI:** `OverlayRenderTest` paints a simulated fight into `bot/build/overlay/gun.png`. The image is
-  mirrored by hand, so its text is upside down.
+- **Without the GUI:** `OverlayRenderTest` paints every layer (a gun that fought a simulated mover, an enemy wave, a
+  team's radar plan) into `bot/build/overlay/overlay.png`. The image is mirrored by hand, so its text is upside down.
 - **Own turn time (`TurnClock`):** the bot measures the wall time from its first event of a turn (`onStatus`,
   which the engine delivers before the events Ogi handles; only a skipped turn's, a win's and a round's or battle's
   end come earlier) to its `execute()`, and reports the previous turn's time in µs

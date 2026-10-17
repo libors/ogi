@@ -93,6 +93,27 @@ class MeleeGunTest {
         }
     }
 
+    /** The overlay's trace is the aim's own data: the aim lies where the most weight covers a predicted position. */
+    @Test
+    void theTraceShowsWhatTheAimWeighed() {
+        MeleeGun gun = circling("circler", 600);
+        assertEquals(null, gun.traced(), "no trace unless asked");
+        gun.tracing(true);
+        double aim = gun.aim(601, 500, 500, BulletMotion.speed(1.92));
+        MeleeGun.Traced t = gun.traced();
+        assertEquals(aim, t.aim());
+        assertEquals("circler", t.aimedAt());
+        assertTrue(t.xs().length > 0 && t.xs().length == t.density().length && t.xs().length == t.enemies().length);
+        int best = 0;
+        for (int i = 1; i < t.density().length; i++) {
+            best = t.density()[i] > t.density()[best] ? i : best;
+        }
+        assertEquals(aim, t.bearings()[best]);
+        gun.tracing(false);
+        gun.aim(601, 500, 500, BulletMotion.speed(1.92));
+        assertEquals(null, gun.traced());
+    }
+
     @Test
     void withoutRecordsThereIsNoAim() {
         MeleeGun gun = new MeleeGun(FIELD, new MeleeGun.Memory(), MeleeGunParameters.DEFAULT);

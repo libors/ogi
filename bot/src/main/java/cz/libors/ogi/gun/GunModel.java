@@ -168,6 +168,14 @@ public final class GunModel {
         return new Aim(gf, aims, gun);
     }
 
+    /**
+     * The guess-factor gun's weight over {@code bins} guess factors from −1 to 1 for a shot in the situation
+     * {@code features} ({@link GunData#coverage}), for the overlay; null without data.
+     */
+    public double[] coverage(double[] features, int bins) {
+        return data.coverage(features, bins);
+    }
+
     /** The guess factor most kernel weight of all the anti-surfer views covers, NaN without bullets. */
     private double antiSurferGuessFactor(double[] features) {
         int n = 0;

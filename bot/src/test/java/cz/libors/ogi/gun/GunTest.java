@@ -34,6 +34,26 @@ class GunTest {
         assertEquals(20, data.neighbours());
     }
 
+    /** The overlay's weights peak where the gun aims, and are 0 where no neighbour would have hit. */
+    @Test
+    void coverageIsTheWeightTheBestGuessFactorMaximises() {
+        GunData data = new GunData(GunParameters.DEFAULT);
+        double[] near = new double[TargetingFeatures.COUNT];
+        double[] far = new double[TargetingFeatures.COUNT];
+        Arrays.fill(far, 1);
+        for (int i = 0; i < 50; i++) {
+            data.add(i % 2 == 0 ? near : far, i % 2 == 0 ? 0.2 : -0.5, i % 2 == 0 ? 0.3 : -0.4, 1);
+        }
+        double[] coverage = data.coverage(near, 41);
+        int peak = 0;
+        for (int b = 1; b < coverage.length; b++) {
+            peak = coverage[b] > coverage[peak] ? b : peak;
+        }
+        assertEquals(data.bestGuessFactor(near), -1 + 2.0 * peak / 40, 0.06);
+        assertEquals(0, coverage[0]);
+        assertEquals(null, new GunData(GunParameters.DEFAULT).coverage(near, 41));
+    }
+
     @Test
     void nearerNeighboursDecide() {
         GunData data = new GunData(GunParameters.DEFAULT);

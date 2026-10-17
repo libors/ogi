@@ -4,6 +4,7 @@ import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.physics.RadarScan;
 import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.radar.MeleeRadar.Seen;
+import cz.libors.ogi.trace.Trace;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -68,6 +69,10 @@ public final class TeamRadar {
     private final List<Seen> pending = new ArrayList<>();
     private final Map<String, Watcher> watchers = new HashMap<>();
     private final Set<String> dead = new HashSet<>();
+    /** The last plan {@link #watch} made, its robots and its turn, for the overlay. */
+    private Map<String, List<String>> lastPlan;
+    private List<Watcher> lastTeam;
+    private long lastPlanTime = -1;
 
     /** A scan of an enemy, ours or a teammate's. */
     public void scanned(String name, double x, double y, long time) {
@@ -119,7 +124,55 @@ public final class TeamRadar {
             return null;
         }
         Map<String, List<String>> plan = assign(now, team, new ArrayList<>(known.values()));
+        lastPlan = plan;
+        lastTeam = team;
+        lastPlanTime = now;
         return plan == null ? null : plan.getOrDefault(me, List.of());
+    }
+
+    /**
+     * The last plan, if it was made in the last {@link #MAX_REPORT_AGE} turns, for the overlay: every robot in it with
+     * the arc it sweeps, every enemy the team knows with the age of its latest scan and the robot that watches it.
+     * Null without a recent plan. Changes nothing.
+     */
+    public Trace.RadarView describe(long now, String me) {
+        if (lastPlan == null || now - lastPlanTime > MAX_REPORT_AGE) {
+            return null;
+        }
+        Map<String, Seen> latest = new HashMap<>(known);
+        for (Seen s : pending) {
+            Seen previous = latest.get(s.name());
+            if (previous == null || s.time() > previous.time()) {
+                latest.put(s.name(), s);
+            }
+        }
+        List<Watcher> team = new ArrayList<>(lastTeam);
+        team.sort(Comparator.comparing(Watcher::name));
+        List<Trace.RadarWatcher> views = new ArrayList<>();
+        Map<String, Integer> watcherOf = new HashMap<>();
+        for (int i = 0; i < team.size(); i++) {
+            Watcher w = team.get(i);
+            List<Seen> group = new ArrayList<>();
+            double reach = 0;
+            for (String name : lastPlan.getOrDefault(w.name(), List.of())) {
+                Seen s = latest.get(name);
+                if (s != null) {
+                    group.add(s);
+                    reach = Math.max(reach, Math.hypot(s.x() - w.x(), s.y() - w.y()));
+                    watcherOf.put(name, i);
+                }
+            }
+            Arc arc = group.isEmpty() ? null : arc(now, w.x(), w.y(), group);
+            views.add(new Trace.RadarWatcher(w.name(), w.x(), w.y(), w.radarHeading(), w.name().equals(me),
+                    arc == null ? Double.NaN : arc.centre(), arc == null ? 0 : arc.halfWidth(), reach));
+        }
+        List<Trace.RadarEnemy> enemies = new ArrayList<>();
+        for (Seen s : latest.values()) {
+            enemies.add(new Trace.RadarEnemy(s.name(), s.x(), s.y(), now - s.time(),
+                    watcherOf.getOrDefault(s.name(), -1)));
+        }
+        enemies.sort(Comparator.comparing(Trace.RadarEnemy::name));
+        return new Trace.RadarView(views, enemies);
     }
 
     /**

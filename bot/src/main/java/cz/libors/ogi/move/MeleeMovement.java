@@ -3,8 +3,10 @@ package cz.libors.ogi.move;
 import cz.libors.ogi.geom.Angles;
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.physics.EngineRobot;
+import cz.libors.ogi.trace.Trace;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
@@ -106,10 +108,23 @@ public final class MeleeMovement {
     private double pullFloor;
     /** Whether the enemies gang our robots, so that the pull is on ({@link #gangDefence}). */
     private boolean gangDefence;
+    /** Whether {@link #command} keeps its choice for the overlay ({@link #traced}). */
+    private boolean tracing;
+    private Trace.MoveView traced;
 
     public MeleeMovement(Field field, Random random) {
         this.field = field;
         this.random = random;
+    }
+
+    /** Whether {@link #command} keeps its choice for the overlay; it costs a few arrays a turn. */
+    public void tracing(boolean on) {
+        tracing = on;
+    }
+
+    /** The last traced choice ({@link #tracing}), null if none. */
+    public Trace.MoveView traced() {
+        return traced;
     }
 
     /** Turns the pull ({@link #TEAM_PULL}) on or off: on against enemies that gang our robots. */
@@ -168,6 +183,7 @@ public final class MeleeMovement {
         }
         double bestX = Double.NaN;
         double bestY = Double.NaN;
+        List<double[]> waved = tracing ? new ArrayList<>() : null;
         if (surfer == null) {
             double best = Double.POSITIVE_INFINITY;
             for (int i = 0; i < n; i++) {
@@ -179,7 +195,7 @@ public final class MeleeMovement {
                 }
             }
         } else if (n > 0) {
-            double[] best = withWaves(candidates, n, surfer, me, now);
+            double[] best = withWaves(candidates, n, surfer, me, now, waved);
             bestX = best[0];
             bestY = best[1];
         }
@@ -190,15 +206,30 @@ public final class MeleeMovement {
         }
         destinationX = bestX;
         destinationY = bestY;
+        traced = tracing ? trace(x, y, candidates, n, waved) : null;
         return driveTo(x, y, heading, bestX, bestY);
+    }
+
+    private Trace.MoveView trace(double x, double y, double[][] candidates, int n, List<double[]> waved) {
+        double[][] all = new double[n][];
+        for (int i = 0; i < n; i++) {
+            all[i] = new double[] {candidates[i][0], candidates[i][1], candidates[i][2]};
+        }
+        double[][] scored = new double[waved.size()][];
+        for (int i = 0; i < scored.length; i++) {
+            scored[i] = new double[] {waved.get(i)[0], waved.get(i)[1]};
+        }
+        return new Trace.MoveView(x, y, all, scored, destinationX, destinationY, pullX, pullY);
     }
 
     /**
      * The candidate with the least score among the {@link #WAVE_CANDIDATES} with the least risk (last turn's
      * destination always among them): risk over their median plus {@link #WAVE_WEIGHT} times the waves' damage on the
-     * way over its median; last turn's destination at {@link #KEEP} times its score.
+     * way over its median; last turn's destination at {@link #KEEP} times its score. The candidates scored so go to
+     * {@code waved} unless it is null.
      */
-    private static double[] withWaves(double[][] candidates, int n, WaveSurfer surfer, EngineRobot me, long now) {
+    private static double[] withWaves(double[][] candidates, int n, WaveSurfer surfer, EngineRobot me, long now,
+                                      List<double[]> waved) {
         double[][] sorted = Arrays.copyOf(candidates, n);
         // A plain sort by risk, the kept destination first: no lambda, whose first call can skip a turn.
         for (int i = 1; i < n; i++) {
@@ -216,6 +247,9 @@ public final class MeleeMovement {
         for (int i = 0; i < k; i++) {
             risks[i] = sorted[i][2];
             waves[i] = surfer.meleeDanger(me, now, sorted[i][0], sorted[i][1]);
+            if (waved != null) {
+                waved.add(sorted[i]);
+            }
         }
         double riskMedian = median(risks);
         double waveMedian = Math.max(MIN_WAVE_MEDIAN, median(waves));
