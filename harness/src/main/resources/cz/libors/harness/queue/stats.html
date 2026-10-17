@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ogi queue statistics</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #677085; --line: #e2e5eb;
+  --accent: #2f6fdf; --ok: #1f8a4c; --bad: #c53030; --bar: #e9edf3;
+  --grid: #eceef2; --axis: #c9ced8; --series-1: #2a78d6; --series-2: #eb6834;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151b; --panel: #1a1f27; --text: #e3e7ee; --muted: #9aa3b5; --line: #2b313c;
+    --accent: #6c9cff; --ok: #4cc27f; --bad: #f06a6a; --bar: #262c37;
+    --grid: #252b35; --axis: #3a414d; --series-1: #3987e5; --series-2: #d95926; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+header { display: flex; gap: 16px; align-items: baseline; padding: 12px 20px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 3; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .nav { margin-left: auto; font-size: 13px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+main { padding: 12px 20px 40px; max-width: 1600px; margin: 0 auto; }
+@media (max-width: 600px) { main, header { padding-left: 16px; padding-right: 16px; } }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.pos { color: var(--ok); } .neg { color: var(--bad); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+details summary { cursor: pointer; color: var(--muted); }
+.explain { font-size: 13px; color: var(--muted); margin-top: 4px; max-width: 1100px; }
+
+/* The numbers per format */
+.formats { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 12px; }
+.fhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.fname { font-weight: 600; font-size: 15px; }
+.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.tile .label { font-size: 12px; color: var(--muted); }
+.tile .value { font-size: 22px; font-weight: 700; margin-top: 2px; }
+.tile .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.all { font-size: 13px; margin-top: 8px; }
+
+/* Charts */
+.controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 18px; font-size: 13px; }
+button { font: inherit; font-size: 13px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chartcard { margin-top: 12px; }
+.chartcard h3 { font-size: 15px; margin: 0; }
+.keys { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.keys span { display: inline-flex; align-items: center; gap: 6px; }
+.chart { position: relative; margin-top: 6px; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.chart text.end { fill: var(--text); font-size: 12px; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+  max-width: 360px; z-index: 2; display: none; }
+.tip .t { font-weight: 600; margin-bottom: 4px; }
+.tip .v { font-weight: 700; font-size: 14px; }
+.tip .row { display: flex; gap: 6px; align-items: baseline; }
+.tip .k { display: inline-block; width: 12px; height: 2px; vertical-align: middle; }
+.empty { color: var(--muted); padding: 10px 2px; }
+
+/* Tables */
+.tablewrap { overflow-x: auto; margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.tablewrap.scroll { max-height: 60vh; overflow: auto; }
+.tablewrap.scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13px; }
+td.r, th.r { text-align: right; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+.yes { color: var(--ok); font-weight: 600; } .no { color: var(--muted); }
+details.more { margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ogi queue · statistics</h1>
+  <span class="meta" id="meta">connecting…</span>
+  <span class="nav"><a href="/">← Back to the queue</a></span>
+</header>
+<main>
+  <h2>Jobs and battles per format</h2>
+  <div class="formats" id="formats"></div>
+  <div class="muted all" id="all"></div>
+
+  <h2>APS and the battles it took</h2>
+  <div class="explain">Each point is a comparison that measured the rumble's APS: its opponents were the whole
+    rumble, or a sample of it whose groups weigh as many bots as they stand for in the rumble. Subsets (the strong
+    bots, some groups, bots picked by a trait) give how we do against them, not where we stand, so they are left
+    out; the table under each chart says which sets counted. The horizontal axis counts every battle the workers
+    played in the format by the time the job ended, subsets and recordings included: that is what the APS cost.
+    APS is the harness's local estimate on the worker, not a rumble result. Click a point to open its job.</div>
+  <div class="controls" id="controls"></div>
+  <div id="charts"></div>
+</main>
+<script>
+"use strict";
+const FORMATS = ["1v1", "melee", "team"];
+const AXES = {
+  battles: {button: "Battles played", label: "battles played in the format", value: p => p.battles},
+  hours: {button: "Slot hours", label: "slot hours in the format", value: p => p.slotHours},
+  date: {button: "Date", label: "date the comparison ended", value: p => p.finishedAt},
+};
+let axis = (location.hash.match(/x=(\w+)/) || [])[1];
+if (!AXES[axis]) axis = "battles";
+let last = null, lastText = "";
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const fmt = (v, d = 2, sign = false) => v == null || isNaN(v) ? "–" : (sign && v > 0 ? "+" : "") + Number(v).toFixed(d);
+const n = v => Number(v ?? 0).toLocaleString("en-US");
+const pad = x => String(x).padStart(2, "0");
+const day = t => { const d = new Date(t); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; };
+const clock = t => { const d = new Date(t); return `${day(t)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+/** 0, 950, 12K, 1.2M */
+function compact(v) {
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+  if (a >= 1e3) return (v / 1e3).toFixed(a >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K";
+  return String(Math.round(v));
+}
+
+/** Better or worse only when the whole 95 % interval says so, as on the queue page. */
+function resultWords(p) {
+  const e = p.difference, h = p.halfWidth;
+  if (e == null) return {text: "no estimate", cls: ""};
+  if (h == null) return {text: `Change ${fmt(e, 2, true)}, no interval`, cls: ""};
+  const range = `${fmt(e, 2, true)} ± ${fmt(h)}`;
+  if (e - h > 0) return {text: `Better by ${range}`, cls: "pos"};
+  if (e + h < 0) return {text: `Worse by ${range}`, cls: "neg"};
+  return {text: `No clear difference: ${range}`, cls: ""};
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/stats", {cache: "no-store"});
+    const text = await r.text();
+    const s = JSON.parse(text);
+    document.getElementById("meta").textContent = "updated " + clock(s.now).split(" ")[1];
+    if (text.replace(/"now": \d+/, "") === lastText) return;
+    lastText = text.replace(/"now": \d+/, "");
+    last = s;
+    render();
+  } catch (e) {
+    document.getElementById("meta").textContent = "server not reachable – " + e;
+  }
+}
+
+function ordered(s) {
+  const known = FORMATS.map(f => s.formats.find(x => x.format === f)).filter(x => x);
+  return known.concat(s.formats.filter(f => !FORMATS.includes(f.format)));
+}
+
+/** Folded sections the viewer opened stay open when the page is drawn again. */
+function openKeys() {
+  return new Set([...document.querySelectorAll("details[data-key]")].filter(d => d.open).map(d => d.dataset.key));
+}
+
+function render() {
+  const keys = openKeys();
+  const formats = ordered(last);
+  document.getElementById("formats").innerHTML = formats.map(formatCard).join("")
+    || '<div class="empty">No jobs yet.</div>';
+  const t = formats.reduce((a, f) => ({jobs: a.jobs + f.jobs.submitted, battles: a.battles + Number(f.battles.played),
+    hours: a.hours + Number(f.battles.slotHours)}), {jobs: 0, battles: 0, hours: 0});
+  document.getElementById("all").textContent = `All formats: ${n(t.jobs)} jobs, ${n(t.battles)} battles played, `
+    + `${n(Math.round(t.hours))} slot hours. Only jobs still on disk count; battles run with ./gradlew compare `
+    + `outside the queue do not.`;
+  document.getElementById("controls").innerHTML = `<span class="muted">Horizontal axis:</span>`
+    + Object.entries(AXES).map(([k, a]) => `<button class="${k === axis ? "on" : ""}" onclick="setAxis('${k}')">${a.button}</button>`).join("");
+  document.getElementById("charts").innerHTML = formats.map(chartCard).join("");
+  document.querySelectorAll("details[data-key]").forEach(d => { d.open = keys.has(d.dataset.key); });
+  formats.forEach(f => drawChart(f));
+}
+
+function setAxis(k) {
+  axis = k;
+  location.hash = k === "battles" ? "" : "x=" + k;
+  render();
+}
+
+function formatCard(f) {
+  const j = f.jobs, b = f.battles, st = j.states || {};
+  const kinds = Object.entries(b.kinds || {}).map(([k, v]) => `${n(v)} in ${k}`).join(" · ");
+  const states = [["DONE", "done"], ["CANCELLED", "cancelled"], ["FAILED", "failed"], ["RUNNING", "running"], ["QUEUED", "waiting"]]
+    .filter(([k]) => st[k]).map(([k, w]) => `${n(st[k])} ${w}`).join(", ");
+  const perBattle = b.played ? b.slotHours * 3600 / b.played : null;
+  return `<div class="card">
+    <div class="fhead"><span class="fname">${esc(f.format)}</span>
+      <span class="muted" style="font-size:12.5px">${b.firstEnded ? "since " + day(b.firstEnded) : ""}</span></div>
+    <div class="tiles">
+      <div class="tile" title="Battles a worker played to their end. Battles a job took from the battle cache were played once, by the job that first needed them, and count there only.">
+        <div class="label">Battles played</div><div class="value num">${n(b.played)}</div>
+        <div class="sub">${esc(kinds)}${b.reused ? `<br>${n(b.reused)} more taken from the cache` : ""}</div></div>
+      <div class="tile" title="Job directories in the queue, in any state.">
+        <div class="label">Jobs submitted</div><div class="value num">${n(j.submitted)}</div>
+        <div class="sub">${n(j.comparisons)} comparisons · ${n(j.recordings)} recordings<br>${esc(states)}</div></div>
+      <div class="tile" title="The battles' time in their slots: one slot is one battle at a time on one core.">
+        <div class="label">Slot hours</div><div class="value num">${n(Math.round(b.slotHours))}</div>
+        <div class="sub">${perBattle != null ? fmt(perBattle, 0) + " s a battle on average" : ""}</div></div>
+    </div></div>`;
+}
+
+// ---- The chart of one format ----
+
+/** The format's sets that measured the rumble, whole ones first, each with its colour slot. */
+function seriesOf(f) {
+  const sets = f.rumble.sets.filter(s => s.measuresRumble && s.plotted > 0);
+  const names = [...new Set(sets.filter(s => !s.sample).map(s => s.set).concat(sets.filter(s => s.sample).map(s => s.set)))];
+  return names.slice(0, 2).map((name, i) => {
+    const rows = sets.filter(s => s.set === name);
+    const s = rows[rows.length - 1];
+    const words = s.sample ? `${n(s.opponents)}-bot sample, weighted to the rumble` : `the whole rumble (${n(s.opponents)} of ${n(Math.round(s.standsFor))})`;
+    return {name, color: `var(--series-${i + 1})`, words, short: s.sample ? "sample" : "whole"};
+  });
+}
+
+function chartCard(f) {
+  const series = seriesOf(f);
+  const points = f.rumble.points;
+  const keys = (series.length > 1 ? series.map(s => `<span><svg width="18" height="10"><line x1="1" y1="5" x2="17" y2="5" stroke="${s.color}" stroke-width="2"/></svg>${esc(s.name)}: ${esc(s.words)}</span>`).join("") : "")
+    + `<span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="var(--muted)"/></svg>the version the jobs compared against (the line follows it)</span>`
+    + `<span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--muted)" stroke-width="1.5"/></svg>a new version tried</span>`;
+  const single = series.length === 1 ? ` · ${esc(series[0].name)}: ${esc(series[0].words)}` : "";
+  return `<div class="card chartcard">
+    <h3>${esc(f.format)}</h3>
+    <div class="explain">${points.length ? `${points.length} comparisons measured the rumble${single}.` : "No comparison has measured the rumble yet."}</div>
+    ${points.length ? `<div class="keys">${keys}</div><div class="chart" id="chart-${esc(f.format)}"><div class="tip"></div></div>` : ""}
+    ${setsTable(f)}
+    ${points.length ? pointsTable(f) : ""}
+  </div>`;
+}
+
+function setsTable(f) {
+  const r = f.rumble;
+  const rows = r.sets.slice().sort((a, b) => b.measuresRumble - a.measuresRumble || b.jobs - a.jobs).map(s => {
+    const why = s.measuresRumble ? (s.sample ? "yes: a sample of the rumble" : "yes: the whole rumble")
+      : `no: stands for ${n(Math.round(s.standsFor))} of the ${n(Math.round(r.standsFor))}`;
+    return `<tr><td><span class="mono">${esc(s.set)}</span>${s.title ? `<div class="muted" style="font-size:12px">${esc(s.title)}</div>` : ""}</td>
+      <td class="r num">${n(s.opponents)}</td><td class="r num">${n(Math.round(s.standsFor))}</td>
+      <td class="${s.measuresRumble ? "yes" : "no"}">${esc(why)}</td>
+      <td class="r num">${n(s.jobs)}</td><td class="r num">${n(s.comparisons)}</td><td class="r num">${n(s.plotted)}</td></tr>`;
+  }).join("");
+  return `<details class="more" data-key="sets-${esc(f.format)}"><summary>Which jobs count: ${r.sets.length} opponent sets</summary>
+    <div class="explain">A set stands for as many bots of the rumble as its weight lines add up to, or without
+      weights as it has opponents. The largest number among the format's sets (${n(Math.round(r.standsFor))}) is
+      taken as the whole rumble; a set that stands for at least ${Math.round(last.rumbleShare * 100)} % of it measures
+      the rumble's APS. A set whose file changed shows once per version. Only comparisons that ended normally are
+      plotted: a cancelled one may not have met every opponent.</div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Set</th><th class="r">Opponents</th><th class="r" title="Bots of the rumble the set stands for">Stands for</th>
+        <th>Measures the rumble</th><th class="r">Jobs</th><th class="r">Comparisons</th><th class="r">Plotted</th></tr></thead>
+      <tbody>${rows}</tbody></table></div></details>`;
+}
+
+function pointsTable(f) {
+  const rows = f.rumble.points.slice().reverse().map(p => {
+    const res = resultWords(p);
+    return `<tr><td class="num" style="white-space:nowrap">${clock(p.finishedAt)}</td>
+      <td><a href="${jobLink(f, p)}">${esc(p.note || p.id)}</a></td><td class="mono">${esc(p.set)}</td>
+      <td class="r num"><span class="mono">${esc(p.baseline)}</span> ${fmt(p.apsBaseline)}</td>
+      <td class="r num"><span class="mono">${esc(p.candidate)}</span> ${fmt(p.apsCandidate)}</td>
+      <td class="r num ${res.cls}">${fmt(p.difference, 2, true)} ± ${fmt(p.halfWidth)}</td>
+      <td class="r num">${n(p.battles)}</td><td class="r num">${n(Math.round(p.slotHours))}</td></tr>`;
+  }).join("");
+  return `<details class="more" data-key="points-${esc(f.format)}"><summary>The ${f.rumble.points.length} comparisons as a table, newest first</summary>
+    <div class="tablewrap scroll"><table>
+      <thead><tr><th>Ended</th><th>Job</th><th>Set</th><th class="r">Old version, APS</th><th class="r">New version, APS</th>
+        <th class="r" title="New minus old on the same scoreboard; ± is the 95 % interval">Change</th>
+        <th class="r" title="Battles the format's jobs had played when this one ended">Battles</th>
+        <th class="r" title="Slot hours the format's jobs had used when this one ended">Slot hours</th></tr></thead>
+      <tbody>${rows}</tbody></table></div></details>`;
+}
+
+const jobLink = (f, p) => "/#" + (f.format === FORMATS[0] ? "" : "tab=" + encodeURIComponent(f.format) + "&") + "job=" + encodeURIComponent(p.id);
+
+/** Round tick values covering [lo, hi], at most about `count` of them. */
+function ticks(lo, hi, count) {
+  const raw = (hi - lo) / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || raw;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+
+/** Ticks at whole hours or days from local midnight, about one per 80 px. */
+function dateTicks(lo, hi, width) {
+  const hour = 3600000;
+  const step = [1, 2, 3, 6, 12, 24, 48, 72, 168, 336].map(x => x * hour).find(s => (hi - lo) / s <= width / 80) || 336 * hour;
+  const start = new Date(lo); start.setHours(0, 0, 0, 0);
+  const out = [];
+  for (let t = start.getTime(); t <= hi; t += step) if (t >= lo) out.push(t);
+  return out;
+}
+
+/** dd.MM. at midnight, HH:mm otherwise */
+function dateTick(t) {
+  const d = new Date(t);
+  return d.getHours() === 0 && d.getMinutes() === 0 ? `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.`
+    : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function drawChart(f) {
+  const el = document.getElementById("chart-" + f.format);
+  if (!el) return;
+  const series = seriesOf(f);
+  const colorOf = new Map(series.map(s => [s.name, s.color]));
+  const points = f.rumble.points.filter(p => colorOf.has(p.set));
+  const X = AXES[axis].value;
+  const width = Math.max(320, el.clientWidth), height = 320;
+  const m = {left: 46, right: 112, top: 14, bottom: 36};
+  const w = width - m.left - m.right, h = height - m.top - m.bottom;
+
+  // The horizontal axis runs over all the format's battles, before the first measurement and after the last.
+  let x0, x1;
+  if (axis === "date") {
+    x0 = Math.min(f.battles.firstEnded || Infinity, ...points.map(X));
+    x1 = Math.max(f.jobs.lastSubmitted || 0, ...points.map(X));
+  } else {
+    x0 = 0;
+    x1 = Math.max(axis === "battles" ? Number(f.battles.played) : Number(f.battles.slotHours), ...points.map(X));
+  }
+  if (!(x1 > x0)) x1 = x0 + 1;
+
+  // Versions far below the lowest compared-against one (a broken build) would squash the rest: they sit on the
+  // bottom edge as triangles, with their value in the tooltip.
+  const lowest = Math.min(...points.map(p => p.apsBaseline));
+  const floor = lowest - 5;
+  const values = points.flatMap(p => [p.apsBaseline, p.apsCandidate]).filter(v => v >= floor);
+  let y0 = Math.floor(Math.min(...values) - 0.5), y1 = Math.ceil(Math.max(...values) + 0.5);
+  const sx = v => m.left + (v - x0) / (x1 - x0) * w;
+  const sy = v => m.top + (1 - (Math.max(v, y0) - y0) / (y1 - y0)) * h;
+
+  const parts = [];
+  const yt = ticks(y0, y1, 6);
+  for (const v of yt) {
+    parts.push(`<line x1="${m.left}" x2="${m.left + w}" y1="${sy(v)}" y2="${sy(v)}" stroke="var(--grid)"/>`);
+    parts.push(`<text x="${m.left - 8}" y="${sy(v) + 4}" text-anchor="end">${fmt(v, Number.isInteger(v) ? 0 : 1)}</text>`);
+  }
+  const xt = axis === "date" ? dateTicks(x0, x1, w) : ticks(x0, x1, Math.max(3, Math.floor(w / 90)));
+  for (const v of xt) {
+    const label = axis === "date" ? dateTick(v) : axis === "hours" ? compact(v) + " h" : compact(v);
+    parts.push(`<line x1="${sx(v)}" x2="${sx(v)}" y1="${m.top + h}" y2="${m.top + h + 4}" stroke="var(--axis)"/>`);
+    parts.push(`<text x="${sx(v)}" y="${m.top + h + 17}" text-anchor="middle">${label}</text>`);
+  }
+  parts.push(`<line x1="${m.left}" x2="${m.left + w}" y1="${m.top + h}" y2="${m.top + h}" stroke="var(--axis)"/>`);
+  parts.push(`<text x="${m.left + w}" y="${height - 3}" text-anchor="end">${esc(AXES[axis].label)} →</text>`);
+  parts.push(`<text x="${m.left - 8}" y="${m.top - 3}" text-anchor="end">APS</text>`);
+
+  // One step line per set: the compared-against version holds until the jobs move to another one.
+  const marks = [];
+  const ends = [];
+  for (const s of series) {
+    const line = points.filter(p => p.set === s.name && p.line);
+    if (!line.length) continue;
+    let d = "";
+    line.forEach((p, i) => {
+      const x = sx(X(p)), y = sy(p.apsBaseline);
+      d += i === 0 ? `M${x},${y}` : `H${x}V${y}`;
+    });
+    parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
+    const lastPoint = line[line.length - 1];
+    ends.push({y: sy(lastPoint.apsBaseline), x: sx(X(lastPoint)), text: `${fmt(lastPoint.apsBaseline, 1)}${series.length > 1 ? " " + s.short : ""}`});
+  }
+  for (const p of points) {
+    const c = colorOf.get(p.set);
+    const x = sx(X(p));
+    // The new version: a ring; a triangle on the bottom edge when it is below the scale.
+    if (p.apsCandidate >= floor) {
+      parts.push(`<circle cx="${x}" cy="${sy(p.apsCandidate)}" r="4" fill="var(--panel)" stroke="${c}" stroke-width="1.5" opacity=".8"/>`);
+      marks.push({x, y: sy(p.apsCandidate), p, which: "new"});
+    } else {
+      const y = m.top + h - 2;
+      parts.push(`<path d="M${x - 4},${y - 6}H${x + 4}L${x},${y}Z" fill="${c}" opacity=".8"/>`);
+      marks.push({x, y: y - 3, p, which: "new", below: true});
+    }
+  }
+  for (const p of points) {
+    const c = colorOf.get(p.set);
+    const x = sx(X(p)), y = sy(p.apsBaseline);
+    // An older version measured again is a lighter dot off the line.
+    parts.push(`<circle cx="${x}" cy="${y}" r="4" fill="${c}" stroke="var(--panel)" stroke-width="2"${p.line ? "" : ' opacity=".45"'}/>`);
+    marks.push({x, y, p, which: "old"});
+  }
+  // Direct labels right of the plot at each line's last level, pushed apart when they would overlap.
+  ends.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
+  for (const e of ends) parts.push(`<text class="end" x="${m.left + w + 10}" y="${e.y + 4}">${esc(e.text)}</text>`);
+  parts.push(`<circle class="hover" r="7" fill="none" stroke="var(--text)" stroke-width="1.5" style="display:none"/>`);
+
+  const tip = el.querySelector(".tip");
+  const old = el.querySelector("svg");
+  if (old) old.remove();
+  el.insertAdjacentHTML("beforeend", `<svg viewBox="0 0 ${width} ${height}" height="${height}" role="img"
+    aria-label="APS of the ${esc(f.format)} versions against the ${esc(AXES[axis].label)}">${parts.join("")}</svg>`);
+  const svg = el.querySelector("svg");
+  const ring = svg.querySelector("circle.hover");
+  let current = null;
+  svg.addEventListener("pointermove", ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * width / r.width, py = (ev.clientY - r.top) * height / r.height;
+    let best = null, bestD = 24 * 24;
+    for (const k of marks) {
+      const dd = (k.x - px) ** 2 + (k.y - py) ** 2;
+      if (dd < bestD) { bestD = dd; best = k; }
+    }
+    current = best;
+    if (!best) { tip.style.display = "none"; ring.style.display = "none"; svg.style.cursor = ""; return; }
+    svg.style.cursor = "pointer";
+    ring.setAttribute("cx", best.x); ring.setAttribute("cy", best.y); ring.style.display = "";
+    tip.innerHTML = tipHtml(f, best, colorOf.get(best.p.set));
+    tip.style.display = "block";
+    const left = best.x * r.width / width + 14, top = best.y * r.height / height + 14;
+    tip.style.left = Math.min(left, r.width - tip.offsetWidth - 4) + "px";
+    tip.style.top = (top + tip.offsetHeight > r.height + 40 ? top - tip.offsetHeight - 28 : top) + "px";
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; ring.style.display = "none"; current = null; });
+  svg.addEventListener("click", () => { if (current) location.href = jobLink(f, current.p); });
+}
+
+function tipHtml(f, k, color) {
+  const p = k.p, res = resultWords(p);
+  const shown = k.which === "old" ? p.apsBaseline : p.apsCandidate;
+  const role = k.which === "old" ? (p.line ? "compared against" : "an older version measured again") : "new version";
+  return `<div class="t">${esc(p.note || p.id)}</div>
+    <div class="row"><span class="k" style="background:${color}"></span><span class="v num">${fmt(shown)}</span>
+      <span class="muted">APS · ${esc(role)} <span class="mono">${esc(k.which === "old" ? p.baseline : p.candidate)}</span>${k.below ? " (below the scale)" : ""}</span></div>
+    <div class="muted">old <span class="mono">${esc(p.baseline)}</span> ${fmt(p.apsBaseline)} → new <span class="mono">${esc(p.candidate)}</span> ${fmt(p.apsCandidate)}</div>
+    <div class="${res.cls}" style="font-weight:600">${esc(res.text)}</div>
+    <div class="muted">${clock(p.finishedAt)} · ${n(p.battles)} battles · ${n(Math.round(p.slotHours))} slot hours so far</div>
+    <div class="muted">${esc(p.set)}${p.board === "rumble" ? ", rumble estimate" : ""}</div>`;
+}
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (last) ordered(last).forEach(f => drawChart(f)); }, 150);
+});
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

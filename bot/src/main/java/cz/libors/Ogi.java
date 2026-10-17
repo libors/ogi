@@ -301,6 +301,16 @@ public class Ogi extends TeamRobot {
     private final PositionTrails positionTrails = new PositionTrails();
     /** The turn of the last {@link #onPaint}: Robocode paints before the robot acts, so in this turn we paint. */
     private long paintedAt = -1;
+    /**
+     * The special states of the last turn, for the overlay's info layer ({@link #stateView}): shooting the enemy's
+     * bullets down, the surfer's ways against a robot that drives at us, the orbit with no wave to surf, ramming a
+     * disabled enemy, the energy race's power.
+     */
+    private boolean shieldState;
+    private boolean antiRamState;
+    private boolean orbitState;
+    private boolean ramState;
+    private boolean raceState;
     /** The melee gun's last aim while painting, for the overlay; shown for {@link #MELEE_AIM_SHOWN} turns. */
     private Trace.MeleeAimView meleeAimView;
     /** Our last bullet's target and the gun that aimed it, for the overlay. */
@@ -361,6 +371,7 @@ public class Ogi extends TeamRobot {
         field = new Field(getBattleFieldWidth(), getBattleFieldHeight());
         movement = new OrbitMovement(field, new Random(roundSeed()));
         melee = new MeleeMovement(field, new Random(roundSeed() * 7 + 3));
+        melee.logging(logsMovement());
         teammatesAlive = getTeammates() == null ? 0 : getTeammates().length;
         feed = getTeammates() == null ? null : new TeamFeed();
         teamRadar = getTeammates() == null ? null : new TeamRadar();
@@ -412,6 +423,11 @@ public class Ogi extends TeamRobot {
     private void act() {
         long now = getTime();
         next = new double[] {Double.NaN, Double.NaN};
+        shieldState = false;
+        antiRamState = false;
+        orbitState = false;
+        ramState = false;
+        raceState = false;
         if (energyChecked != now) {
             checkInactivity(now);
         }
@@ -439,6 +455,7 @@ public class Ogi extends TeamRobot {
         surfer.learning(!shielding(t.name()));
         shieldedEnemy = shielding(t.name()) ? t.name() : null;
         if (shielding(t.name())) {
+            shieldState = true;
             shieldAct(t, now);
             return;
         }
@@ -702,6 +719,15 @@ public class Ogi extends TeamRobot {
      */
     protected boolean logsGun() {
         return false;
+    }
+
+    /**
+     * Whether the melee movement's decisions go to debug properties for the offline position bench
+     * ({@link MeleeMovement#logging}): {@link OgiGunLog} in a team battle, whose logs are recorded in the engine's
+     * debug mode (predicting every candidate against the waves costs turn time).
+     */
+    protected boolean logsMovement() {
+        return logsGun() && getTeammates() != null;
     }
 
     /** The gun waves that passed in this turn, logged before the turn's plan. */
@@ -1073,6 +1099,7 @@ public class Ogi extends TeamRobot {
                 : getOthers() == 1 && hitsBelow(target.name(), RARE_HIT_RATE) ? RARE_HIT_POWER : DEFAULT_POWER;
         if (getOthers() == 1 && (getEnergy() < RACE_ENERGY
                 || target.energy() < RACE_ENERGY && getEnergy() < RACE_CLOSE_ENERGY)) {
+            raceState = true;
             HitRecord record = HIT_RECORDS.get(Names.base(target.name()));
             double hits = record == null ? 0 : record.hits();
             double ended = record == null ? 0 : record.ended();
@@ -1145,17 +1172,23 @@ public class Ogi extends TeamRobot {
             melee.tracing(paintedAt == now);
             double[] cmd = melee.command(now, getX(), getY(), Angles.fromRobocode(getHeadingRadians()), getEnergy(),
                     robots, surfer, ourEngineState());
+            if (melee.logLine() != null) {
+                setDebugProperty(MeleeMovement.LOG, melee.logLine());
+            }
             setAhead(cmd[0]);
             setTurnRightRadians(cmd[1]);
             return predictNext(cmd[0], cmd[1]);
         }
+        boolean ram = finishesByRamming(target);
+        ramState = ram;
+        // Only for the overlay: a battle without the GUI computes nothing more.
+        antiRamState = paintedAt == now && surfer.antiRam(target.name(), now);
         Optional<double[]> surf = surfer.command(ourEngineState(), now);
         if (surf.isPresent()) {
             setAhead(surf.get()[0]);
             setTurnRightRadians(surf.get()[1]);
             return predictNext(surf.get()[0], surf.get()[1]);
         }
-        boolean ram = finishesByRamming(target);
         Optional<double[]> next = ram || getOthers() != 1 ? Optional.empty()
                 : surfer.gunHeatCommand(ourEngineState(), target.name(), now);
         if (next.isPresent()) {
@@ -1169,6 +1202,7 @@ public class Ogi extends TeamRobot {
             setTurnRightRadians(evade.get()[1]);
             return predictNext(evade.get()[0], evade.get()[1]);
         }
+        orbitState = !ram;
         double heading = ram ? Angles.bearing(getX(), getY(), target.x(), target.y())
                 : movement.desiredHeading(getX(), getY(), target.x(), target.y(), now,
                 world.recentTeammates(now, MAX_TEAMMATE_AGE));
@@ -1427,7 +1461,29 @@ public class Ogi extends TeamRobot {
         }
         trace.powers(powerView(now));
         trace.info(infoView(now));
+        trace.states(stateView());
         Overlay.paint(g, trace);
+    }
+
+    /**
+     * Our special states in the last turn, for the info layer (painted before the robot acts, so the last turn's):
+     * the shield, the anti-ram ways, the orbit, ramming, the energy race's power, the radar looking for enemies (the
+     * round's first look in a melee or a team, or no enemy seen lately), and the gang defence's roles.
+     */
+    private Trace.StateView stateView() {
+        List<String> states = new ArrayList<>();
+        int role = getOthers() > 1 ? melee.pullRole() : MeleeMovement.NO_PULL;
+        double[] pulled = melee.pullTarget();
+        boolean[] on = {shieldState, antiRamState, orbitState, ramState, raceState, Double.isInfinite(radarTurn),
+                role == MeleeMovement.GANGED, role == MeleeMovement.HELPER};
+        for (int i = 0; i < on.length; i++) {
+            if (on[i]) {
+                states.add(Trace.STATES[i]);
+            }
+        }
+        return new Trace.StateView(getX(), getY(), states, role == MeleeMovement.GANGED,
+                role == MeleeMovement.HELPER ? pulled[0] : Double.NaN, role == MeleeMovement.HELPER ? pulled[1]
+                : Double.NaN);
     }
 
     /**

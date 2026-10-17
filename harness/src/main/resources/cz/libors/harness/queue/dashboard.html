@@ -20,6 +20,9 @@ header { display: flex; gap: 16px; align-items: baseline; padding: 12px 20px; bo
   background: var(--panel); position: sticky; top: 0; z-index: 3; flex-wrap: wrap; }
 header h1 { font-size: 17px; margin: 0; }
 header .meta { color: var(--muted); font-size: 13px; }
+header .nav { margin-left: auto; font-size: 13px; }
+header .nav a { color: var(--muted); text-decoration: none; }
+header .nav a:hover { color: var(--accent); }
 main { padding: 12px 20px 40px; max-width: 1600px; margin: 0 auto; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
 h2:first-child { margin-top: 4px; }
@@ -122,6 +125,7 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 
 <header>
   <h1>Ogi queue</h1>
   <span class="meta" id="meta">connecting…</span>
+  <span class="nav"><a href="/stats" title="Jobs, battles and slot hours per format, and APS against the battles it took">Statistics</a></span>
 </header>
 <main>
   <h2>Workers</h2>

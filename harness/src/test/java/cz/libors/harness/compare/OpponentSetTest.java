@@ -57,7 +57,10 @@ class OpponentSetTest {
                 "format 1v1", "weight [strong] 30", "weight [ranks 31-300] 270", "[strong]", "sample.RamFire",
                 "[ranks 31-300]", "sample.Walls"));
         assertEquals(Map.of("strong", 30.0, "ranks 31-300", 270.0), set.weights());
-        assertTrue(OpponentSet.parse("plain", List.of("format 1v1", "sample.Fire")).weights().isEmpty());
+        assertEquals(300, set.standsFor());
+        OpponentSet plain = OpponentSet.parse("plain", List.of("format 1v1", "sample.Fire", "sample.Walls"));
+        assertTrue(plain.weights().isEmpty());
+        assertEquals(2, plain.standsFor());
     }
 
     @Test

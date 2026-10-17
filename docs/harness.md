@@ -548,6 +548,46 @@ and it flies each bullet along the replayed aim against every robot's recorded p
   have reached in time is fired anyway; a hit the replay adds or takes away does not change the battle's later course
   (energy, who dies when), and the bench scores the hit rate, not the score.
 
+## Position bench
+
+The position bench replays the melee movement's decisions of recorded team battles with other
+`MeleeMovementParameters` and scores the destinations chosen against what the recorded battle held for them.
+
+```sh
+./gradlew submitRecordings -PgunLog=true -Popponents=.robocode/foreign/team-strong-2026-10.txt -Ppairs=4 -Pdebug=true
+./gradlew positionBench -Precordings=.robocode/queue/jobs/<id>/recordings/<version> \
+    "-Pvariants=teammateWeight=1|closerCountsEnemies=false" [-Pbase=<k=v;...>] [-Phorizon=30]
+```
+
+- **Input:** full recordings of `OgiGunLogTeam` with its `meleemove` log ([bot.md](bot.md#debug-overlay-czliborsogitrace)),
+  recorded in debug mode.
+- **Replay:** per round and robot a `MeleeMovement` with the parameters, fed each logged decision: the gang defence's
+  switch, the position into the history, then `choose` over the logged candidates with their logged waves' damage.
+  **Parity:** with `-Pbase` (the parameters the bot played with, over `DEFAULT`) every choice must be the logged one;
+  the task fails otherwise (332,881 of 332,881 on 48 battles against ranks 1–12, 2026-10-17).
+- **Outcome of a destination**, over the horizon, driving straight there by the engine's rules and standing:
+  - bullets in the air at the decision, the enemies' and the teammates': exact, from the recording, each move against
+    the box of the turn before (G-02); a bullet that hit this robot flies on;
+  - the enemies' later bullets, at their recorded shots: the chance that this robot was the target (the enemy team's
+    share of shots at our closest robot if it is the closest there, the rest split over the others) times the enemies'
+    hit rate at that distance times the damage;
+  - our robot's own later bullets, at the enemy each was aimed at: our hit rate at that distance times the damage.
+
+  The shares and hit rates come from the same recordings (the robot a bullet was aimed at is the opposing robot whose
+  bearing at f − 2 is nearest its heading, as in `tools/team_position_analysis.py`). The model's damage from bullets
+  in the air matches what the logged choices met: 1.64 a decision against 1.68 within 30 turns (2026-10-17).
+- **Report:** per variant, the share of decisions it changes and, per decision, the change of damage taken from
+  bullets in the air, from later bullets, friendly fire, damage dealt and net, with the 95 % interval over the
+  battles as clusters; then per enemy team.
+- **Limits:** the enemies do not react to the replayed positions, and each decision is scored as if the robot kept
+  its destination for the whole horizon, while the bot decides anew every turn: the bench sees a destination's next
+  seconds, not where a whole battle of such choices takes the team (formation, who gets ganged, kill order).
+- **Measured against the battles (2026-10-17):** both ways on 48 battles each, the teammate weight 1 against 3 came
+  out +0.015 ± 0.004 damage a decision for 1 (bias +0.013), and counting only our robots as closer to an enemy
+  (on the queue −1.64 APS) +0.006 ± 0.004; the queue had measured weight 3 at +2.10 APS over 1. The recordings
+  themselves show the queue's direction: robots with weight 1 met 9 % more damage from bullets in the air. So the
+  bench's numbers are a diagnosis of a decision's next seconds, not a test of movement parameters.
+
 ## Danger bench
 
 The danger bench scores the surfer's danger model ([bot.md](bot.md#movement-czliborsogimove)) on where the enemy
@@ -836,7 +876,11 @@ job type `record` takes any robot and keys (`queue.Submit`).
 ```sh
 ./gradlew submitRecordings -Popponents=.robocode/foreign/<set>.txt -Pdebug=false
 ./gradlew submitRecordings -Psubject="kc.serpent.Hydra 0.21" -Popponents=.robocode/foreign/<set>.txt -Pdebug=false
+./gradlew submitRecordings -PgunLog=true -Popponents=.robocode/foreign/team-strong-2026-10.txt -Ppairs=4 -Pdebug=true
 ```
+
+`-PgunLog=true` records `OgiGunLog` (five of them against a team set) instead of `Ogi`: the full recording then holds
+its logs too, such as the melee movement's decisions for the [position bench](#position-bench).
 
 - **The subject** is the working tree's `Ogi`, shipped with the job, or with `-Psubject="<robot> <version>"` a robot
   the worker has: no jar is shipped, and the server checks that the worker lists the subject, as it checks the
@@ -940,6 +984,24 @@ selection, a tooltip and a table's scroll position stay wherever the content sta
   each opponent (worst change first; a click on a column's name sorts by it, a second click reverses; the table
   scrolls on its own and keeps its head in view) and the technical details (job id, the job as submitted, the
   decision, LLR, noise, health, own turns, the directory, the workers' environment, problems, the last battles).
+- **Statistics** (`/stats`, `queue.Statistics`, linked from the header): per format the jobs submitted (comparisons
+  and recordings, by state), the battles played with their slot hours and the battles taken from the cache, and a
+  chart of APS against the battles it took. Each point of the chart is a comparison that ended normally and whose
+  set measured the rumble's APS; its place on the horizontal axis is every battle the workers had played in the
+  format by the job's end (subsets and recordings included), or the slot hours, or the date. The line follows the
+  version the jobs compared against as it changed (a job that went back to an older version is a lighter dot off the
+  line); rings are the new versions. A point opens its job on the dashboard.
+  - **Which sets measure the rumble:** a set stands for as many robots of the rumble as its weight lines add up to,
+    or without weights as it has opponents (`OpponentSet.standsFor`). The largest number among the format's jobs is
+    taken as the whole rumble, and a set that stands for at least 99 % of it counts: the whole rumble, or a sample
+    whose groups weigh as their tiers (`pop-1v1-2026-10`). A subset stands for less (the strong and medium tiers stand
+    for 300 of the 1v1 rumble's 1216, a set without its top 30 for 1186), so its "rumble estimate" is that subset's
+    mix and is left out. A newer ranking with a few more robots keeps the older sets in; one with more than 1 % more
+    would push them out, and the rule then needs another look. The page lists every set with its verdict.
+  - The APS is the scoreboard that estimates the rumble's: the rumble estimate of a weighted set, otherwise all
+    opponents (a team set weighs every team the same; a melee comparison's draws give every group its share).
+  - The jobs' sets and summaries are read on the first request (about half a second for 400 jobs), outside the
+    server's lock, and kept: a job that has ended does not change.
 - `./gradlew queueStatus` prints the same in a terminal; actions are POSTs
   (`/api/action?action=cancel|up|down&id=<job>`) that need the header `X-Requested-With: ogi`, so another web page
   cannot trigger them.

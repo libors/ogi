@@ -22,8 +22,9 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 
 /**
- * The server's web page and its JSON, on the loopback interface only: {@code /} the dashboard, {@code /api/state}
- * the workers and jobs, {@code /api/job?id=} one job in detail, {@code /api/status.txt} the same for a terminal, and
+ * The server's web pages and their JSON, on the loopback interface only: {@code /} the dashboard, {@code /stats}
+ * the statistics, {@code /api/state} the workers and jobs, {@code /api/job?id=} one job in detail,
+ * {@code /api/stats} the statistics' numbers, {@code /api/status.txt} the state for a terminal, and
  * {@code POST /api/action?action=cancel|up|down&id=}.
  */
 final class Dashboard {
@@ -58,15 +59,10 @@ final class Dashboard {
     }
 
     private static void contexts(HttpServer http, Server server) {
-        http.createContext("/", ex -> handle(ex, () -> {
-            if (!ex.getRequestURI().getPath().equals("/")) {
-                send(ex, 404, "text/plain", "not found");
-                return;
-            }
-            try (InputStream in = Dashboard.class.getResourceAsStream("dashboard.html")) {
-                send(ex, 200, "text/html; charset=utf-8", new String(in.readAllBytes(), StandardCharsets.UTF_8));
-            }
-        }));
+        http.createContext("/", ex -> handle(ex, () -> page(ex, "/", "dashboard.html")));
+        http.createContext("/stats", ex -> handle(ex, () -> page(ex, "/stats", "stats.html")));
+        http.createContext("/api/stats", ex -> handle(ex, () ->
+                send(ex, 200, "application/json", Json.write(server.statistics()))));
         http.createContext("/api/state", ex -> handle(ex, () ->
                 send(ex, 200, "application/json", Json.write(server.state()))));
         http.createContext("/api/job", ex -> handle(ex, () -> {
@@ -94,6 +90,17 @@ final class Dashboard {
             t.setDaemon(true);
             return t;
         }));
+    }
+
+    /** The page in {@code resource} at exactly {@code path}; a context also takes the paths below it. */
+    private static void page(HttpExchange ex, String path, String resource) throws IOException {
+        if (!ex.getRequestURI().getPath().equals(path)) {
+            send(ex, 404, "text/plain", "not found");
+            return;
+        }
+        try (InputStream in = Dashboard.class.getResourceAsStream(resource)) {
+            send(ex, 200, "text/html; charset=utf-8", new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
     }
 
     private interface Body {

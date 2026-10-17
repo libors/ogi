@@ -61,6 +61,8 @@ public final class Server {
     private final BattleCache battleCache;
     /** Every battle the workers played to its end, over all jobs on disk (the dashboard's totals). */
     private final BattleTotals battleTotals;
+    /** The statistics page's numbers, with what it has read of the jobs that ended. */
+    private final Statistics statistics = new Statistics();
     private final Path jobsDir;
     private final Path jarsDir;
     private final Path localBundle;
@@ -937,6 +939,18 @@ public final class Server {
         done.forEach(j -> rows.add(j.row()));
         m.put("jobs", rows);
         return m;
+    }
+
+    /**
+     * For the statistics page. The jobs are taken under the lock; their files (sets, summaries) are read outside it,
+     * so that the first call, which reads them all, does not hold up the queue.
+     */
+    Map<String, Object> statistics() {
+        List<Statistics.Job> list;
+        synchronized (this) {
+            list = jobs.values().stream().map(Statistics.Job::of).toList();
+        }
+        return statistics.toMap(list, battleTotals);
     }
 
     synchronized Object job(String id) throws IOException {

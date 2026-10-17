@@ -36,14 +36,15 @@ import java.util.Set;
  * @param title   the set's {@code title} line, or empty
  * @param weights per group, the robots of the rumble it stands for; empty without {@code weight} lines
  */
-record OpponentSet(String name, String title, Format format, List<Opponent> opponents, Map<String, Double> weights) {
+public record OpponentSet(String name, String title, Format format, List<Opponent> opponents,
+                          Map<String, Double> weights) {
 
     /** @param group the section the opponent is listed under, empty before the first */
-    record Opponent(String name, boolean strong, String group) {
+    public record Opponent(String name, boolean strong, String group) {
     }
 
     /** The rumble's battle settings. */
-    enum Format {
+    public enum Format {
         DUEL("1v1", 800, 600, 35),
         /** Ten robots: the subject and nine opponents of the set ({@link MeleeDraws}). */
         MELEE("melee", 1000, 1000, 35),
@@ -71,6 +72,15 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
         }
     }
 
+    /**
+     * How many robots of the rumble the set stands for: the sum of its weights, or without weights its opponents
+     * (each one weighs the same).
+     */
+    public double standsFor() {
+        return weights.isEmpty() ? opponents.size()
+                : weights.values().stream().mapToDouble(Double::doubleValue).sum();
+    }
+
     static OpponentSet read(Path file) throws IOException {
         String fileName = file.getFileName().toString();
         String name = fileName.endsWith(".txt") ? fileName.substring(0, fileName.length() - 4) : fileName;
@@ -81,7 +91,7 @@ record OpponentSet(String name, String title, Format format, List<Opponent> oppo
     /** Scoreboards every comparison shows; a group of the same name would show twice. */
     private static final Set<String> RESERVED_GROUPS = Set.of("all", "rumble");
 
-    static OpponentSet parse(String name, List<String> lines) {
+    public static OpponentSet parse(String name, List<String> lines) {
         Format format = null;
         String title = "";
         String group = "";

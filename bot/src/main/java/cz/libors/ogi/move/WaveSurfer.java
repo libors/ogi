@@ -952,6 +952,14 @@ public final class WaveSurfer {
     }
 
     /**
+     * Whether the surfer's ways treat this enemy as one that drives at us (the anti-ram ways): it does, by its scans,
+     * and one of them is at most 8 turns old.
+     */
+    public boolean antiRam(String name, long now) {
+        return rammer(name, now) != null;
+    }
+
+    /**
      * The enemy as a prediction starts it, from its last scan up to 8 turns old, if it drives at us; else null. Its
      * gun and the rest are left at their defaults: the prediction only moves it.
      */

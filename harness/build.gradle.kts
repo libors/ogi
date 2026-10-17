@@ -467,6 +467,25 @@ tasks.register<JavaExec>("meleeBench") {
     })
 }
 
+tasks.register<JavaExec>("positionBench") {
+    group = "verification"
+    description = "Replays the melee movement's logged decisions of recorded team battles with other parameters and " +
+        "scores the destinations against the recordings; see docs/harness.md."
+    mainClass = "cz.libors.harness.positionbench.PositionBench"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
+    classpath = gunBench.runtimeClasspath
+    jvmArgs("-Xmx12g")
+    val recordings = providers.gradleProperty("recordings")
+    val passed = listOf("robot", "base", "variants", "horizon")
+        .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
+    val root = rootDir
+    argumentProviders.add(CommandLineArgumentProvider {
+        val dirs = (recordings.orNull ?: throw GradleException("Pass -Precordings=<dir>,..."))
+            .split(",").joinToString(",") { root.resolve(it.trim()).absolutePath }
+        listOf("recordings=$dirs") + passed
+    })
+}
+
 tasks.register<JavaExec>("dangerBench") {
     group = "verification"
     description = "Replays the enemy bullets of full recordings through the surfer's danger model; see docs/harness.md."
@@ -856,8 +875,8 @@ tasks.register<JavaExec>("submitGunLogs") {
 
 tasks.register<JavaExec>("submitRecordings") {
     group = "queue"
-    description = "Queues turn-by-turn recordings of the working tree's Ogi, or of -Psubject (a robot on the worker), " +
-        "against -Popponents; see docs/harness.md."
+    description = "Queues turn-by-turn recordings of the working tree's Ogi (OgiGunLog with -PgunLog=true), or of " +
+        "-Psubject (a robot on the worker), against -Popponents; see docs/harness.md."
     dependsOn(snapshotJars, installRobocode)
     mainClass = "cz.libors.harness.queue.Submit"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
@@ -867,6 +886,9 @@ tasks.register<JavaExec>("submitRecordings") {
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     // A foreign robot as Robocode lists it ("kc.serpent.Hydra 0.21"): the worker's approved jar, nothing shipped.
     val subject = providers.gradleProperty("subject")
+    // OgiGunLog (five of them against a team set): the full recording keeps its logs too, e.g. the melee movement's
+    // decisions for the position bench.
+    val gunLog = providers.gradleProperty("gunLog").map { it.toBoolean() }.orElse(false)
     val versionFile = snapshotVersionFile
     val port = providers.gradleProperty("port").orElse("8765")
     argumentProviders.add(CommandLineArgumentProvider {
@@ -875,7 +897,8 @@ tasks.register<JavaExec>("submitRecordings") {
             val version = versionFile.get().asFile.readText().trim()
             // Against a team set the subject is our team.
             val team = rootDir.resolve(opponents.get()).readLines().any { it.trim() == "format team" }
-            val name = if (team) "cz.libors.OgiTeam" else "cz.libors.Ogi"
+            val name = if (gunLog.get()) (if (team) "cz.libors.OgiGunLogTeam" else "cz.libors.OgiGunLog")
+                else if (team) "cz.libors.OgiTeam" else "cz.libors.Ogi"
             listOf("robot=$name", "version=$version",
                 "jar=" + snapshotsDir.file("${name}_$version.jar").asFile.absolutePath)
         } else {

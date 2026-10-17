@@ -362,6 +362,20 @@ from everybody and nobody's closest robot. The waves are still detected and lear
   its risk over the 8 candidates' median risk plus 3 times its waves' damage over their median damage (at least 0.1);
   last turn's destination at 0.9 times its score.
 - **Driving:** straight at the point, backwards if that turns us less; the engine slows us down to stop there.
+- **Parameters:** the weights, exponents and limits of the choice are `MeleeMovementParameters` (`DEFAULT`); the
+  choice among the candidates is `MeleeMovement.choose`, which the position bench replays
+  ([harness.md](harness.md#position-bench)).
+- **The last enemy, with teammates alive:** a robot with 30 energy or more is drawn to it down to 350 px
+  (`finishDistance`, `finishEnergy`, `finishPull` 1.0, by the gang defence's pull, which cannot act then); the weaker
+  ones keep the minimum risk, so the enemy's closest robots, whom it shoots most, are the healthy ones. Against ranks
+  1–12 the phase went from 231 to 158 turns, our robots' median distance to the enemy from 975 to 684 px and the
+  robots we lose in it from 0.63 to 0.31 a round (2026-10-17); on the whole TeamRumble +0.33 ± 0.27 APS (16 pairs per
+  team, strong band +0.95 ± 0.88). At 450 px and a pull of 0.5 the robots stopped near 750 px and the score changed
+  within noise (+0.09 ± 0.41).
+  - **Coupled to the risk:** the finisher has no movement of its own; where the robots stop is the balance of the
+    pull against the enemy's term of the risk (1/d², threat), the teammates' repulsion and the history. A change of
+    any of them moves the endgame too, so after one, check the phase's length, our robots' distance to the last
+    enemy and the robots we lose in it on full recordings, and retune the pull or the floor with it.
 - Measured on the melee rumble's population (2026-10-15): the position alone gave about 7 points of APS more than
   surfing every wave (rounds won from 12 to 32 %); with the waves, the radar below and the duel after a melee surfed,
   2.7 more (rounds won 49 %); the wave weight 3 and the sharper aim chance 0.6 more, at a third of the waves' CPU
@@ -422,7 +436,10 @@ unseen in two turns of five (measured on recordings of team battles, 2026-10-16)
 ## Team play (`cz.libors.ogi.team`)
 
 `cz.libors.OgiTeam` is five copies of Ogi, the first the leader (200 energy). Each plays the melee bot above while
-more than one enemy lives, and the duel when it is alone with one. What makes them a team:
+more than one enemy lives, and the duel when it is alone with one. In between, with one enemy left and teammates
+alive, the movement stays the melee's (`getOthers()` counts the teammates), the healthy robots closing in on the
+enemy ([Melee movement](#melee-movement-meleemovement)), while the duel's guns aim, without the mirror gun, the shadow
+shots and the duel's power rules (1.45, the race), which need a duel; the radars all keep the last enemy. What makes them a team:
 
 - **One packet a turn** (`TeamPacket`), broadcast after acting: the robot's own state and the position its commands
   take it to by the end of the next turn (exact unless it collides; teammates read the packet in that turn,
@@ -446,10 +463,12 @@ more than one enemy lives, and the duel when it is alone with one. What makes th
 - **Gang defence:** a robot of ours with 2 or more enemies within 250 px is ganged. Against a team that gangs, the
   ganged robot's destinations are drawn to its nearest teammate, and the other robots' to the nearest ganged
   teammate down to 300 px: a destination's risk × e^(0.5 · its change of distance to that robot / 100 px). The
-  gangers follow their victim into our fire, and the helpers shoot from nearer. The defence is on once, over the
-  battle (statics), 4 % of our robot-turns were ganged (at least 200 counted; every robot counts ours and its
-  teammates' each turn): teams that gang held one of our robots so 12–27 % of the time in recordings, the others
-  under 1 %. Without the switch the pull cost as much against the other teams as it gained against the gangs.
+  gangers follow their victim into our fire, and the helpers shoot from nearer. The defence is on while, over the
+  battle so far (statics), 4 % of our robot-turns were ganged (at least 200 counted; every robot counts ours and its
+  teammates' each turn, the enemies at their last known positions): teams that gang held one of our robots so
+  12–27 % of the time in recordings, the others under 1 %. Each robot decides it from its own counts, so it can switch
+  off again when the share falls. Without the switch the pull cost as much against the other teams as it gained
+  against the gangs.
 - Measured on the whole TeamRumble (2026-10-16, [harness.md](harness.md), 4 pairs per team): the packet with the
   teammates' bullets dodged +21.2 APS, the copies' shared learning +1.4, the spread +4.1 (weight 1) and +2.1 (3); the
   team's fire detection and the melee gun's shared scans changed the score within noise (we were hit 7 % less, hit
@@ -595,7 +614,7 @@ become predictable to the last bits; anything that makes us move spoils that.
     in dark red, the power of its last shot as fire detection saw it in this round (where an enemy's bullet flies we
     do not know). A teammate's bullet is drawn where it has flown since its reported shot, until it leaves the field
     or reaches a robot where we saw it last: its end nobody reports.
-  - **I, enemy info** (shown in every kind), in the column beside each enemy below its last power: the turns until its
+  - **I, info** (shown in every kind), in the column beside each enemy below its last power: the turns until its
     gun is cool by fire detection's model of its gun heat, "7t" (`FireDetector.coolIn`; bright red when it can fire);
     in yellow, behind an arrow to the left, its hit rate on us: its shots over the battle that hit us, those ours shot
     down left out (in a melee or a team its shots are aimed at anyone, and robots of one type share the record); in
@@ -603,6 +622,13 @@ become predictable to the last bits; anything that makes us move spoils that.
     each rate from 5 shots on; with two enemies or more alive, the turns since our side (we or a teammate) last
     scanned it, "r1" (red from 3; a duel's radar locks). The arrows are drawn: Robocode draws a robot's text upright
     from its baseline (`MirroredGraphics.drawString`), so they stand 4 px above the baseline, at the numbers' middle.
+    Above our robot, in dark grey, one a row upwards, its special states in the last turn (`Ogi.stateView`):
+    `shield` (shooting the enemy's bullets down), `anti-ram` (the surfer's ways against a robot that drives at us),
+    `long-orbit` (the orbit at the preferred distance, with no wave to surf), `ram` (ramming a disabled enemy),
+    `saving-energy` (the energy race's power), `searching` (the radar spins to find enemies: the round's first look
+    in a melee or a team, or no enemy seen lately), `ganged` and `gang-buddy` (the gang defence draws us to a
+    teammate, or to the ganged teammate we help). A ganged robot also has a warning diamond round it and a helper a
+    line to the robot it helps, both in #ff4f30. Each robot paints its own states.
   - **The column** stands 32 px right of the enemy's centre, clear of its gun, one row each from the top: B's power,
     then I's four numbers. A layer switched off leaves its rows empty, so the others stay put.
   - **R, team radar:** the plan of `TeamRadar`, the same on every robot: for each of our robots, in a colour of its
@@ -643,6 +669,12 @@ become predictable to the last bits; anything that makes us move spoils that.
     For diagnosing melee battles it logs `hitbybullet` for each bullet that hits us (the turn, its power and
     position, our energy after it, the shooter) and `duelstart` when a melee comes down to a duel (the turn, our
     energy, the enemy's at its last scan, its name).
+  - **For the position bench**, in a team battle only, `OgiGunLog` logs `meleemove` every fifth turn the melee
+    movement decides (`MeleeMovement.logging`): the turn, our position, heading and energy, whether the gang defence
+    is on, the robots it keeps away from (position, energy, enemy or teammate), every candidate with whether it is
+    last turn's destination and its waves' damage (also those the choice did not predict against the waves, about
+    five times the waves' time; team logs are recorded in debug mode), and the destination chosen. With the history
+    of these turns' positions that is everything `MeleeMovement.choose` needs.
   - Only `OgiGunLog` logs, and its jar (`bot/build/robots/cz.libors.OgiGunLog_<v>.jar`) never goes to a rumble; the
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).

@@ -105,6 +105,20 @@ public final class Trace {
     public record InfoView(double[][] enemies) {
     }
 
+    /** The names of our special states, in the order they are listed above us (layer I). */
+    public static final String[] STATES = {"shield", "anti-ram", "long-orbit", "ram", "saving-energy", "searching",
+            "ganged", "gang-buddy"};
+
+    /**
+     * Our special states in the last turn (layer I).
+     *
+     * @param states the names of those that were on, from {@link #STATES}
+     * @param ganged whether the gang defence draws us to a teammate: we are ganged
+     * @param helpX  the ganged teammate the gang defence draws us to as its helper, NaN if none
+     */
+    public record StateView(double x, double y, List<String> states, boolean ganged, double helpX, double helpY) {
+    }
+
     /**
      * The bullets' powers (layer B).
      *
@@ -176,6 +190,7 @@ public final class Trace {
     private MeleeAimView meleeAim;
     private PowerView powers;
     private InfoView info;
+    private StateView states;
     private String lastShotTarget;
     private String lastShotGun;
     private double meleeHitRate = Double.NaN;
@@ -193,6 +208,7 @@ public final class Trace {
         meleeAim = null;
         powers = null;
         info = null;
+        states = null;
         lastShotTarget = null;
         lastShotGun = null;
         meleeHitRate = Double.NaN;
@@ -238,6 +254,15 @@ public final class Trace {
     /** What is shown beside each enemy, null if nothing. */
     public InfoView info() {
         return info;
+    }
+
+    public void states(StateView view) {
+        states = view;
+    }
+
+    /** Our special states, null if not traced. */
+    public StateView states() {
+        return states;
     }
 
     public void powers(PowerView view) {

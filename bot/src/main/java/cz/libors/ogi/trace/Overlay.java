@@ -38,8 +38,10 @@ import java.util.Locale;
  *       middle of its positions, the aim itself.</li>
  *   <li><b>B, bullet powers:</b> the power beside each of our and our teammates' bullets in flight, and each enemy's
  *       last shot's power to its right.</li>
- *   <li><b>I, enemy info:</b> right of each enemy, under its last shot's power, the turns until its gun is cool, its
- *       hit rate on us, ours on it and, with two enemies or more, the age of our side's last scan of it.</li>
+ *   <li><b>I, info:</b> right of each enemy, under its last shot's power, the turns until its gun is cool, its
+ *       hit rate on us, ours on it and, with two enemies or more, the age of our side's last scan of it; above us our
+ *       special states in dark grey, a warning diamond round us while we are ganged and a line to the ganged teammate
+ *       we help.</li>
  *   <li><b>R, team radar:</b> each of our robots in a colour of its own, with the arc its radar sweeps over the enemies
  *       the team's plan gives it, a line to each of them and a short one where its radar points. No rings: they hid
  *       the robots.</li>
@@ -118,6 +120,14 @@ public final class Overlay {
     /** A trail's newest dot has this opacity, its oldest none. */
     private static final int TRAIL_ALPHA = 220;
     private static final Color PULL = new Color(200, 120, 255);
+    /** Our special states above us (layer I): dark grey, quieter than the enemies' numbers. */
+    private static final Color STATE_TEXT = new Color(125, 125, 125);
+    /** The gang defence's warning: a diamond round a ganged robot, a line from its helper to it. */
+    private static final Color GANG = new Color(0xff, 0x4f, 0x30);
+    /** The states' first row this far above our centre, the next ones this far apart; the diamond's half-diagonal. */
+    private static final double STATE_ROW = 26;
+    private static final double STATE_ROW_GAP = 12;
+    private static final double GANG_DIAMOND = 38;
     /** Our robots' colours in the radar layer, by their place in the plan. */
     private static final Color[] WATCHERS = {new Color(0, 200, 255), new Color(255, 90, 200), new Color(150, 255, 80),
             new Color(255, 170, 40), new Color(170, 120, 255)};
@@ -137,7 +147,7 @@ public final class Overlay {
      */
     private static final char[] KEYS = {'e', 'g', 'm', 'r', 'h', 'a', 'b', 'i'};
     private static final String[] NAMES = {"enemy waves", "gun waves", "movement", "team radar", "position history",
-            "melee aim", "bullet powers", "enemy info"};
+            "melee aim", "bullet powers", "info"};
     private static final boolean[] SHOWN = new boolean[KEYS.length];
     private static final boolean[] OFFERED = new boolean[KEYS.length];
     private static final int ENEMY_WAVES = 0;
@@ -254,6 +264,9 @@ public final class Overlay {
         }
         if (SHOWN[INFO] && trace.info() != null) {
             paintInfo(g, trace.info());
+        }
+        if (SHOWN[INFO] && trace.states() != null) {
+            paintStates(g, trace.states());
         }
         paintLegend(g, trace);
     }
@@ -521,6 +534,35 @@ public final class Overlay {
                 g.setColor(e[5] >= STALE_AGE ? STALE : TEXT);
                 g.drawString("r" + Math.round(e[5]), x, (float) (e[1] + ROW_SCAN_AGE));
             }
+        }
+        g.setStroke(new BasicStroke(1f));
+    }
+
+    /**
+     * Our special states above us, one a row upwards, centred, in dark grey; while we are ganged a warning diamond
+     * round us, and while we help a ganged teammate a line to it, both in the warning's colour.
+     */
+    private static void paintStates(Graphics2D g, Trace.StateView v) {
+        g.setColor(STATE_TEXT);
+        for (int i = 0; i < v.states().size(); i++) {
+            String s = v.states().get(i);
+            g.drawString(s, (float) (v.x() - g.getFontMetrics().stringWidth(s) / 2.0),
+                    (float) (v.y() + STATE_ROW + STATE_ROW_GAP * i));
+        }
+        g.setColor(GANG);
+        g.setStroke(new BasicStroke(2f));
+        if (v.ganged()) {
+            Path2D.Double diamond = new Path2D.Double();
+            diamond.moveTo(v.x(), v.y() + GANG_DIAMOND);
+            diamond.lineTo(v.x() + GANG_DIAMOND, v.y());
+            diamond.lineTo(v.x(), v.y() - GANG_DIAMOND);
+            diamond.lineTo(v.x() - GANG_DIAMOND, v.y());
+            diamond.closePath();
+            g.draw(diamond);
+        }
+        if (!Double.isNaN(v.helpX())) {
+            g.setStroke(new BasicStroke(1.5f));
+            g.draw(new Line2D.Double(v.x(), v.y(), v.helpX(), v.helpY()));
         }
         g.setStroke(new BasicStroke(1f));
     }

@@ -173,6 +173,9 @@ class OverlayRenderTest {
         // Beside the enemies: the turns until their guns are cool (one can fire now), our hit rate on two of them.
         trace.info(new Trace.InfoView(new double[][] {{600, 420, 7, 0.31, 0.12, 1}, {820, 650, 0, Double.NaN, 0.2, 4},
                 {750, 250, -1, 0.12, Double.NaN, -1}}));
+        // Our states: ganged and helped by the teammate at (300, 520).
+        trace.states(new Trace.StateView(400, 400, java.util.List.of("anti-ram", "ganged"), true, 300, 520));
+        assertNotNull(trace.states());
 
         BufferedImage image = new BufferedImage((int) field.width(), (int) field.height(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
