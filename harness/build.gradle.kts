@@ -435,8 +435,8 @@ tasks.register<JavaExec>("gunBench") {
     classpath = gunBench.runtimeClasspath
     jvmArgs("-Xmx6g")
     val logs = providers.gradleProperty("logs").orElse("harness/build/gun-logs/$botVersion")
-    val passed = listOf("robot", "selection", "weights", "neighbourScale", "maxNeighbours", "virtualWeight",
-        "minTries", "tune", "maxShielded", "splitSeed")
+    val passed = listOf("robot", "scope", "learn", "selection", "weights", "neighbourScale", "maxNeighbours",
+        "virtualWeight", "minTries", "tune", "maxShielded", "splitSeed")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     val root = rootDir
     argumentProviders.add(CommandLineArgumentProvider {

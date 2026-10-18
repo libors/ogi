@@ -81,6 +81,25 @@ class GunLogTest {
     }
 
     @Test
+    void theOneEnemyFlagParsesBackAndOlderLinesReadAsOneEnemys() {
+        double[] features = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1};
+        GunModel.Aim aim = new GunModel.Aim(0.3, new double[] {0.1, 0.25, 0.2, 0.4, Double.NaN}, GunModel.CIRCULAR);
+        for (boolean alone : new boolean[] {false, true}) {
+            GunModel.Shot shot = new GunModel.Shot("a.B 1.0, beta", 17, features, 1, 0.5, 0.6, true, 0.25, -0.7, 0.9,
+                    0.12, Double.NaN, alone);
+            GunLog.LoggedShot logged = GunLog.shot(GunLog.line(shot, aim));
+            assertEquals(alone, logged.shot().alone());
+            assertEquals("a.B 1.0, beta", logged.shot().target());
+            assertTrue(Double.isNaN(logged.shot().mirrorAim()));
+        }
+        String old = "17,1,-1,0.5,0.6,NaN,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.3,3,-0.7,0.9,0.12,-2.5,a.B 1.0, beta";
+        GunLog.LoggedShot logged = GunLog.shot(old);
+        assertEquals("a.B 1.0, beta", logged.shot().target());
+        assertEquals(-2.5, logged.shot().mirrorAim());
+        assertTrue(logged.shot().alone());
+    }
+
+    @Test
     void aLineFromBeforeTheMirrorGunIsReadWithoutItsAim() {
         String old = "17,1,-1,0.5,0.6,NaN,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.3,3,-0.7,0.9,0.12,a.B 1.0, beta";
         GunLog.LoggedShot logged = GunLog.shot(old);

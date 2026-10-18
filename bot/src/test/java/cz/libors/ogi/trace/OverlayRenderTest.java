@@ -179,6 +179,9 @@ class OverlayRenderTest {
         trace.states(new Trace.StateView(400, 400, List.of(Trace.State.ANTI_RAM, Trace.State.GANGED), true, 300,
                 520));
         assertNotNull(trace.states());
+        // We are member 1, painting with members 2 and 5: the legend lists 1 2       5.
+        Overlay.team(5);
+        trace.painters(new Trace.PaintersView(1, 5, new int[] {1, 2, 5}));
 
         BufferedImage image = new BufferedImage((int) field.width(), (int) field.height(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();

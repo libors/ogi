@@ -217,6 +217,15 @@ public final class VirtualGuns {
      */
     public double aim(String name, long now, double nextX, double nextY, double power, boolean searchNeighbours,
                       double circularAim, double offset, double randomDraw, double mirrorAim) {
+        return aim(name, now, nextX, nextY, power, searchNeighbours, circularAim, offset, randomDraw, mirrorAim, true);
+    }
+
+    /**
+     * As {@link #aim(String, long, double, double, double, boolean, double, double, double, double)}, with
+     * {@code alone} whether one enemy lives ({@link GunModel.Shot#alone}, logged for the gun bench).
+     */
+    public double aim(String name, long now, double nextX, double nextY, double power, boolean searchNeighbours,
+                      double circularAim, double offset, double randomDraw, double mirrorAim, boolean alone) {
         Target t = target(name);
         if (t.history.isEmpty()) {
             t.plan = null;
@@ -234,7 +243,7 @@ public final class VirtualGuns {
                         t.history.heading(), t.history.velocity(), speed, reference, direction, escape, field)
                 : new double[] {Double.NaN, Double.NaN};
         GunModel.Shot shot = new GunModel.Shot(name, now, features, direction, reference, escape, searchNeighbours,
-                circularAim, range[0], range[1], randomDraw, mirrorAim);
+                circularAim, range[0], range[1], randomDraw, mirrorAim, alone);
         t.plan = new Plan(shot, t.model.aim(shot), power, nextX, nextY, t.history.x(), t.history.y(), offset);
         return t.plan.aim();
     }

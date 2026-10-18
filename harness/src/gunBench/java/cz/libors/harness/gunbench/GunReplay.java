@@ -3,6 +3,7 @@ package cz.libors.harness.gunbench;
 import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunModel;
 import cz.libors.ogi.gun.GunParameters;
+import cz.libors.ogi.world.Names;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,10 +14,26 @@ import java.util.Set;
 
 /**
  * Replays a battle's gun log with some {@link GunParameters}: the plans ask a fresh {@link GunModel} per target, as
- * the bot's gun did, and each passed wave teaches it what it taught the bot. The recorded movement stays the same, so
- * against a target that reacts to our aim the replay is optimistic.
+ * the bot's gun did (one per base name, so that the copies of a robot in an enemy team share it, {@link Names#base}),
+ * and each passed wave teaches it what it taught the bot. The recorded movement stays the same, so against a target
+ * that reacts to our aim the replay is optimistic.
  */
 public final class GunReplay {
+
+    /**
+     * Which plans the hit counts take. Every wave teaches the model and every plan is checked against the log in
+     * either case.
+     */
+    public enum Scope {
+        /** Every plan. */
+        ALL,
+        /**
+         * Plans made while one enemy lived ({@link GunBattle.EnemyDied}): in a melee or a team battle the turns in
+         * which this gun aims the bullets; before, the melee gun aims them and this gun's waves only teach it. Every
+         * plan of a 1v1 log.
+         */
+        ONE_ENEMY
+    }
 
     /**
      * What a replay counted. A guess-factor try is a passed wave whose plan had a guess factor; a fired try is a
@@ -64,13 +81,38 @@ public final class GunReplay {
     }
 
     public static Tally replay(GunBattle battle, GunParameters parameters) {
-        return replayRounds(battle, parameters).stream().reduce(Tally.ZERO, Tally::plus);
+        return replay(battle, parameters, Scope.ALL);
+    }
+
+    /** The plans' and the hit counts of {@code scope}'s plans; {@code shots} and {@code differing} count every plan. */
+    public static Tally replay(GunBattle battle, GunParameters parameters, Scope scope) {
+        return replay(battle, parameters, scope, false);
+    }
+
+    /**
+     * As {@link #replay(GunBattle, GunParameters, Scope)}; with {@code learnInScope} only the waves of {@code scope}'s
+     * plans teach the model (an experiment: the bot learns from every wave, so the replay no longer decides as it did).
+     */
+    public static Tally replay(GunBattle battle, GunParameters parameters, Scope scope, boolean learnInScope) {
+        return replayRounds(battle, parameters, scope, learnInScope).stream().reduce(Tally.ZERO, Tally::plus);
     }
 
     /** The same, counted per round: element r is round r's tally (a wave counts in the round its plan was made). */
     public static List<Tally> replayRounds(GunBattle battle, GunParameters parameters) {
+        return replayRounds(battle, parameters, Scope.ALL);
+    }
+
+    /** As {@link #replayRounds(GunBattle, GunParameters)}, the hits counted for {@code scope}'s plans. */
+    public static List<Tally> replayRounds(GunBattle battle, GunParameters parameters, Scope scope) {
+        return replayRounds(battle, parameters, scope, false);
+    }
+
+    private static List<Tally> replayRounds(GunBattle battle, GunParameters parameters, Scope scope,
+                                            boolean learnInScope) {
         Map<Integer, Tally> byRound = new HashMap<>();
         int round = 0;
+        int enemies = battle.enemies();
+        Set<Long> counted = new HashSet<>();
         Map<String, GunModel> models = new HashMap<>();
         Map<Long, GunLog.LoggedShot> shots = new HashMap<>();
         Map<Long, GunModel.Aim> aims = new HashMap<>();
@@ -99,8 +141,12 @@ public final class GunReplay {
                 aims.clear();
                 shielded.clear();
                 learned.clear();
+                counted.clear();
+                enemies = battle.enemies();
             } else if (event instanceof GunBattle.Shielded s) {
                 shielded.add(s.time());
+            } else if (event instanceof GunBattle.EnemyDied) {
+                enemies--;
             } else if (event instanceof GunModel.Pass pass) {
                 GunLog.LoggedShot logged = shots.get(pass.time());
                 if (logged == null) {
@@ -110,8 +156,14 @@ public final class GunReplay {
                 if (!learned.add(pass.target() + "@" + pass.time())) {
                     continue;
                 }
+                if (learnInScope && !counted.contains(pass.time())) {
+                    continue;
+                }
                 GunModel.Aim aim = aims.get(pass.time());
                 int hit = model(models, pass.target(), parameters).learn(logged.shot(), aim, pass);
+                if (!counted.contains(pass.time())) {
+                    continue;
+                }
                 boolean real = pass.real() && !shielded.contains(pass.time());
                 shieldedCount += pass.real() && !real ? 1 : 0;
                 if (!Double.isNaN(aim.guessFactor())) {
@@ -137,6 +189,9 @@ public final class GunReplay {
                 }
                 shots.put(logged.shot().time(), logged);
                 aims.put(logged.shot().time(), aim);
+                if (scope == Scope.ALL || enemies <= 1) {
+                    counted.add(logged.shot().time());
+                }
             }
         }
         byRound.merge(round, new Tally(shotCount, searched, differing, orphans, gfTries, gfHits, realGfTries,
@@ -150,6 +205,6 @@ public final class GunReplay {
     }
 
     private static GunModel model(Map<String, GunModel> models, String target, GunParameters parameters) {
-        return models.computeIfAbsent(target, t -> new GunModel(parameters));
+        return models.computeIfAbsent(Names.base(target), t -> new GunModel(parameters));
     }
 }

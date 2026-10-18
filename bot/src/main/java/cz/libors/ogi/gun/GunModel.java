@@ -61,10 +61,20 @@ public final class GunModel {
      * @param randomHigh  its highest guess factor
      * @param randomDraw  a number drawn uniformly from [0, 1): where in that range the random gun aims
      * @param mirrorAim   the mirror gun's aim, NaN if it has none
+     * @param alone       whether the shot was planned while one enemy lived (always in a duel battle); only logged,
+     *                    for the gun bench
      */
     public record Shot(String target, long time, double[] features, int direction, double reference, double escape,
                        boolean search, double circularAim, double randomLow, double randomHigh, double randomDraw,
-                       double mirrorAim) {
+                       double mirrorAim, boolean alone) {
+
+        /** A shot planned while one enemy lived. */
+        public Shot(String target, long time, double[] features, int direction, double reference, double escape,
+                    boolean search, double circularAim, double randomLow, double randomHigh, double randomDraw,
+                    double mirrorAim) {
+            this(target, time, features, direction, reference, escape, search, circularAim, randomLow, randomHigh,
+                    randomDraw, mirrorAim, true);
+        }
 
         /** A shot without a random gun's range. */
         public Shot(String target, long time, double[] features, int direction, double reference, double escape,

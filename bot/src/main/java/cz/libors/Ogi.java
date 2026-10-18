@@ -210,6 +210,9 @@ public class Ogi extends TeamRobot {
         shield = new Shield(field, getGunCoolingRate(), BATTLE.shield);
         stance = new ShieldStance(field, getGunCoolingRate());
         overlay = new OverlayFeed(field, world, guns, meleeGun, meleeMovement, waves, teamRadar, BATTLE.hitRates);
+        int members = getTeammates() == null ? 0 : getTeammates().length + 1;
+        overlay.team(members);
+        Overlay.team(members);
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
@@ -323,7 +326,7 @@ public class Ogi extends TeamRobot {
             double nextRadar = Angles.normalizeAbsolute(Angles.fromRobocode(getRadarHeadingRadians()) + turn);
             TeammateState me = new TeammateState(getName(), getX(), getY(),
                     Angles.fromRobocode(getHeadingRadians()), getVelocity(), getEnergy(), nextX, nextY, nextRadar,
-                    getTime(), getRoundNum());
+                    getTime(), getRoundNum(), overlay.painting(getTime()));
             // The teammates plan the radars with this report in the next turn, and so do we.
             teamRadar.reported(new TeamRadar.Watcher(getName(), nextX, nextY, nextRadar, getTime() + 1));
             try {
@@ -575,7 +578,7 @@ public class Ogi extends TeamRobot {
         double mirrorAim = soon && phase == Phase.DUEL
                 ? mirrorAim(target.name(), nextX, nextY, distance, now + 1, planned) : Double.NaN;
         double aim = guns.aim(target.name(), now, nextX, nextY, planned, soon, circular, offset, randomDraw,
-                mirrorAim);
+                mirrorAim, enemiesAlive() <= 1);
         if (plannedShot && phase == Phase.DUEL && getGunHeat() <= getGunCoolingRate() + 1e-9 && !Double.isNaN(aim)) {
             aim = shadowingAim(target.name(), now, nextX, nextY, planned, aim, offset);
         }
@@ -974,7 +977,10 @@ public class Ogi extends TeamRobot {
         }
     }
 
-    /** A key pressed in the battle view switches a layer of the overlay ({@link Overlay#key}). */
+    /**
+     * A key pressed in the battle view switches a layer of the overlay, or in a team which robots draw their own layers
+     * ({@link Overlay#key}). Every robot gets the key, painted or not, so all keep the same choice.
+     */
     @Override
     public void onKeyPressed(KeyEvent e) {
         Overlay.key(e.getKeyChar());
@@ -987,6 +993,7 @@ public class Ogi extends TeamRobot {
         }
         TeammateState s = packet.state();
         world.teammateReported(s);
+        overlay.teammateReported(s.name(), s.time(), s.painted());
         teamRadar.reported(new TeamRadar.Watcher(s.name(), s.nextX(), s.nextY(), s.nextRadarHeading(), s.time() + 1));
         waves.teammateSeen(s.name(), s.time() + 1, s.nextX(), s.nextY());
         for (EnemySighting sighting : packet.sightings()) {

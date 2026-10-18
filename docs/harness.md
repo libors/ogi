@@ -402,6 +402,21 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
   `virtualWeight`, `minTries`; the rest come from `GunParameters.DEFAULT`. They are the main gun's: the anti-surfer
   gun keeps its own fixed copy (`GunParameters.ANTI_SURFER`). `-Probot=<prefix>` picks the logged robot by name
   prefix (default `cz.libors.Ogi`).
+- **Team battles:** each of our robots that logged is a battle of its own (each has its own gun), against the other
+  team, named without the engine's copy number. The models are keyed by the target's base name, as the bot keys them
+  (the copies of an enemy share one). Parity holds on `OgiGunLogTeam` logs (240 robot logs of 48 battles against
+  ranks 1–12, 2026-10-17).
+- **`-Pscope=oneEnemy`** counts the hits of the plans made while one enemy lived only, by our robot's own
+  `meleedeath` lines: in a melee or team battle the turns in which this gun aims the bullets (before, the melee gun
+  aims them, and this gun's waves at the closest enemy only teach it). Every wave still teaches the model, and every
+  plan is still checked for parity. In a 1v1 log it is every plan. A plan logged without the one-enemy flag (before
+  2026-10-18) gets it from the same deaths (the flag is logged for the bench only; a gun choice by it was tried and
+  left out, 2026-10-18); where the flag was logged, the bench reports any plan whose flag the deaths contradict.
+  `-Plearn=scope` lets only those plans' waves
+  teach the model, an experiment: the replay then no longer decides as the bot did, so there is no parity check.
+  Record such logs with `submitRecordings
+  -PgunLog=true -Pkeys=gunshot,gunpass,gunshield,meleedeath -Pdebug=true` (`submitGunLogs` keeps the melee gun's
+  keys against a team set).
 - **A change of aim needs the bench both ways.** The recorded paths answered the logged gun: a target that reacts
   to being hit (it reverses, steps aside, or, as a surfer, avoids where it was hit) did so after the logged gun's
   hits and never after another gun's, so any other gun looks better on the replay. Queue `submitGunLogs` for both

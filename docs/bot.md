@@ -698,7 +698,9 @@ become predictable to the last bits; anything that makes us move spoils that.
     each rate from 5 shots on; with two enemies or more alive, the turns since our side (we or a teammate) last
     scanned it, "r1" (red from 3; a duel's radar locks). The arrows are drawn: Robocode draws a robot's text upright
     from its baseline (`MirroredGraphics.drawString`), so they stand 4 px above the baseline, at the numbers' middle.
-    Above our robot, in dark grey, one a row upwards, its special states in the last turn (`Ogi.stateView`):
+    Below our robot, just under its body (Robocode draws the energy above a robot; robot names are best switched
+    off in the GUI's view options), in dark grey, one a row downwards, its special states in the last turn
+    (`Ogi.stateView`):
     `shield` (shooting the enemy's bullets down), `anti-ram` (the surfer's ways against a robot that drives at us),
     `long-orbit` (the orbit at the preferred distance, with no wave to surf), `ram` (ramming a disabled enemy),
     `saving-energy` (the energy race's power), `searching` (the radar spins to find enemies: the round's first look
@@ -715,13 +717,28 @@ become predictable to the last bits; anything that makes us move spoils that.
     (the scan's age in layer I). The plan painted is the one the robot made in the last turn (`onPaint` runs before
     the robot acts), so the lines start where our teammates were a turn ago; only the painting robot's own report
     already gives its current position.
+- **In a team battle** every robot whose painting is enabled paints, so what is the same on every robot is drawn
+  once: the team radar (R), the bullet powers (B), the column beside each enemy (I) and the enemies' position history
+  (H) by the painting robot with the lowest member number whose own layers are on, which also draws its gun panel
+  (G, headed "robot n": the panel stands in one place; to see another robot's, switch the lower ones off). Its own
+  layers each painting robot draws while they are on: its waves (E, G), its movement (M), its melee aim (A), its own
+  trail (H) and its states (I). Keys **1** to **9** switch a member's own layers, **0** switches all of them on, or off when all were
+  on (so that it never leaves them mixed). Below the legend a row lists the painting robots alive by their member
+  number, each in its place (`1 2 3   5` while 4 is dead or does not paint), green while its own layers are on and red
+  while off; the legend is drawn by the painting robot with the lowest number. Every robot gets the keys, painting or
+  not (`Battle.SendInteractiveEventCommand` sends them to every interactive robot), so all keep the same switches; whether
+  a teammate paints comes in its state (`TeammateState.painted`), a turn late (engine-model G-23), so a teammate counts
+  while its report of this turn or the last said so.
 - **Only while painting:** the shots and positions are traced, and the melee gun and the movement keep their
   candidates, only in the turns whose `onPaint` ran, so a battle without the GUI computes nothing more and replays as before.
 - **Colours:** Ogi is white with an orange radar and scan arc and fires yellow bullets, to be found among the robots
   of a team battle.
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
-  screen is the shot of the current turn.
+  screen is the shot of the current turn. Robocode calls `onPaint` only for a robot whose painting is enabled
+  (`BasicRobotProxy` adds the `PaintEvent` only then); the switch is per robot, kept in its console's dialog, which the
+  GUI keeps by the robot's name across the battles of one session (`RobotDialogManager`; `RobotDialog.reset` leaves
+  the switch), so in a team battle enabling all five once lasts while the same version plays (Robocode 1.11.1).
 - **For the harness:** every turn with a target the bot sets the debug property `gun` (`Trace.gunLine`): the turn
   of the plan, whether last turn's plan was fired in this turn, the chosen gun, each gun's aim, the planned origin,
   the reference, the direction, the power, the data size, each gun's virtual hit rate and the target. A recording
@@ -730,9 +747,10 @@ become predictable to the last bits; anything that makes us move spoils that.
   `gunpass` property per gun wave that passed its target in this turn (the plan's turn, whether it carried a bullet,
   the wave's reference and escape angle, the lowest and highest hitting offset from the reference), then `gunshot`
   with the turn's plan (the features, the direction, the reference, the escape angle, whether the guess-factor gun
-  searched, the circular aim, the guess factor found, the chosen gun, the random gun's range and draw, and the mirror
-  gun's aim; lines logged before 2026-10-12 lack the random gun's three fields and lines logged before 2026-10-14 the
-  mirror gun's aim, and are read without those guns). That is everything `GunModel` needs to replay the battle.
+  searched, the circular aim, the guess factor found, the chosen gun, the random gun's range and draw, the mirror
+  gun's aim and whether one enemy lived; lines logged before 2026-10-12 lack the random gun's three fields, lines
+  logged before 2026-10-14 the mirror gun's aim and lines logged before 2026-10-18 the one-enemy flag, and are read
+  without those guns, as one enemy's). That is everything `GunModel` needs to replay the battle.
   - `OgiGunLog` also logs `gunshield` when an enemy bullet destroys one of its bullets (the plan's turn and the
     shooter): Ogi hands every bullet it fires to the hook `fired(Bullet, Plan)`, which only `OgiGunLog` uses. Robots
     that shoot bullets down would otherwise look easy to hit on the bench. The log keeps the guns' aims, not the

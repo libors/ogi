@@ -41,13 +41,21 @@ import java.util.Locale;
  *   <li><b>B, bullet powers:</b> the power beside each of our and our teammates' bullets in flight, and each enemy's
  *       last shot's power to its right.</li>
  *   <li><b>I, info:</b> right of each enemy, under its last shot's power, the turns until its gun is cool, its
- *       hit rate on us, ours on it and, with two enemies or more, the age of our side's last scan of it; above us our
+ *       hit rate on us, ours on it and, with two enemies or more, the age of our side's last scan of it; below us our
  *       special states in dark grey, a warning diamond round us while we are ganged and a line to the ganged teammate
  *       we help.</li>
  *   <li><b>R, team radar:</b> each of our robots in a colour of its own, with the arc its radar sweeps over the enemies
  *       the team's plan gives it, a line to each of them and a short one where its radar points. No rings: they hid
  *       the robots.</li>
  * </ul>
+ *
+ * <p>In a team battle every robot whose painting is enabled paints, so what is the same on every robot (the team
+ * radar, the bullet powers, the column beside each enemy, the enemies' position history) is drawn by one of them only:
+ * the painting robot with the lowest member number whose own layers are on, which also draws its gun panel (headed
+ * by its number). Keys 1 to 9 switch a member's own layers (its waves, movement, melee aim, trail and states), 0
+ * switches all of them on, or off when all were on.
+ * Below the legend the painting robots' numbers, green while their own layers are on and red while off; the legend is
+ * drawn by the painting robot with the lowest number.
  *
  * <p>Robocode hands robots a graphics mirrored to battlefield coordinates (y up), so points in the mathematical
  * convention are drawn as they are. Arcs are drawn as polylines from such points, never with {@code Arc2D}, whose
@@ -122,14 +130,19 @@ public final class Overlay {
     /** A trail's newest dot has this opacity, its oldest none. */
     private static final int TRAIL_ALPHA = 220;
     private static final Color PULL = new Color(200, 120, 255);
-    /** Our special states above us (layer I): dark grey, quieter than the enemies' numbers. */
+    /** Our special states below us (layer I): dark grey, quieter than the enemies' numbers. */
     private static final Color STATE_TEXT = new Color(125, 125, 125);
     /** The gang defence's warning: a diamond round a ganged robot, a line from its helper to it. */
     private static final Color GANG = new Color(0xff, 0x4f, 0x30);
-    /** The states' first row this far above our centre, the next ones this far apart; the diamond's half-diagonal. */
-    private static final double STATE_ROW = 26;
+    /**
+     * The states' first baseline this far below our centre, just under the body (Robocode draws the energy above a
+     * robot, and the names below it are off), the next ones this far apart; the diamond's half-diagonal.
+     */
+    private static final double STATE_ROW = 30;
     private static final double STATE_ROW_GAP = 12;
     private static final double GANG_DIAMOND = 38;
+    /** The legend's row of painting robots: member n stands this many pixels right of member n − 1. */
+    private static final float MEMBER_SPACING = 12;
     /** Our robots' colours in the radar layer, by their place in the plan. */
     private static final Color[] WATCHERS = {new Color(0, 200, 255), new Color(255, 90, 200), new Color(150, 255, 80),
             new Color(255, 170, 40), new Color(170, 120, 255)};
@@ -162,6 +175,10 @@ public final class Overlay {
     private static final int INFO = 7;
     /** The kind of this battle, set at its first paint; null before. */
     private static BattleKind kind;
+    /** Our team's size, 0 outside a team; set every round, painting or not. */
+    private static int members;
+    /** By member number, whether that robot of our team draws its own layers (keys 1 to 9 and 0). */
+    private static final boolean[] OWN = {true, true, true, true, true, true, true, true, true, true};
     /**
      * The layers shown before a melee's or a team battle's round came down to one enemy ({@link #duel}), null while
      * it has not.
@@ -224,7 +241,15 @@ public final class Overlay {
         Arrays.fill(SHOWN, true);
     }
 
-    /** Switches the layer of this key, if this battle offers it. */
+    /** We play in a team of {@code size} robots (0: not in a team). */
+    public static void team(int size) {
+        members = Math.min(size, OWN.length - 1);
+    }
+
+    /**
+     * Switches the layer of this key, if this battle offers it; in a team a digit 1 to 9 switches that member's own
+     * layers, and 0 switches every member's on, or off if all were on.
+     */
     public static void key(char c) {
         char k = Character.toLowerCase(c);
         for (int i = 0; i < KEYS.length; i++) {
@@ -232,41 +257,91 @@ public final class Overlay {
                 SHOWN[i] = !SHOWN[i];
             }
         }
+        if (members == 0 || k < '0' || k > '9') {
+            return;
+        }
+        int n = k - '0';
+        if (n == 0) {
+            boolean allOn = true;
+            for (int m = 1; m <= members; m++) {
+                allOn &= OWN[m];
+            }
+            Arrays.fill(OWN, 1, members + 1, !allOn);
+        } else if (n <= members) {
+            OWN[n] = !OWN[n];
+        }
+    }
+
+    /** Whether member {@code n} of our team draws its own layers, for tests. */
+    static boolean own(int n) {
+        return OWN[n];
+    }
+
+    /**
+     * What this robot draws: its own layers, the layers that are the same on every robot of the team, and the legend.
+     * Outside a team all three.
+     */
+    record Roles(boolean own, boolean shared, boolean legend) {
+
+        static Roles of(Trace.PaintersView p) {
+            if (p == null) {
+                return new Roles(true, true, true);
+            }
+            int firstOwn = 0;
+            for (int n : p.painted()) {
+                if (n < OWN.length && OWN[n]) {
+                    firstOwn = n;
+                    break;
+                }
+            }
+            boolean own = p.me() >= OWN.length || OWN[p.me()];
+            return new Roles(own, own && firstOwn == p.me(), p.painted().length == 0 || p.painted()[0] == p.me());
+        }
     }
 
     public static void paint(Graphics2D g, Trace trace) {
+        Roles roles = Roles.of(trace.painters());
         Trace.PositionView positions = trace.positions();
         if (positions != null && SHOWN[HISTORY]) {
-            paintTrail(g, positions.enemies(), OPPONENT_TRAIL);
-            paintTrail(g, positions.ours(), OUR_TRAIL);
-        }
-        if (SHOWN[RADAR] && trace.radar() != null) {
-            paintRadar(g, trace.radar());
-        }
-        if (SHOWN[MOVE] && trace.move() != null) {
-            paintMove(g, trace.move());
-        }
-        if (SHOWN[MELEE_AIM] && trace.meleeAim() != null) {
-            paintMeleeAim(g, trace.meleeAim());
-        }
-        for (Trace.WaveView w : trace.waves()) {
-            if (SHOWN[w.enemy() ? ENEMY_WAVES : GUN_WAVES]) {
-                paintWave(g, w);
+            if (roles.shared()) {
+                paintTrail(g, positions.enemies(), OPPONENT_TRAIL);
+            }
+            if (roles.own()) {
+                paintTrail(g, positions.ours(), OUR_TRAIL);
             }
         }
-        if (SHOWN[GUN_WAVES]) {
+        if (roles.shared() && SHOWN[RADAR] && trace.radar() != null) {
+            paintRadar(g, trace.radar());
+        }
+        if (roles.own()) {
+            if (SHOWN[MOVE] && trace.move() != null) {
+                paintMove(g, trace.move());
+            }
+            if (SHOWN[MELEE_AIM] && trace.meleeAim() != null) {
+                paintMeleeAim(g, trace.meleeAim());
+            }
+            for (Trace.WaveView w : trace.waves()) {
+                if (SHOWN[w.enemy() ? ENEMY_WAVES : GUN_WAVES]) {
+                    paintWave(g, w);
+                }
+            }
+        }
+        // The gun panel stands in one place: one robot's, the one that draws what the team shares.
+        if (roles.shared() && SHOWN[GUN_WAVES]) {
             paintGuns(g, trace);
         }
-        if (SHOWN[POWERS] && trace.powers() != null) {
+        if (roles.shared() && SHOWN[POWERS] && trace.powers() != null) {
             paintPowers(g, trace.powers());
         }
-        if (SHOWN[INFO] && trace.info() != null) {
+        if (roles.shared() && SHOWN[INFO] && trace.info() != null) {
             paintInfo(g, trace.info());
         }
-        if (SHOWN[INFO] && trace.states() != null) {
+        if (roles.own() && SHOWN[INFO] && trace.states() != null) {
             paintStates(g, trace.states());
         }
-        paintLegend(g, trace);
+        if (roles.legend()) {
+            paintLegend(g, trace);
+        }
     }
 
     private static void paintWave(Graphics2D g, Trace.WaveView w) {
@@ -545,7 +620,7 @@ public final class Overlay {
         for (int i = 0; i < v.states().size(); i++) {
             String s = v.states().get(i).label();
             g.drawString(s, (float) (v.x() - g.getFontMetrics().stringWidth(s) / 2.0),
-                    (float) (v.y() + STATE_ROW + STATE_ROW_GAP * i));
+                    (float) (v.y() - STATE_ROW - STATE_ROW_GAP * i));
         }
         g.setColor(GANG);
         g.setStroke(new BasicStroke(2f));
@@ -623,6 +698,10 @@ public final class Overlay {
     private static void paintGuns(Graphics2D g, Trace trace) {
         List<String[]> rows = new ArrayList<>();
         List<Color[]> colors = new ArrayList<>();
+        if (trace.painters() != null) {
+            rows.add(new String[] {"robot " + trace.painters().me()});
+            colors.add(new Color[] {TEXT});
+        }
         for (Trace.GunView gun : trace.guns()) {
             rows.add(new String[] {gun.target() + "  data " + gun.data() + (gun.hardToHit() ? "  hard to hit" : "")});
             colors.add(new Color[] {TEXT});
@@ -667,6 +746,15 @@ public final class Overlay {
                 g.setColor(SHOWN[i] ? LAYER_ON : LAYER_OFF);
                 g.drawString(Character.toUpperCase(KEYS[i]) + ": " + NAMES[i], 10,
                         (float) (trace.fieldHeight() - 20 - 14 * row++));
+            }
+        }
+        Trace.PaintersView p = trace.painters();
+        if (p != null) {
+            // Each member keeps its place, so that a robot not painting leaves a gap: 1 2 3   5.
+            float y = (float) (trace.fieldHeight() - 20 - 14 * row);
+            for (int n : p.painted()) {
+                g.setColor(n >= OWN.length || OWN[n] ? LAYER_ON : LAYER_OFF);
+                g.drawString(String.valueOf(n), 10 + MEMBER_SPACING * (n - 1), y);
             }
         }
     }

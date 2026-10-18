@@ -13,17 +13,29 @@ public final class Names {
      * for the others.
      */
     public static String base(String name) {
+        int i = copyStart(name);
+        return i < 0 ? name : name.substring(0, i - 1);
+    }
+
+    /** The engine's copy number in the name, 0 if it has none: a team's members are numbered from 1. */
+    public static int number(String name) {
+        int i = copyStart(name);
+        return i < 0 ? 0 : Integer.parseInt(name.substring(i + 1, name.length() - 1));
+    }
+
+    /** The index of the {@code '('} of the name's copy number, -1 if it has none. */
+    private static int copyStart(String name) {
         int end = name.length() - 1;
         if (end < 3 || name.charAt(end) != ')') {
-            return name;
+            return -1;
         }
         int i = end - 1;
         while (i >= 0 && Character.isDigit(name.charAt(i))) {
             i--;
         }
         if (i == end - 1 || i < 1 || name.charAt(i) != '(' || name.charAt(i - 1) != ' ') {
-            return name;
+            return -1;
         }
-        return name.substring(0, i - 1);
+        return i;
     }
 }

@@ -29,12 +29,15 @@ import java.util.stream.Stream;
  * and reports the hit rates per opponent. With the bot's parameters every replayed decision must equal the logged
  * one, and the fired hit rate should match the harness's count of the same battles.
  *
- * <p>Usage: {@code GunBench logs=<dir>,... [robot=<name prefix>] [selection=<tsv>] [weights=w,...]
- * [neighbourScale=x] [maxNeighbours=n] [virtualWeight=x] [minTries=x] [tune=<passes>] [maxShielded=x]
- * [splitSeed=n]}
+ * <p>Usage: {@code GunBench logs=<dir>,... [robot=<name prefix>] [scope=all|oneEnemy] [learn=all|scope]
+ * [selection=<tsv>] [weights=w,...] [neighbourScale=x] [maxNeighbours=n] [virtualWeight=x] [minTries=x]
+ * [tune=<passes>] [maxShielded=x] [splitSeed=n]}
  *
  * <p>A logs directory holds {@code *.rec.gz} gun logs and the {@code battles.tsv} index that {@code RecordBattles}
- * writes. Exits with 1 if a replay with the bot's parameters differs from the log.
+ * writes. Exits with 1 if a replay with the bot's parameters differs from the log. In a team battle each of our
+ * robots that logs is a battle of its own ({@link GunBattle#readAll}); {@code scope=oneEnemy} counts the hits of the
+ * plans made while one enemy lived ({@link GunReplay.Scope}); {@code learn=scope} lets only those plans' waves teach
+ * the model, an experiment without a parity check.
  *
  * <p>{@code selection} is a tab-separated file with the columns {@code stratum} and {@code name}; the report then
  * gives a mean per stratum. {@code tune} runs a coordinate search from the given parameters on half of the opponents
@@ -71,6 +74,11 @@ public final class GunBench {
             usage("missing logs");
         }
         GunParameters parameters = parameters(options);
+        GunReplay.Scope scope = switch (options.getOrDefault("scope", "all")) {
+            case "all" -> GunReplay.Scope.ALL;
+            case "oneEnemy" -> GunReplay.Scope.ONE_ENEMY;
+            default -> throw new IllegalArgumentException("scope is all or oneEnemy: " + options.get("scope"));
+        };
         List<Path> files = new ArrayList<>();
         Map<String, long[]> harnessShots = new HashMap<>();
         for (String dir : options.get("logs").split(",")) {
@@ -86,9 +94,9 @@ public final class GunBench {
         Map<String, String> strata = options.containsKey("selection")
                 ? readSelection(Path.of(options.get("selection"))) : Map.of();
         long start = System.nanoTime();
-        List<GunBattle> battles = files.parallelStream().map(f -> {
+        List<GunBattle> battles = files.parallelStream().flatMap(f -> {
             try {
-                return GunBattle.read(f, options.get("robot"));
+                return GunBattle.readAll(f, options.get("robot")).stream();
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -97,13 +105,15 @@ public final class GunBench {
 
         if (options.containsKey("tune")) {
             System.out.printf(Locale.ROOT, "%d battles read in %.1f s%n", battles.size(), (loaded - start) / 1e9);
-            tuneAndReport(battles, parameters, strata, Integer.parseInt(options.get("tune")),
+            tuneAndReport(battles, parameters, scope, strata, Integer.parseInt(options.get("tune")),
                     Double.parseDouble(options.getOrDefault("maxShielded", "0.15")),
                     Long.parseLong(options.getOrDefault("splitSeed", "1")));
             System.exit(0);
         }
 
-        List<GunReplay.Tally> tallies = battles.parallelStream().map(b -> GunReplay.replay(b, parameters)).toList();
+        boolean learnInScope = options.getOrDefault("learn", "all").equals("scope");
+        List<GunReplay.Tally> tallies = battles.parallelStream()
+                .map(b -> GunReplay.replay(b, parameters, scope, learnInScope)).toList();
         long replayed = System.nanoTime();
 
         Map<String, List<Integer>> byOpponent = new TreeMap<>();
@@ -115,9 +125,12 @@ public final class GunBench {
             GunReplay.Tally tally = GunReplay.Tally.ZERO;
             long fired = 0;
             long hits = 0;
+            // The harness counts a battle once, also when several of our robots logged in it.
+            Set<Path> counted = new HashSet<>();
             for (int i : e.getValue()) {
                 tally = tally.plus(tallies.get(i));
-                long[] shots = harnessShots.get(key(battles.get(i).file()));
+                long[] shots = counted.add(battles.get(i).file()) ? harnessShots.get(key(battles.get(i).file()))
+                        : null;
                 if (shots != null) {
                     fired += shots[0];
                     hits += shots[1];
@@ -125,7 +138,7 @@ public final class GunBench {
             }
             rows.add(new Row(e.getKey(), e.getValue().size(), tally, fired, hits));
         }
-        print(parameters, rows, battles.size(), (loaded - start) / 1e9, (replayed - loaded) / 1e9);
+        print(parameters, scope, rows, battles.size(), (loaded - start) / 1e9, (replayed - loaded) / 1e9);
         if (!strata.isEmpty()) {
             Map<String, GunReplay.Tally> tallyByOpponent = new TreeMap<>();
             rows.forEach(r -> tallyByOpponent.put(r.opponent(), r.tally()));
@@ -135,12 +148,18 @@ public final class GunBench {
                     .collect(Collectors.joining(", ", "fired % per stratum: ", "")));
         }
 
+        long aloneDiffering = battles.stream().mapToLong(GunBattle::aloneDiffering).sum();
+        if (aloneDiffering > 0) {
+            System.out.println("Plans whose logged one-enemy flag the logged deaths contradict: " + aloneDiffering);
+        }
         long differing = rows.stream().mapToLong(r -> r.tally().differing()).sum();
         long orphans = rows.stream().mapToLong(r -> r.tally().orphans()).sum();
         if (orphans > 0) {
             System.out.println("Passed waves without their plan in the log: " + orphans);
         }
-        if (parameters.equals(GunParameters.DEFAULT)) {
+        if (learnInScope) {
+            System.out.println("Learned only from the scope's waves: no parity check.");
+        } else if (parameters.equals(GunParameters.DEFAULT)) {
             System.out.println(differing == 0 && orphans == 0
                     ? "Parity: every replayed decision equals the logged one."
                     : "PARITY FAILED: " + differing + " replayed decisions differ from the log, " + orphans
@@ -150,9 +169,9 @@ public final class GunBench {
         System.exit(0);
     }
 
-    private static void print(GunParameters parameters, List<Row> rows, int battles, double loadSeconds,
-                              double replaySeconds) {
-        System.out.println("Parameters: " + parameters);
+    private static void print(GunParameters parameters, GunReplay.Scope scope, List<Row> rows, int battles,
+                              double loadSeconds, double replaySeconds) {
+        System.out.println("Parameters: " + parameters + (scope == GunReplay.Scope.ALL ? "" : "; scope " + scope));
         System.out.printf(Locale.ROOT, "%d battles, read in %.1f s, replayed in %.2f s%n%n", battles, loadSeconds,
                 replaySeconds);
         System.out.printf(Locale.ROOT, "%-34s %7s %8s %8s %9s %9s %9s %9s %15s %8s %8s%n", "opponent", "battles",
@@ -175,8 +194,10 @@ public final class GunBench {
     }
 
     /** Per opponent, the tally of its battles. */
-    static Map<String, GunReplay.Tally> evaluate(List<GunBattle> battles, GunParameters parameters) {
-        List<GunReplay.Tally> tallies = battles.parallelStream().map(b -> GunReplay.replay(b, parameters)).toList();
+    static Map<String, GunReplay.Tally> evaluate(List<GunBattle> battles, GunParameters parameters,
+                                                 GunReplay.Scope scope) {
+        List<GunReplay.Tally> tallies = battles.parallelStream().map(b -> GunReplay.replay(b, parameters, scope))
+                .toList();
         Map<String, GunReplay.Tally> byOpponent = new TreeMap<>();
         for (int i = 0; i < battles.size(); i++) {
             byOpponent.merge(battles.get(i).opponent(), tallies.get(i), GunReplay.Tally::plus);
@@ -185,8 +206,8 @@ public final class GunBench {
     }
 
     /** The mean over opponents of the fired hit rate: what the search maximises. */
-    static double objective(List<GunBattle> battles, GunParameters parameters) {
-        return evaluate(battles, parameters).values().stream().mapToDouble(GunReplay.Tally::firedRate)
+    static double objective(List<GunBattle> battles, GunParameters parameters, GunReplay.Scope scope) {
+        return evaluate(battles, parameters, scope).values().stream().mapToDouble(GunReplay.Tally::firedRate)
                 .filter(v -> !Double.isNaN(v)).average().orElse(Double.NaN);
     }
 
@@ -196,9 +217,9 @@ public final class GunBench {
      * opponents we fire no bullet at. The rest is split per stratum in a shuffled order ({@code splitSeed}), every
      * other one into the training half; both battles of an opponent stay in its half.
      */
-    private static void tuneAndReport(List<GunBattle> battles, GunParameters start, Map<String, String> strata,
-                                      int passes, double maxShielded, long splitSeed) {
-        Map<String, GunReplay.Tally> first = evaluate(battles, start);
+    private static void tuneAndReport(List<GunBattle> battles, GunParameters start, GunReplay.Scope scope,
+                                      Map<String, String> strata, int passes, double maxShielded, long splitSeed) {
+        Map<String, GunReplay.Tally> first = evaluate(battles, start, scope);
         Set<String> leftOut = new HashSet<>();
         for (Map.Entry<String, GunReplay.Tally> e : first.entrySet()) {
             GunReplay.Tally t = e.getValue();
@@ -239,12 +260,12 @@ public final class GunBench {
         }
 
         long t0 = System.nanoTime();
-        GunParameters tuned = tune(train, start, passes);
+        GunParameters tuned = tune(train, start, scope, passes);
         System.out.printf(Locale.ROOT, "search took %.0f s%n%n", (System.nanoTime() - t0) / 1e9);
         System.out.println("Start: " + start);
         System.out.println("Tuned: " + tuned);
-        compare("train", train, start, tuned, strata);
-        compare("test ", test, start, tuned, strata);
+        compare("train", train, start, tuned, scope, strata);
+        compare("test ", test, start, tuned, scope, strata);
         double[] w = tuned.weights();
         System.out.println();
         System.out.println("-Pweights=" + Arrays.stream(w).mapToObj(GunBench::fmt).collect(Collectors.joining(","))
@@ -257,9 +278,9 @@ public final class GunBench {
      * with its 95 % interval over opponents.
      */
     private static void compare(String label, List<GunBattle> battles, GunParameters a, GunParameters b,
-                                Map<String, String> strata) {
-        Map<String, GunReplay.Tally> before = evaluate(battles, a);
-        Map<String, GunReplay.Tally> after = evaluate(battles, b);
+                                GunReplay.Scope scope, Map<String, String> strata) {
+        Map<String, GunReplay.Tally> before = evaluate(battles, a, scope);
+        Map<String, GunReplay.Tally> after = evaluate(battles, b, scope);
         StringBuilder line = new StringBuilder(label + ":");
         for (Map.Entry<String, List<String>> g : groups(before, strata).entrySet()) {
             double[] d = g.getValue().stream()
@@ -300,9 +321,9 @@ public final class GunBench {
      * and the tries also 0) and keeps the best if it raises the objective by more than 0.01 points. After a pass
      * without a gain the steps get finer; after a fine pass without a gain, or {@code passes} passes, it stops.
      */
-    static GunParameters tune(List<GunBattle> train, GunParameters start, int passes) {
+    static GunParameters tune(List<GunBattle> train, GunParameters start, GunReplay.Scope scope, int passes) {
         double[] x = vector(start);
-        double best = objective(train, start);
+        double best = objective(train, start, scope);
         System.out.printf(Locale.ROOT, "start: %.3f%n", best);
         boolean fine = false;
         for (int pass = 1; pass <= passes; pass++) {
@@ -321,7 +342,7 @@ public final class GunBench {
                     } catch (IllegalArgumentException e) {
                         continue;
                     }
-                    double v = objective(train, p);
+                    double v = objective(train, p, scope);
                     if (v > bestV) {
                         bestV = v;
                         bestY = y;
@@ -440,9 +461,9 @@ public final class GunBench {
 
     private static void usage(String problem) {
         System.err.println(problem);
-        System.err.println("Usage: GunBench logs=<dir>,... [robot=<name prefix>] [selection=<tsv>] [weights=w,...] "
-                + "[neighbourScale=x] [maxNeighbours=n] [virtualWeight=x] [minTries=x] [tune=<passes>] "
-                + "[maxShielded=x] [splitSeed=n]");
+        System.err.println("Usage: GunBench logs=<dir>,... [robot=<name prefix>] [scope=all|oneEnemy] "
+                + "[learn=all|scope] [selection=<tsv>] [weights=w,...] [neighbourScale=x] [maxNeighbours=n] "
+                + "[virtualWeight=x] [minTries=x] [tune=<passes>] [maxShielded=x] [splitSeed=n]");
         System.exit(2);
     }
 }

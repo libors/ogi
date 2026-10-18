@@ -12,6 +12,8 @@ import java.io.Serializable;
  * @param nextRadarHeading where the sender's radar points at the end of turn {@code time + 1} (mathematical), as its
  *                         command of turn {@code time} turns it
  * @param round            round number; states from another round are ignored
+ * @param painted          whether the sender painted in turn {@code time} (its painting is enabled in the GUI), for
+ *                         the debug overlay
  */
 public record TeammateState(
         String name,
@@ -24,7 +26,8 @@ public record TeammateState(
         double nextY,
         double nextRadarHeading,
         long time,
-        int round) implements Serializable {
+        int round,
+        boolean painted) implements Serializable {
 
     private static final long serialVersionUID = 1L;
 }

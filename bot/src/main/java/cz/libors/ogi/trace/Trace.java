@@ -110,7 +110,7 @@ public final class Trace {
     public record InfoView(List<EnemyInfo> enemies) {
     }
 
-    /** Our special states, in the order they are listed above us (layer I). */
+    /** Our special states, in the order they are listed below us (layer I). */
     public enum State {
         /** Shooting the enemy's bullets down. */
         SHIELD("shield"),
@@ -149,6 +149,18 @@ public final class Trace {
      * @param helpX  the ganged teammate the gang defence draws us to as its helper, NaN if none
      */
     public record StateView(double x, double y, List<State> states, boolean ganged, double helpX, double helpY) {
+    }
+
+    /**
+     * Which of our team's robots paint (team battles only): the overlay draws the layers that are the same on every
+     * robot once, and lists the painting robots.
+     *
+     * @param me      our member number (1 the leader)
+     * @param members the team's size
+     * @param painted the member numbers of the robots alive that painted in this turn or the last (their reports
+     *                arrive a turn late), ascending, ours among them
+     */
+    public record PaintersView(int me, int members, int[] painted) {
     }
 
     /** A bullet's power where it is (layer B). */
@@ -227,6 +239,7 @@ public final class Trace {
     private PowerView powers;
     private InfoView info;
     private StateView states;
+    private PaintersView painters;
     private String lastShotTarget;
     private String lastShotGun;
     private double meleeHitRate = Double.NaN;
@@ -245,6 +258,7 @@ public final class Trace {
         powers = null;
         info = null;
         states = null;
+        painters = null;
         lastShotTarget = null;
         lastShotGun = null;
         meleeHitRate = Double.NaN;
@@ -294,6 +308,15 @@ public final class Trace {
 
     public void states(StateView view) {
         states = view;
+    }
+
+    public void painters(PaintersView view) {
+        painters = view;
+    }
+
+    /** Which of our team's robots paint, null outside a team. */
+    public PaintersView painters() {
+        return painters;
     }
 
     /** Our special states, null if not traced. */

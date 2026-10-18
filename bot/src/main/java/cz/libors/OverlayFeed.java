@@ -17,6 +17,7 @@ import cz.libors.ogi.trace.ShotTrails;
 import cz.libors.ogi.trace.Trace;
 import cz.libors.ogi.world.BattleKind;
 import cz.libors.ogi.world.EnemyState;
+import cz.libors.ogi.world.Names;
 import cz.libors.ogi.world.Phase;
 import cz.libors.ogi.world.World;
 import robocode.Bullet;
@@ -26,8 +27,11 @@ import java.awt.Graphics2D;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * What the debug overlay shows (bot.md "Debug overlay"), gathered for one round: the components describe themselves
@@ -72,6 +76,10 @@ final class OverlayFeed {
     private String lastShotGun;
     /** Our teammates' bullets reported while we paint, for the bullet powers (layer B). */
     private final List<TeamShot> teamShots = new ArrayList<>();
+    /** The turn of each teammate's last report that it painted. */
+    private final Map<String, Long> paintingTeammates = new HashMap<>();
+    /** Our team's size, 0 outside a team. */
+    private int members;
 
     OverlayFeed(Field field, World world, VirtualGuns guns, MeleeGun meleeGun, MeleeMovement meleeMovement,
                 EnemyWaves waves, TeamRadar teamRadar, HitRates hitRates) {
@@ -133,6 +141,20 @@ final class OverlayFeed {
         }
     }
 
+    /** We play in a team of this many robots. */
+    void team(int size) {
+        members = size;
+    }
+
+    /** A teammate reported its state of turn {@code time}: whether it painted then. */
+    void teammateReported(String name, long time, boolean painted) {
+        if (painted) {
+            paintingTeammates.merge(name, time, Math::max);
+        } else {
+            paintingTeammates.remove(name);
+        }
+    }
+
     /** A teammate's bullet reported in turn {@code time}, kept if we painted in the turn before. */
     void teamShot(TeamShot shot, long time) {
         if (paintedAt >= time - 1) {
@@ -172,7 +194,26 @@ final class OverlayFeed {
         trace.powers(powerView(now, ourBullets));
         trace.info(infoView(now, phase));
         trace.states(stateView(x, y, phase, radarTurn));
+        if (members > 0) {
+            trace.painters(paintersView(now, me));
+        }
         Overlay.paint(g, trace);
+    }
+
+    /**
+     * We and the teammates alive whose report of this turn or the last said they painted: a report reaches us a turn
+     * late (engine-model G-23), and in a turn it may come after our painting.
+     */
+    private Trace.PaintersView paintersView(long now, String me) {
+        TreeSet<Integer> painted = new TreeSet<>();
+        painted.add(Names.number(me));
+        paintingTeammates.forEach((name, time) -> {
+            if (time >= now - 2 && !world.dead(name)) {
+                painted.add(Names.number(name));
+            }
+        });
+        return new Trace.PaintersView(Names.number(me), members,
+                painted.stream().mapToInt(Integer::intValue).toArray());
     }
 
     /**
