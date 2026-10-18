@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Movement Explorer</title>
+<link rel="stylesheet" href="explorer.css">
+</head>
+<body>
+<div id="app"></div>
+<script>
+// The team page: five robots of ours on the TeamRumble's field; the stories quote docs/bot.md "Team play".
+window.EXPLORER = {
+  mode: 'team',
+  title: 'Team Movement Explorer',
+  field: {w: 1200, h: 1200},
+  scenarios: [
+    {
+      id: 'default', tab: 'Default', title: 'Default: where it wants to be', gang: false, view: 'me',
+      robots: [['me', 'ours', 600, 520, 100], ['A', 'ours', 420, 330, 100], ['B', 'ours', 820, 720, 100],
+        ['E1', 'enemy', 250, 950, 100], ['E2', 'enemy', 980, 260, 100], ['E3', 'enemy', 1000, 1000, 120],
+        ['E4', 'enemy', 180, 180, 60]],
+      options: {}, waves: [],
+      story: `
+  <p>The colour is the risk of every point as a destination for the viewed robot; the dots are this turn's 40 candidates. With no waves in the air the destination (<b style="color:var(--gold)">&#9733;</b>) is simply the candidate with the least risk.</p>
+  <ol>
+  <li><b>No preferred distance.</b> Unlike the duel's 325 px, the melee movement keeps no distance from anyone: every robot only repels, with 1/d&sup2;. The robot goes wherever is farthest from everybody that its reach allows. Nothing but the 45 px margin keeps it off the walls, so the field minimum (&#8853;) usually lies on a wall or in a corner.</li>
+  <li><b>Teammates repel more than enemies.</b> A teammate weighs 3. An enemy of our energy weighs 1 when the way runs across its line and 2 when it runs straight along it, divided by 1 + the robots that are closer to it than the point is. Here A and B make up most of the destination's risk (see <i>Why this destination</i>). The robots keep apart, so bullets aimed at one don't hit another, and the enemies' fire is split (measured +2 to +4 APS).</li>
+  <li><b>A cluster of enemies weighs less than its head count.</b> <code>n</code> counts every robot closer to the enemy, its own teammates too, although an enemy never shoots its own. Counting only ours lost 1.6 APS. Hover near E2: two robots are closer to it than most points, so its term is a third.</li>
+  <li><b>The way counts, not only the point.</b> The same point costs up to twice as much when the way to it runs straight at or away from an enemy, because head-on and linear guns hit that. So the robot retreats at an angle.</li>
+  <li><b>Candidates bunch on the outer ring.</b> A random distance above <code>reach</code> is clamped to it. With an enemy at 300 px the reach is 180 px, at 130 px it is 78 px, so all the steps get short.</li>
+  <li><b>History.</b> Our position every 5 turns, the last 20 of them, multiplies the risk by 1 + &Sigma;400/d&sup2;. Press <i>Play</i>: the robots never settle on the minimum. They drift around it and along the walls.</li>
+  </ol>
+  <div class="try"><b>Try:</b> drag A away and watch the destination follow the space it left. Click E3 and set its energy to 200 (the threat stops growing at 2&times; ours). Press <i>Play</i>.</div>`,
+    },
+    {
+      id: 'waves', tab: 'Bullets', title: 'Default: bullets in the air', gang: false, view: 'me',
+      robots: [['me', 'ours', 640, 500, 100], ['A', 'ours', 420, 330, 100], ['B', 'ours', 820, 780, 100],
+        ['E1', 'enemy', 250, 950, 100], ['E2', 'enemy', 980, 260, 100], ['E3', 'enemy', 1000, 1000, 120]],
+      options: {},
+      waves: [{team: false, from: 'E2', at: 'me', age: 14, power: 2, spread: 0.08},
+        {team: true, from: 'A', at: 'E3', age: 5, power: 2.5}],
+      damageLayer: true,
+      story: `
+  <p>Stage two: only the <b>8 candidates with the least risk</b> (numbered rings) are driven to in a prediction (straight there, then stand, at most 30 turns) against the bullets in the air. The red dots show the waves' damage on the way to every point within reach, so you can see what the 8 miss.</p>
+  <ol>
+  <li><b>Enemy wave</b> (E2 at me): bullet damage &times; the share of its aim inside our hit range &times; the chance that it aimed at us, <code>1/(1+n)&sup2;</code>, where n counts our teammates it had closer than us (an enemy never aims at its own). Under 0.1 the wave is skipped.</li>
+  <li><b>Teammate's bullet</b> (A at E3): its heading is known exactly, so a way whose hit range covers its line costs the full damage (13 for power 2.5).</li>
+  <li><b>The waves veto rather than weigh.</b> The score is <code>risk/median + 3&middot;damage/max(0.1, median damage)</code>. The risks of the best 8 differ by a few percent. When most of the 8 are safe, the median damage is 0 and the floor 0.1 applies: one point of expected damage then adds 30 to a score of about 1. Only when all 8 are hit does the term become a real trade-off, and the least-hit point wins.</li>
+  <li><b>Safe points outside the 8 don't exist for the bot.</b> A point the waves miss but whose position risk is 9th or worse is never considered. Look for blank (dot-free) areas without a ring.</li>
+  </ol>
+  <div class="try"><b>Try:</b> drag the wave's aim handle (the small circle beyond its arc). Drag B in between E2 and me: the chance drops to 1/4, and with two teammates closer to 1/9. Raise the spread in the wave's inspector.</div>`,
+    },
+    {
+      id: 'ganged', tab: 'Ganged', title: 'Ganged: two enemies on one of ours', gang: true, view: 'me',
+      robots: [['me', 'ours', 600, 600, 100], ['A', 'ours', 250, 250, 100], ['B', 'ours', 1000, 250, 100],
+        ['E1', 'enemy', 480, 760, 100], ['E2', 'enemy', 780, 560, 100], ['E3', 'enemy', 1000, 1050, 100]],
+      options: {E1: {follow: 'me', keep: 170}, E2: {follow: 'me', keep: 170}},
+      waves: [],
+      story: `
+  <p>A robot of ours is <b>ganged</b> while 2 or more enemies are within 250 px (red dashed circle). The <b>gang defence</b> is a switch for the whole battle: it turns on once 4 % of our robot-turns were ganged, over at least 200. Teams that gang reached 12&ndash;27 %, the others stayed under 1 %. Here E1 and E2 follow me at 170 px.</p>
+  <ol>
+  <li><b>The pull:</b> the ganged robot's risk is multiplied by <code>e<sup>0.5&middot;&Delta;d/100</sup></code>, where &Delta;d is how much the point changes its distance to its <i>nearest teammate</i>. 100 px nearer makes it &times;0.61. The other robots become helpers (next tab). The gangers follow their victim into our fire, and the helpers shoot from nearer (measured +0.43 &plusmn; 0.38 APS; neither part alone paid).</li>
+  <li><b>Without it the team scatters.</b> A teammate repels (3/d&sup2;), so a ganged robot running by plain minimum risk often runs <i>away</i> from its team. Switch the defence off and press <i>Play</i> to compare.</li>
+  <li><b>No floor, and yet it doesn't drive into its teammate.</b> The pull is a factor. Against a single 1/d&sup2; repulsion, <code>d<sup>&minus;2</sup>&middot;e<sup>s&middot;d/100</sup></code> is least at <code>d = 200/s</code>, which is 400 px for s = 0.5 (the faint circle). The gangers' terms hardly change as the robot moves towards A, so they act like a constant, and that pulls the stop inside 400 px. With <i>Play</i> it keeps mostly 200&ndash;400 px from A; with the defence off it ends 500&ndash;1300 px away.</li>
+  <li><b>Short steps.</b> With the gangers at 170 px the reach is 0.6 &times; 170 = 102 px.</li>
+  </ol>
+  <div class="try"><b>Try:</b> <i>Play</i> with the defence on, then <i>Reset</i>, switch it off and <i>Play</i> again. Click A to see its helper's view.</div>`,
+    },
+    {
+      id: 'helper', tab: 'Helper', title: 'Helper: going to a ganged teammate', gang: true, view: 'me',
+      robots: [['me', 'ours', 900, 300, 100], ['V', 'ours', 300, 850, 100], ['A', 'ours', 1050, 750, 100],
+        ['E1', 'enemy', 430, 1010, 100], ['E2', 'enemy', 150, 990, 100], ['E3', 'enemy', 1050, 1080, 100]],
+      options: {V: {pinned: true}, A: {pinned: true}},
+      waves: [{team: false, from: 'E1', at: 'V', age: 4, power: 2.5, spread: 0.08}],
+      story: `
+  <p>With the gang defence on, a robot that isn't ganged itself is drawn to the <b>nearest ganged teammate</b> (V) down to 300 px: <code>risk &times; e<sup>0.5&middot;&Delta;d/100</sup></code>, both distances clamped at 300, so within 300 px the pull is flat. V and A are pinned here so that the helper's distance is easy to read.</p>
+  <ol>
+  <li><b>300 px is a floor, not a target.</b> Against a single 1/d&sup2; source the pull balances at 200/0.5 = 400 px, so the floor would never bind. The other robots' terms barely change as the helper approaches, and they move the stop inwards: with <i>Play</i> the helper comes in and then wanders about 270&ndash;500 px from V, the median of a hundred turns ending around 300&ndash;400 px (see <i>Distances</i>). Without the defence it stays 700&ndash;1100 px away.</li>
+  <li><b>The gangers look less dangerous to a helper than they are.</b> V is closer to them than the helper, so each ganger's term is divided by 1 + n. Their waves' aim chance at the helper is <code>1/(1+n)&sup2;</code>: 1/4 with V closer, 1/9 with one more teammate, and skipped with three. E1's wave here aims at V. Hover the helper's candidates near V to see the chance.</li>
+  <li><b>Who helps:</b> every robot of ours that is not ganged and sees a ganged teammate goes to the nearest one, so A is a helper too (unpin it).</li>
+  <li><b>Without the defence</b> the helper keeps away from V like from any teammate (3/d&sup2;).</li>
+  </ol>
+  <div class="try"><b>Try:</b> <i>Play</i> and read the median distance to V. Then unpin V and A (click them) and <i>Play</i> again: V is drawn to its nearest teammate and the team converges. Switch the defence off.</div>`,
+    },
+    {
+      id: 'finisher', tab: 'N vs 1', title: 'Endgame: N of ours against the last enemy', gang: false, view: 'me',
+      robots: [['me', 'ours', 300, 300, 100], ['A', 'ours', 900, 250, 100], ['B', 'ours', 250, 900, 80],
+        ['W', 'ours', 1000, 1000, 20], ['E', 'enemy', 650, 650, 100]],
+      options: {},
+      waves: [],
+      story: `
+  <p>With one enemy left and teammates alive, every robot of ours with <b>30 energy or more is a finisher</b>: drawn to the enemy with <code>e<sup>1.0&middot;&Delta;d/100</sup></code> (100 px nearer makes it &times;0.37), down to 350 px. This has priority over the gang defence. W (20 energy) keeps plain minimum risk, so the enemy's closest robots, which it shoots most, are the healthy ones.</p>
+  <ol>
+  <li><b>Here the floor does bind.</b> With s = 1 the balance against a 1/d&sup2; repulsion lies at 200/s = 200 px, inside the 350 px floor. So the finishers come in to about 350 px, where the pull stops. The enemy's repulsion and the history then move them around it, at a median of about 340&ndash;350 px (W, not pulled, stays 500&ndash;750 px out). Compare the helper: s = 0.5 puts the balance at 400 px, outside its 300 px floor.</li>
+  <li><b>Teammates spread them around the circle.</b> Each repels with 3/d&sup2;. A teammate that is already nearer to the enemy than a point halves the enemy's term there: behind a teammate looks safe.</li>
+  <li><b>Measured, it was 684 px, not 350.</b> In battles (ranks 1&ndash;12) our robots' median distance to the enemy in this phase was 684 px, down from 975. Probable reasons (not verified): the enemy moves and runs from three robots, the phase is short (158 turns on average), and the median includes weak robots like W. The phase got shorter (231 &rarr; 158 turns), we lost 0.31 robots in it per round instead of 0.63, and +0.33 &plusmn; 0.27 APS.</li>
+  <li><b>The finisher has no movement of its own.</b> Any change to the risk (teammate weight, history, distance law) also moves where the finishers stop.</li>
+  </ol>
+  <div class="try"><b>Try:</b> <i>Play</i>. Raise W's energy to 30 and it joins. Lower B's to 25.</div>`,
+    },
+    {
+      id: 'crowd', tab: 'Several near one', title: 'Mid-battle: several of ours near one enemy', gang: false, view: 'me',
+      robots: [['me', 'ours', 600, 450, 100], ['A', 'ours', 520, 650, 100], ['B', 'ours', 760, 640, 100],
+        ['E1', 'enemy', 640, 840, 100], ['E2', 'enemy', 150, 150, 100], ['E3', 'enemy', 1100, 200, 100],
+        ['E4', 'enemy', 1050, 1100, 100]],
+      options: {},
+      waves: [{team: false, from: 'E1', at: 'me', age: 10, power: 2, spread: 0.08}],
+      damageLayer: true,
+      story: `
+  <p>While two or more enemies live there is <b>no movement for attacking together</b>: nothing draws our robots to an enemy (the finisher needs one enemy left). What several robots near one enemy do change:</p>
+  <ol>
+  <li><b>That enemy stops mattering.</b> For the points behind A and B, which is where my destinations end up, A, B and E4 are all closer to E1, so E1's term is divided by 4. It makes a few percent of my risk, while the lone E2 or E3 weighs far more although E1 is nearer.</li>
+  <li><b>Its waves are discounted.</b> E1's aim chance at me is <code>1/(1+2)&sup2; &asymp; 0.11</code>, because A and B were closer to it. That is just above the 0.1 cut-off. Drag me in front of A and it becomes 0.25. With a third teammate in front, the wave is ignored entirely.</li>
+  <li><b>And the teammates push me away.</b> A and B (3/d&sup2; each) make most of my risk here (see <i>Why this destination</i>). Robots near the same enemy spread out, they don't gather.</li>
+  </ol>
+  <div class="try"><b>Try:</b> drag me towards E1 past A and B and watch E1's share in the hover. Press <i>Play</i>.</div>`,
+    },
+  ],
+};
+</script>
+<script src="model.js"></script>
+<script src="explorer.js"></script>
+</body>
+</html>

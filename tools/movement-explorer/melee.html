@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Melee Movement Explorer</title>
+<link rel="stylesheet" href="explorer.css">
+</head>
+<body>
+<div id="app"></div>
+<script>
+// The melee page: our robot among nine enemies on the melee rumble's field; the stories quote docs/bot.md
+// "Melee movement".
+window.EXPLORER = {
+  mode: 'melee',
+  title: 'Melee Movement Explorer',
+  field: {w: 1000, h: 1000},
+  scenarios: [
+    {
+      id: 'start', tab: 'Nine around', title: 'A full melee: nine enemies around us', view: 'me',
+      robots: [['me', 'ours', 500, 470, 100], ['E1', 'enemy', 150, 160, 100], ['E2', 'enemy', 520, 120, 100],
+        ['E3', 'enemy', 860, 170, 100], ['E4', 'enemy', 880, 520, 100], ['E5', 'enemy', 840, 860, 100],
+        ['E6', 'enemy', 480, 880, 100], ['E7', 'enemy', 150, 840, 100], ['E8', 'enemy', 130, 480, 100],
+        ['E9', 'enemy', 690, 660, 100]],
+      options: {}, waves: [],
+      story: `
+<p>Ten robots on 1000&times;1000. The colour is the risk of every point as our destination; the dots are this turn's 40 candidates. With no waves in the air the destination (<b style="color:var(--gold)">&#9733;</b>) is the candidate with the least risk.</p>
+<ol>
+<li><b>Nobody's closest.</b> Most melee robots fire at the enemy closest to them, so each enemy's term is divided by 1 + the robots that are closer to it than the point is. In a full melee the middle can be the safest place, because every enemy has somebody nearer than us there. Here the field minimum (&#8853;) lies near the middle, and E9, the nearest enemy, makes under a fifth of the destination's risk.</li>
+<li><b>No preferred distance.</b> Everybody repels with 1/d&sup2;, and there is no distance the robot keeps. As robots die and the shields go, the minimum moves out to the walls and corners (tab <i>Three left</i>).</li>
+<li><b>The way counts, not only the point.</b> Driving straight at or away from an enemy costs up to twice as much, because head-on and linear guns hit that.</li>
+<li><b>Short steps.</b> The candidates lie at most 0.6 &times; the closest enemy's distance away: 161 px here.</li>
+<li><b>History.</b> Press <i>Play</i>: the robot wanders around the middle, the nearest enemy at a median of about 260 px.</li>
+</ol>
+<p class="muted">Measured on the melee rumble: the position alone gave about 7 APS more than surfing every wave (rounds won 12 &rarr; 32 %). The distance law must be steep (1/d lost 1.3, 1/d&sup3; tied), and the history must repel, but not too much (without it &minus;1.6, at four times the weight &minus;1.6).</p>
+<div class="try"><b>Try:</b> drag E9 next to us and watch the reach shrink. Remove a few enemies (select, <b>Delete</b>) and watch where the minimum goes.</div>`,
+    },
+    {
+      id: 'waves', tab: 'Bullets', title: 'Bullets in the air', view: 'me',
+      robots: [['me', 'ours', 480, 500, 100], ['E1', 'enemy', 200, 250, 100], ['E2', 'enemy', 760, 260, 100],
+        ['E3', 'enemy', 820, 640, 100], ['E4', 'enemy', 300, 820, 100], ['E5', 'enemy', 600, 850, 100],
+        ['E6', 'enemy', 150, 560, 100], ['E7', 'enemy', 210, 700, 100]],
+      options: {},
+      waves: [{team: false, from: 'E2', at: 'me', age: 12, power: 2, spread: 0.08},
+        {team: false, from: 'E1', at: 'me', age: 8, power: 1.5, spread: 0.08},
+        {team: false, from: 'E4', at: 'me', age: 6, power: 3, spread: 0.08}],
+      damageLayer: true,
+      story: `
+<p>Stage two: only the <b>8 candidates with the least risk</b> (numbered rings) are driven to in a prediction (straight there, then stand, at most 30 turns) against the waves in the air. The red dots show the waves' damage on the way to every point within reach.</p>
+<ol>
+<li><b>Whom did it aim at?</b> A wave counts with the chance <code>1/(1+n)&sup2;</code>, where n is the number of other robots the shooter had closer than us. Nobody is nearer to E2 than we are, so its chance is 1. E1 has E6 nearer: 1/4. E4 has E7, E6 and E5 nearer: 1/16, under the 0.1 cut-off, so the bot leaves that wave out.</li>
+<li><b>When all of the 8 are hit, it's a trade-off.</b> The score is <code>risk/median + 3&middot;damage/max(0.1, median damage)</code>. Here every candidate takes some damage, the median is well above the floor, and the least-hit candidate (<b style="color:var(--gold)">&#9733;</b>) beats a better position (&#9670;). When most of the 8 are safe, the median is 0, the floor applies, and a wave vetoes a way instead (see the team page's <i>Bullets</i> tab).</li>
+<li><b>A safe point outside the 8 doesn't exist for the bot.</b> A point the waves miss but whose position risk is 9th or worse is never considered.</li>
+</ol>
+<p class="muted">Measured on the melee rumble: the waves, the radar and the duel after a melee surfed gave 2.7 more APS (rounds won 49 %). The wave weight 3 and the sharper aim chance (the square) gave 0.6 more, at a third of the waves' CPU. Predicting 12 candidates instead of 8 cost ten times the CPU for nothing.</p>
+<div class="try"><b>Try:</b> drag E7 away from E4, and E4's wave comes back at 1/9. Raise a wave's spread in its inspector.</div>`,
+    },
+    {
+      id: 'crowd', tab: 'Crowd', title: 'A crowd and a lone enemy', view: 'me',
+      robots: [['me', 'ours', 500, 500, 100], ['C1', 'enemy', 820, 760, 100], ['C2', 'enemy', 880, 840, 100],
+        ['C3', 'enemy', 760, 860, 100], ['C4', 'enemy', 860, 680, 100], ['L', 'enemy', 220, 300, 100]],
+      options: {}, waves: [],
+      story: `
+<p>Four enemies in a corner, one alone.</p>
+<ol>
+<li><b>The crowd weighs less than the lone enemy.</b> Each of the four has three robots closer to it than our points are, so each of its terms is divided by 4. The lone L makes about 60 % of the destination's risk, although C4 is nearer.</li>
+<li><b>In a melee this is logical:</b> the crowd shoots at itself. The robot keeps to the crowd's side of the field, away from L. With <i>Play</i> it ends up in the lower right, about 430&ndash;620 px from the nearest enemy.</li>
+<li><b>The shields only work from a distance.</b> A robot counts as a shield only for points farther from the enemy than the shield is. Come nearer to the crowd and its full terms return. Hover near the crowd to see it.</li>
+</ol>
+<div class="try"><b>Try:</b> drag L into the crowd and watch the map. Drag C1 out of the crowd towards us.</div>`,
+    },
+    {
+      id: 'three', tab: 'Three left', title: 'Three left: us and two enemies', view: 'me',
+      robots: [['me', 'ours', 500, 300, 100], ['E1', 'enemy', 300, 700, 100], ['E2', 'enemy', 700, 650, 100]],
+      options: {}, waves: [],
+      story: `
+<p>The end of a melee: two enemies and us.</p>
+<ol>
+<li><b>Let them fight each other.</b> The best places are those where the two enemies are each other's closest robot. Each then has one shield (n = 1), and here the destination halves both terms.</li>
+<li><b>The minimum goes to a corner.</b> With fewer robots most points lose their shields, and the field minimum (&#8853;) moves to a corner.</li>
+<li>With <i>Play</i> the robot keeps about 490&ndash;650 px from the nearer enemy.</li>
+<li>When one of them dies, the melee movement ends and the bot surfs the last enemy as in a duel.</li>
+</ol>
+<div class="try"><b>Try:</b> drag E1 and E2 apart until we become one of them's closest robot, and watch the map turn.</div>`,
+    },
+  ],
+};
+</script>
+<script src="model.js"></script>
+<script src="explorer.js"></script>
+</body>
+</html>

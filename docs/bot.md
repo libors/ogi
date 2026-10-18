@@ -433,6 +433,9 @@ from everybody and nobody's closest robot. The waves are still detected and lear
 - **Parameters:** the weights, exponents and limits of the choice are `MeleeMovementParameters` (`DEFAULT`); the
   choice among the candidates is `MeleeMovement.choose`, which the position bench replays
   ([harness.md](harness.md#position-bench)).
+- **An interactive copy:** `tools/movement-explorer` (`team.html`, `melee.html`) draws the risk map, the candidates
+  and the choice in scenarios, with the parameters to change; its `parity.js` checks the copy against the logged
+  decisions. A change of the choice goes into its `model.js` too ([its README](../tools/movement-explorer/README.md)).
 - **The last enemy, with teammates alive:** a robot with 30 energy or more is drawn to it down to 350 px
   (`finishDistance`, `finishEnergy`, `finishPull` 1.0, by the gang defence's pull, which cannot act then); the weaker
   ones keep the minimum risk, so the enemy's closest robots, whom it shoots most, are the healthy ones. Against ranks

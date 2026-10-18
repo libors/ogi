@@ -38,6 +38,8 @@ packaged as `cz.libors.OgiTeam` plays in teams.
 - `harness/`: battle runner, checks, turn recorder, comparisons and the queue on the Robocode control API; the
   offline benches in the `gunBench` source set.
 - `probe/`: probe robots for engine recordings; deployed locally only, never to a rumble.
+- `tools/movement-explorer/`: interactive pages of the melee and team movement (open `team.html` or `melee.html` in a
+  browser). When `MeleeMovement`'s choice changes, change its `model.js` too and run its `parity.js` (its README).
 - `worker/`: what runs on a remote worker (the WSL container, the Windows scripts, diagnostics); it reaches the worker
   only in the bundle. Read `docs/build-and-run.md`, "Remote worker", before changing it.
 - `docs/`: read the relevant document before changing that area.
