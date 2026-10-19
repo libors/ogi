@@ -84,6 +84,28 @@ class CompareJobTest {
     }
 
     @Test
+    void checkRefusesDrawsForA1v1OrTeamSet() {
+        // A melee set's option: against these it would be ignored, and a sequential test queued instead.
+        Properties spec = new Properties();
+        spec.setProperty("opponentSet", "test");
+        spec.setProperty("robot", "cz.libors.Ogi");
+        spec.setProperty("team", "cz.libors.OgiTeam");
+        spec.setProperty("baseline", "base");
+        spec.setProperty("candidate", "cand");
+        for (String subject : List.of("cz.libors.Ogi", "cz.libors.OgiTeam")) {
+            spec.setProperty("jar." + subject + "_base.jar", "a".repeat(64));
+            spec.setProperty("jar." + subject + "_cand.jar", "b".repeat(64));
+        }
+        List<String> duel = List.of(SET.split("\n"));
+        List<String> team = List.of("format team", "sampleteam.MyFirstTeam");
+        CompareJob.check(spec, duel);
+        CompareJob.check(spec, team);
+        spec.setProperty("draws", "5");
+        assertThrows(IllegalArgumentException.class, () -> CompareJob.check(spec, duel));
+        assertThrows(IllegalArgumentException.class, () -> CompareJob.check(spec, team));
+    }
+
+    @Test
     void fixedModeEndsWithExactlyThePairsAskedFor(@TempDir Path tmp) throws IOException {
         Path dir = job(tmp.resolve("j"), Map.of("pairsPerOpponent", "3"));
         CompareJob job = open(dir);

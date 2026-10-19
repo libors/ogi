@@ -22,9 +22,13 @@ packaged as `cz.libors.OgiTeam` plays in teams.
 - `./gradlew recordGunLogs -Pversions=0.1` and `./gradlew gunBench [-Pweights=...]`: the offline gun bench; replays
   the gun's logs of recorded battles with other gun parameters (`docs/harness.md`).
 - `./gradlew meleeBench -Plogs=<dir>`: the offline melee bench; replays the melee gun's logs of recorded melee battles
-  or team battles (`submitGunLogs` against a melee or team set) with other melee gun parameters (`docs/harness.md`).
+  or team battles (`submitGunLogs` against a melee set, or against a team set with `-Pdebug=true`) with other melee
+  gun parameters (`docs/harness.md`).
 - `./gradlew dangerBench -Precordings=<dir>`: the offline danger bench; replays the enemy bullets of full recordings
   (`submitRecordings`) through the surfer's danger model (`docs/harness.md`).
+- `./gradlew positionBench -Precordings=<dir>`: the offline position bench; replays the melee movement's logged
+  decisions of team recordings (`submitRecordings -PgunLog=true -Pdebug=true` against a team set) with other
+  movement parameters (`docs/harness.md`).
 - `./gradlew queueServer` and `./gradlew submit -Pbaseline=HEAD`: the queue; a server on this machine runs queued
   comparisons on the Windows worker (`ogi-win`, 12 slots) and shows them at `http://localhost:8765/`
   (`docs/harness.md`, "Queue"). The `remote*` tasks run one check there.

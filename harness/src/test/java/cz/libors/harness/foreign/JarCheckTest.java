@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -176,6 +177,63 @@ class JarCheckTest {
     }
 
     @Test
+    void aMemberJarTheCentralDirectoryLeavesOutIsStillJudged(@TempDir Path dir) throws IOException {
+        // Robocode finds robots by reading the jar as a stream of local records (JarRoot.readJarStream); a jar
+        // reader such as ZipFile reads the central directory, which a crafted jar can keep from naming an entry.
+        Map<String, byte[]> member = classes("HostileRobot");
+        member.put(FIXTURES + "HostileRobot.properties",
+                "robot.classname=ext.fixtures.HostileRobot\n".getBytes(StandardCharsets.UTF_8));
+        Map<String, byte[]> entries = classes("CleanRobot", "CleanRobot$Sighting");
+        entries.put(FIXTURES + "CleanRobot.properties",
+                "robot.classname=ext.fixtures.CleanRobot\n".getBytes(StandardCharsets.UTF_8));
+        entries.put("Member.jar", zip(member));
+        RawZip jar = new RawZip();
+        Map<String, Integer> offsets = new LinkedHashMap<>();
+        entries.forEach((name, bytes) -> offsets.put(name, jar.local(name, bytes)));
+        entries.forEach((name, bytes) -> {
+            if (!name.equals("Member.jar")) {
+                jar.central(name, bytes, offsets.get(name));
+            }
+        });
+        Path file = dir.resolve("crafted.jar");
+        Files.write(file, jar.bytes());
+
+        Report report = JarCheck.check(file);
+        assertEquals(Verdict.DENIED, report.verdict());
+        Map<String, Finding> byApi = byApi(report);
+        assertFinding(byApi, "entry Member.jar", Level.DENY, "directory differs");
+        assertFinding(byApi, "java.lang.System.exit", Level.DENY, "exit");
+        assertTrue(report.robots().contains("Member.jar!/ext.fixtures.HostileRobot"), report.robots().toString());
+    }
+
+    @Test
+    void aClassOnlyTheCentralDirectoryListsIsDenied(@TempDir Path dir) throws IOException {
+        // The other way round: the class loader reads the jar's classes through the central directory, which can
+        // name an entry hidden inside another entry's content, where the stream never sees a record.
+        byte[] clean = classBytes("CleanRobot");
+        byte[] hostile = classBytes("HostileRobot");
+        RawZip inner = new RawZip();
+        inner.local(FIXTURES + "HostileRobot.class", hostile);
+        byte[] padding = "data".getBytes(StandardCharsets.UTF_8);
+        byte[] carrier = new byte[padding.length + inner.bytes().length];
+        System.arraycopy(padding, 0, carrier, 0, padding.length);
+        System.arraycopy(inner.bytes(), 0, carrier, padding.length, inner.bytes().length);
+        RawZip jar = new RawZip();
+        int cleanAt = jar.local(FIXTURES + "CleanRobot.class", clean);
+        int carrierAt = jar.local("data/stats.dat", carrier);
+        jar.central(FIXTURES + "CleanRobot.class", clean, cleanAt);
+        jar.central("data/stats.dat", carrier, carrierAt);
+        int hiddenAt = carrierAt + RawZip.LOCAL_HEADER + "data/stats.dat".length() + padding.length;
+        jar.central(FIXTURES + "HostileRobot.class", hostile, hiddenAt);
+        Path file = dir.resolve("crafted.jar");
+        Files.write(file, jar.bytes());
+
+        Report report = JarCheck.check(file);
+        assertEquals(Verdict.DENIED, report.verdict());
+        assertFinding(byApi(report), "entry " + FIXTURES + "HostileRobot.class", Level.DENY, "directory differs");
+    }
+
+    @Test
     void rulesResolveNestedClassesArraysAndPackages() {
         assertEquals(Level.ALLOW, ApiRules.type("[[I").level());
         assertEquals(Level.ALLOW, ApiRules.type("[Ljava/lang/String;").level());
@@ -231,6 +289,98 @@ class JarCheckTest {
             }
         }
         return bytes.toByteArray();
+    }
+
+    /**
+     * A zip archive written by hand, because {@code ZipOutputStream} writes only archives whose central directory
+     * names every local record: stored entries' local records in the order added, then the central directory
+     * records added, which may leave entries out or point into another entry's content.
+     */
+    private static final class RawZip {
+
+        static final int LOCAL_HEADER = 30;
+
+        private final ByteArrayOutputStream local = new ByteArrayOutputStream();
+        private final ByteArrayOutputStream central = new ByteArrayOutputStream();
+        private int count;
+
+        /** Appends a local record and returns its offset. */
+        int local(String name, byte[] content) {
+            int offset = local.size();
+            byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
+            int32(local, 0x04034b50);
+            int16(local, 20);
+            int16(local, 0);
+            int16(local, 0);
+            int16(local, 0);
+            int16(local, 0x21);
+            int32(local, crc(content));
+            int32(local, content.length);
+            int32(local, content.length);
+            int16(local, nameBytes.length);
+            int16(local, 0);
+            local.writeBytes(nameBytes);
+            local.writeBytes(content);
+            return offset;
+        }
+
+        /** Appends a central directory record that points at the local record at {@code offset}. */
+        void central(String name, byte[] content, int offset) {
+            byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
+            int32(central, 0x02014b50);
+            int16(central, 20);
+            int16(central, 20);
+            int16(central, 0);
+            int16(central, 0);
+            int16(central, 0);
+            int16(central, 0x21);
+            int32(central, crc(content));
+            int32(central, content.length);
+            int32(central, content.length);
+            int16(central, nameBytes.length);
+            int16(central, 0);
+            int16(central, 0);
+            int16(central, 0);
+            int16(central, 0);
+            int32(central, 0);
+            int32(central, offset);
+            central.writeBytes(nameBytes);
+            count++;
+        }
+
+        /** The local records, the central directory and its end record; just the local records if none was added. */
+        byte[] bytes() {
+            ByteArrayOutputStream all = new ByteArrayOutputStream();
+            all.writeBytes(local.toByteArray());
+            if (count > 0) {
+                all.writeBytes(central.toByteArray());
+                int32(all, 0x06054b50);
+                int16(all, 0);
+                int16(all, 0);
+                int16(all, count);
+                int16(all, count);
+                int32(all, central.size());
+                int32(all, local.size());
+                int16(all, 0);
+            }
+            return all.toByteArray();
+        }
+
+        private static long crc(byte[] content) {
+            CRC32 crc = new CRC32();
+            crc.update(content);
+            return crc.getValue();
+        }
+
+        private static void int16(ByteArrayOutputStream out, int value) {
+            out.write(value & 0xff);
+            out.write((value >> 8) & 0xff);
+        }
+
+        private static void int32(ByteArrayOutputStream out, long value) {
+            int16(out, (int) (value & 0xffff));
+            int16(out, (int) ((value >> 16) & 0xffff));
+        }
     }
 
     private static byte[] ownBytes() throws IOException {

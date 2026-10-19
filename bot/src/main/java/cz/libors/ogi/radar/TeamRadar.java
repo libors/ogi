@@ -97,8 +97,9 @@ public final class TeamRadar {
     }
 
     /**
-     * The enemies robot {@code me} watches in turn {@code now}, by name; empty when it has none of its own, null when
-     * there is no plan (it has not reported yet).
+     * The enemies robot {@code me} watches in turn {@code now}, by name; empty when it has none of its own; null when
+     * there is no plan: its own report is missing or older than {@link #MAX_REPORT_AGE} turns, or more than
+     * {@link #MAX_ENEMIES} enemies are known.
      */
     public List<String> watch(long now, String me) {
         for (Iterator<Seen> it = pending.iterator(); it.hasNext(); ) {

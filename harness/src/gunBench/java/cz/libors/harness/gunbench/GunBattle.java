@@ -45,11 +45,6 @@ public record GunBattle(Path file, String subject, String opponent, int enemies,
     public record EnemyDied(String name) {
     }
 
-    /** Reads the log of the robot whose name starts with {@code subjectPrefix}; the opponent is the other robot. */
-    public static GunBattle read(Path file, String subjectPrefix) throws IOException {
-        return readAll(file, subjectPrefix).get(0);
-    }
-
     /**
      * Reads the logs of the robots whose names start with {@code subjectPrefix}. In a battle without teams that is the
      * first such robot, and the opponent is every other robot. In a team battle it is every such robot of the first

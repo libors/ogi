@@ -9,9 +9,10 @@ import cz.libors.ogi.gun.RobotHistory;
  * circular targeting; linear with our lateral velocity averaged over the last 20 and 40 turns; and a pattern match on
  * our lateral velocity rounded and one on it truncated to whole pixels per turn ({@link LateralHistory}). Then guns
  * that robots of the rumble use and the first ones miss: the linear lead without the arc sine, our lateral velocity
- * averaged over 5 turns, and half, three quarters and five quarters of the linear lead. Such a gun aims in the turn
- * before it fires, from its position and its scan of us then. How these guns, windows and match lengths were found on
- * recordings of foreign robots: bot.md "Movement", An ensemble.
+ * averaged over 5 turns, and the linear lead with half, three quarters and five quarters of our lateral velocity
+ * (asin(k · lateral / speed)). Such a gun aims in the turn before it fires, from its position and its scan of us then.
+ * How these guns, windows and match lengths were found on recordings of foreign robots: bot.md "Movement", An
+ * ensemble.
  */
 public final class SimpleAims {
 
@@ -27,7 +28,7 @@ public final class SimpleAims {
     public static final int LINEAR_NO_ASIN = 8;
     /** Linear with our lateral velocity averaged over the last 5 turns. */
     public static final int AVERAGED_SHORTEST = 9;
-    /** Part of the linear lead or more: half, three quarters and five quarters of it. */
+    /** The linear lead with part of our lateral velocity or more: k = ½, ¾ and 5⁄4 inside the arc sine. */
     public static final int LINEAR_HALF = 10;
     public static final int LINEAR_THREE_QUARTERS = 11;
     public static final int LINEAR_FIVE_QUARTERS = 12;

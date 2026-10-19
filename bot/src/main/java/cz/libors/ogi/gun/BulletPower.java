@@ -9,8 +9,9 @@ import java.util.Map;
 /**
  * The power of our next bullet at a target: 3 at close range or against an enemy we read, else {@link #DEFAULT}; in a
  * duel faster bullets against an enemy we hit rarely, and the energy race's power ({@link RacePower}) once the race is
- * on; never more than kills the target or than we can afford. Why these numbers, and what they gained: bot.md
- * "Bullet power".
+ * on; at most a quarter of the target's energy plus a tenth (a quarter kills it, the tenth covers what it gains before
+ * the hit; above 4 energy a weaker bullet kills it already), and never more than we can afford. Why these numbers,
+ * and what they gained: bot.md "Bullet power".
  *
  * <p>It keeps our bullets' record against each enemy over the battle ({@link HitRecord}), the copies of one robot in
  * an enemy team together ({@link Names#base}).

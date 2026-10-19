@@ -180,7 +180,7 @@ public record DangerBattle(Path file, String subject, String opponent, List<Obje
                 if (r != null) {
                     history.add(t, r.x(), r.y(), Angles.fromRobocode(r.bodyHeading()), r.velocity());
                     Recording.RobotTick e = them.get(t);
-                    // As online (WaveSurfer.ourState): only in turns our radar saw the enemy, and while we live.
+                    // As online (EnemyWaves.ourState): only in turns our radar saw the enemy, and while we live.
                     if (e != null && !e.state().equals("DEAD") && !r.state().equals("DEAD")
                             && scanned(us.get(t - 1), r, e)) {
                         double heading = Angles.fromRobocode(r.bodyHeading());

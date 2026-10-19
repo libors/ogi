@@ -85,6 +85,66 @@ class MeleeMovementTest {
                 m.risk(600, 500, 560, 500, 100, robots, distances), 1e-15);
     }
 
+    /**
+     * With one enemy left and a teammate alive, a robot with the energy for it is drawn to the enemy, down to the
+     * finish distance; a weak robot, or one without teammates, is not.
+     */
+    @Test
+    void theHealthyAreDrawnToTheLastEnemy() {
+        // The enemy 400 px west of us, the teammate far behind it.
+        List<Robot> robots = List.of(new Robot(500, 600, 100, true), new Robot(200, 200, 0, false));
+        MeleeMovement m = new MeleeMovement(FIELD, new Random(3));
+        m.command(0, 900, 600, 0, 100, robots);
+        assertEquals(MeleeMovement.FINISHER, m.pullRole());
+        assertArrayEquals(new double[] {500, 600}, m.pullTarget());
+        MeleeMovement off = new MeleeMovement(FIELD, new Random(3), withoutFinisher());
+        off.command(0, 900, 600, 0, 100, robots);
+        assertEquals(MeleeMovement.NO_PULL, off.pullRole());
+        double pulled = Math.hypot(m.destination()[0] - 500, m.destination()[1] - 600);
+        double free = Math.hypot(off.destination()[0] - 500, off.destination()[1] - 600);
+        assertTrue(pulled < free, "nearer the enemy with the finisher: " + pulled + " against " + free);
+
+        MeleeMovement weak = new MeleeMovement(FIELD, new Random(3));
+        weak.command(0, 900, 600, 0, MeleeMovementParameters.DEFAULT.finishEnergy() - 1, robots);
+        assertEquals(MeleeMovement.NO_PULL, weak.pullRole());
+        MeleeMovement alone = new MeleeMovement(FIELD, new Random(3));
+        alone.command(0, 900, 600, 0, 100, List.of(robots.get(0)));
+        assertEquals(MeleeMovement.NO_PULL, alone.pullRole());
+        assertTrue(Double.isNaN(alone.pullTarget()[0]));
+
+        // Within the finish distance (350 px) the pull no longer draws: no change between two points that near.
+        m.command(0, 800, 600, 0, 100, robots);
+        off.command(0, 800, 600, 0, 100, robots);
+        assertEquals(MeleeMovement.FINISHER, m.pullRole());
+        double[][] distances = {{0, 500}, {500, 0}};
+        assertEquals(off.risk(800, 600, 750, 600, 100, robots, distances),
+                m.risk(800, 600, 750, 600, 100, robots, distances), 1e-15);
+    }
+
+    /** A robot with two enemies within the gang radius is ganged: the gang defence draws it to its nearest teammate. */
+    @Test
+    void aGangedRobotFallsBackToItsNearestTeammate() {
+        List<Robot> robots = List.of(new Robot(600, 500, 100, true), new Robot(500, 620, 100, true),
+                new Robot(200, 200, 0, false), new Robot(900, 900, 0, false));
+        MeleeMovement m = new MeleeMovement(FIELD, new Random(3));
+        m.gangDefence(true);
+        m.command(0, 500, 500, 0, 100, robots);
+        assertEquals(MeleeMovement.GANGED, m.pullRole());
+        assertArrayEquals(new double[] {200, 200}, m.pullTarget());
+        MeleeMovement off = new MeleeMovement(FIELD, new Random(3));
+        off.command(0, 500, 500, 0, 100, robots);
+        assertEquals(MeleeMovement.NO_PULL, off.pullRole(), "no gang defence while it is off");
+    }
+
+    /** {@link MeleeMovementParameters#DEFAULT} without the finisher. */
+    private static MeleeMovementParameters withoutFinisher() {
+        MeleeMovementParameters d = MeleeMovementParameters.DEFAULT;
+        return new MeleeMovementParameters(d.teammateWeight(), d.distanceExponent(), d.closerExponent(),
+                d.closerCountsEnemies(), d.perpendicularWeight(), d.minThreat(), d.maxThreat(), d.historyWeight(),
+                d.keep(), d.waveCandidates(), d.waveWeight(), d.minWaveMedian(), d.teamPull(), d.helpDistance(), 0,
+                d.finishEnergy(), d.finishPull());
+    }
+
     @Test
     void movingAcrossTheLineToAnEnemyIsSaferThanAlongIt() {
         MeleeMovement m = new MeleeMovement(FIELD, new Random(1));

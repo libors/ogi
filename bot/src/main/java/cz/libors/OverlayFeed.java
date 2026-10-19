@@ -77,6 +77,8 @@ final class OverlayFeed {
     private String lastShotGun;
     /** Our teammates' bullets reported while we paint, for the bullet powers (layer B). */
     private final List<TeamShot> teamShots = new ArrayList<>();
+    /** Our bullets fired while we shield and paint ({@link #shieldFired}), for the bullet powers (layer B). */
+    private final List<Bullet> shieldShots = new ArrayList<>();
     /** The turn of each teammate's last report that it painted. */
     private final Map<String, Long> paintingTeammates = new HashMap<>();
     /** Our team's size, 0 outside a team. */
@@ -154,9 +156,25 @@ final class OverlayFeed {
         }
     }
 
-    /** We play in a team of this many robots. */
-    void team(int size) {
+    /**
+     * A bullet fired while we shield that no gun aimed (a shield shot, or the weakest bullet at a disabled enemy): only
+     * its power is shown, while painting. It stays out of our bullets' records: they count the guns' bullets only.
+     */
+    void shieldFired(long now, Bullet bullet) {
+        if (bullet != null && painting(now)) {
+            shieldShots.add(bullet);
+        }
+    }
+
+    /**
+     * A round starts in a battle of this kind, in a team of {@code size} robots (0 outside a team): the overlay offers
+     * its layers now, painting or not, so that the keys pressed before this robot's first paint count as they do on
+     * the teammates that paint already.
+     */
+    void roundStarted(BattleKind kind, int size) {
         members = size;
+        Overlay.battle(kind);
+        Overlay.team(size);
     }
 
     /** A teammate reported its state of turn {@code time}: whether it painted then. */
@@ -209,7 +227,6 @@ final class OverlayFeed {
     void paint(Graphics2D g, long now, double x, double y, double energy, BattleKind kind, Phase phase, int enemies,
                String me, double radarTurn, Collection<Bullet> ourBullets) {
         paintedAt = now;
-        Overlay.battle(kind);
         Overlay.duel(enemies == 1);
         trace.start(now, field.width(), field.height());
         positionTrails.ours(now, x, y);
@@ -231,7 +248,7 @@ final class OverlayFeed {
         if (meleeAimView != null && now - meleeAimView.time() <= MELEE_AIM_SHOWN) {
             trace.meleeAim(meleeAimView);
         }
-        trace.powers(powerView(now, ourBullets));
+        trace.powers(powerView(now, x, y, ourBullets));
         trace.info(infoView(now, phase));
         trace.closest(closestView(now, x, y));
         if (Double.isNaN(duel) && kind != BattleKind.DUEL && phase == Phase.DUEL) {
@@ -288,14 +305,15 @@ final class OverlayFeed {
 
     /**
      * Beside each enemy: the turns until its gun is cool, our hit rate on it, its on us and the age of our side's last
-     * scan of it. Not its hit rate on us in a team: it would be its hits on this robot over its shots at anyone.
+     * scan of it. Neither hit rate in a team: the enemy's would be its hits on this robot over its shots at anyone,
+     * ours this robot's bullets alone, drawn once as if the team's.
      */
     private Trace.InfoView infoView(long now, Phase phase) {
         List<Trace.EnemyInfo> enemies = new ArrayList<>();
         for (EnemyState e : world.enemies()) {
             // The scan's age with two enemies or more: a duel's radar locks.
             enemies.add(new Trace.EnemyInfo(e.x(), e.y(), waves.coolIn(e.name(), now),
-                    hitRates.rate(e.name(), INFO_MIN_BULLETS),
+                    members > 0 ? Double.NaN : hitRates.rate(e.name(), INFO_MIN_BULLETS),
                     members > 0 ? Double.NaN : waves.hitsOnUsPerShot(e.name(), INFO_MIN_BULLETS),
                     phase == Phase.MELEE ? now - e.time() : -1));
         }
@@ -354,15 +372,25 @@ final class OverlayFeed {
     }
 
     /**
-     * The bullets' powers: our bullets in flight as the engine reports them; our teammates' where they have flown
-     * since their shot, until they leave the field or reach a robot where we saw it last (their end we learn from
-     * nobody); each enemy's last shot as fire detection saw it.
+     * The bullets' powers: our bullets in flight as the engine reports them, the guns' apart from those fired while we
+     * shield; our teammates' where they have flown since their shot, until they leave the field or reach us at
+     * ({@code ourX}, {@code ourY}) or another robot where we saw it last (their end we learn from nobody); each enemy's
+     * last shot as fire detection saw it.
      */
-    private Trace.PowerView powerView(long now, Collection<Bullet> ourBullets) {
+    private Trace.PowerView powerView(long now, double ourX, double ourY, Collection<Bullet> ourBullets) {
         List<Trace.PowerMark> ours = new ArrayList<>();
         for (Bullet b : ourBullets) {
             if (b.isActive()) {
                 ours.add(new Trace.PowerMark(b.getX(), b.getY(), b.getPower()));
+            }
+        }
+        List<Trace.PowerMark> others = new ArrayList<>();
+        for (Iterator<Bullet> it = shieldShots.iterator(); it.hasNext(); ) {
+            Bullet b = it.next();
+            if (b.isActive()) {
+                others.add(new Trace.PowerMark(b.getX(), b.getY(), b.getPower()));
+            } else {
+                it.remove();
             }
         }
         List<World.Teammate> mates = world.recentTeammates(now, Ogi.MAX_TEAMMATE_AGE);
@@ -372,7 +400,9 @@ final class OverlayFeed {
             double flown = Rules.getBulletSpeed(shot.power()) * (now - shot.fireTime());
             double x = shot.x() + flown * Math.cos(shot.heading());
             double y = shot.y() + flown * Math.sin(shot.heading());
-            boolean ended = !field.contains(x, y, 0);
+            // Friendly fire hits us too: a teammate's bullet ends at our box as at any other robot's.
+            boolean ended = !field.contains(x, y, 0)
+                    || Math.abs(ourX - x) <= Field.ROBOT_HALF_SIZE && Math.abs(ourY - y) <= Field.ROBOT_HALF_SIZE;
             for (EnemyState e : world.enemies()) {
                 ended |= Math.abs(e.x() - x) <= Field.ROBOT_HALF_SIZE && Math.abs(e.y() - y) <= Field.ROBOT_HALF_SIZE;
             }
@@ -383,7 +413,7 @@ final class OverlayFeed {
             if (ended) {
                 it.remove();
             } else {
-                ours.add(new Trace.PowerMark(x, y, shot.power()));
+                others.add(new Trace.PowerMark(x, y, shot.power()));
             }
         }
         List<Trace.PowerMark> enemies = new ArrayList<>();
@@ -393,7 +423,7 @@ final class OverlayFeed {
                 enemies.add(new Trace.PowerMark(e.x(), e.y(), power));
             }
         }
-        return new Trace.PowerView(ours, enemies);
+        return new Trace.PowerView(ours, others, enemies);
     }
 
     /**

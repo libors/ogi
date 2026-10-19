@@ -28,6 +28,9 @@ at which its bullet hits a robot, turn by turn (see [bot.md](bot.md)).
   160,000 turns, 5,000 of them with the inactivity penalty);
 - `EventReplayTest`: every event a probe received against the recording, and every event it should have received
   (about 92,000, 82,000 of them scans);
+- `EventOrderTest`: the order of each probe turn's events, `getOthers()` in the death handlers, and no scan of a robot
+  in the turn it died (G-52);
+- `FireGettersTest`: the gun heat and energy getters around every shot the probes tried (G-49);
 - `HitRangeReplayTest`: in every turn of every bullet's flight, its heading lies in the hit range of the robot it hit
   and outside the range of every robot it flew past (about 1,100 hits and 1.2 million misses).
 
@@ -60,8 +63,9 @@ to-test.
    team remains.
 7. **Statuses are published** (`publishStatuses`): this is the state a robot reads in its turn.
 8. **Robots act** (`wakeupRobots`), one after another in random order. Each first receives the events of this
-   turn's update (G-40), then runs until it calls `execute()`; its commands wait for step 2 of the next turn. The
-   engine waits only for live robots.
+   turn's update (G-40), highest priority first (G-52), then runs until it calls `execute()`; its commands wait for
+   step 2 of the next turn. The engine waits only for live robots. A robot that skipped turns loses the events that
+   waited for it (G-50).
 9. The turn snapshot goes to battle listeners (`TurnEndedEvent`). Recordings are taken here, so the state of turn t
    and the commands a robot issued in turn t appear together.
 
@@ -71,7 +75,8 @@ to-test.
 
 - **G-01 The gun fires before it turns.**
   - **What:** the bullet leaves along the gun heading the robot read in the turn it called fire, i.e. before this
-    turn's gun turn, from the robot's position before this turn's move.
+    turn's gun turn, from the robot's position before this turn's move. The exception is a plain `Robot`'s fire
+    assist (G-51).
   - **Bites when:** you aim and fire in the same tick.
   - **Source:** wiki Game Physics, "Firing pitfall"; `RobotPeer.performLoadCommands` fires before `performMove`.
     · **Status:** tested: `BulletMotionReplayTest` (spawn heading and position).
@@ -140,8 +145,28 @@ to-test.
   - **Bites when:** code that fires and then reads the getters in the same turn adds the shot itself and counts it
     twice. Ogi's aim, planned after its shot, wants the heat and energy after it.
   - **Source:** `BasicRobotProxy.setFireImpl` (`firedHeat`, `firedEnergy`), `getGunHeatImpl`, `getEnergyImpl`, reset
-    in `executeImpl`. · **Status:** tested: `FireGettersTest` (every shot the probes tried in the golden recordings:
-    the getters before and after `setFireBullet`).
+    in `executeImpl`; `setFire` goes through `setFireImpl` too. · **Status:** tested: `FireGettersTest`, on every
+    shot the probes tried in the golden recordings, by `setFireBullet` and by `setFire`: the getters before and after
+    the call, the engine's bullet in the next turn exactly when the call was accepted, the getters at the next turn's
+    status equal to the engine's record (about 2,000 of them right after a shot), and a second `setFireBullet` in the
+    turn of an accepted shot refused, the getters unchanged (about 10,000).
+- **G-51 Fire assist: a plain `Robot` that fires in `onScannedRobot` shoots along the scan's bearing.**
+  - **What:** when a robot that is not an `AdvancedRobot` fires (`fire`, `fireBullet`, `setFire`) in the handler of
+    a `ScannedRobotEvent` of the current turn, with its gun and radar headings equal, its proxy stores the angle
+    `normalAbsoluteAngle(heading + bearing)` with the shot. When the commands load, the engine fires along that angle
+    instead of the gun heading if the robot's last scan was made with the radar turning with the gun (gun and radar
+    headings equal before and after that turn's move, `turnedRadarWithGun`). The bullet leaves from the robot's
+    position, as in G-01, towards the scanned robot's centre at the end of the scan's turn. A shot from outside a
+    scan handler, by an `AdvancedRobot` or with the radar turned apart from the gun follows G-01.
+  - **Bites when:** a plain robot's bullets are predicted from its gun heading, or from a head-on aim at our position
+    of the turn before the shot: fire assist aims at our position at the end of the turn it scanned us, which differs
+    whenever we moved in that turn. The bullet shield's aim (`ShieldAim`) has no such base yet.
+  - **Source:** `BasicRobotProxy.setFireImpl` (`EventManager.getCurrentTopEvent`, `RobotStatics.isAdvancedRobot`, the
+    `BulletCommand`'s assist angle), `RobotPeer.performScan` (`turnedRadarWithGun`), `RobotPeer.fireBullets`
+    (bytecode of 1.11.1). · **Status:** tested: `recordProbes` ("A plain Robot's shot from onScannedRobot leaves along
+    the scan's bearing"): `FireAssistProbe`, a plain `Robot`, against two `RandomProbe`s; every shot from its scan
+    handler leaves along the scan's bearing bit for bit (45, all where the gun pointed elsewhere), every shot from
+    `run()` along the gun heading (66, 2026-10-19).
 
 ## Movement
 
@@ -234,6 +259,31 @@ to-test.
   (bullet hits, walls, rams, scans, deaths) reaches the robot when it acts in turn t, stamped t.
   - **Source:** `RobotPeer.executeImpl`, `EventManager.addImpl` (the robot stamps events when it receives them).
     · **Status:** tested: `EventReplayTest`.
+- **G-52 A turn's events come by priority, highest first, and the handlers see the turn's status.**
+  - **What:** before it dispatches, the robot sorts its event queue by time, then by priority, highest first
+    (`Event.compareTo`; the sort is stable). The events of a turn all carry its time (G-40), so the default
+    priorities decide: `RoundEndedEvent` 110; `SkippedTurnEvent`, `WinEvent` and `BattleEndedEvent` 100;
+    `StatusEvent` 99; `KeyPressedEvent` 98; `CustomEvent` 80; `MessageEvent` 75; `RobotDeathEvent` 70;
+    `BulletMissedEvent` 60; `BulletHitBulletEvent` 55; `BulletHitEvent` 50; `HitRobotEvent` 40; `HitWallEvent` 30;
+    `HitByBulletEvent` 20; `ScannedRobotEvent` 10; `PaintEvent` 5; `DeathEvent` −1. `setEventPriority` changes them
+    (Ogi does not call it). The robot's status of the turn is installed before its events run, so in every handler
+    `getOthers()` already leaves out the robots that died in this turn's update, also in a message handler that runs
+    before the death's. Nobody scans a robot in the turn it died: the scan skips dead robots. A robot that died in
+    turn t does not deliver the messages it broadcast in turn t − 1, as a dead robot's scan step returns before it
+    dispatches them.
+  - **Bites when:** code assumes scans before hits (fire detection subtracts a turn's hits and rams from the scan's
+    energy drop of the same turn); a team bot applies a teammate's packet of the turn before a death before the death
+    event: the packet's scans of the dead robot are applied, and `getOthers()` already counts one robot fewer than
+    the bot's own count of teammates alive.
+  - **Source:** `robocode.Event.compareTo`, the events' `getDefaultPriority`, `EventManager.processEvents`
+    (`EventQueue.sort`), `BasicRobotProxy.executeImpl` (`updateStatus` before the turn's events),
+    `RobotPeer.publishStatus` (`Battle.countActiveParticipants`), `RobotPeer.performScan` and `scan` (bytecode of
+    1.11.1). · **Status:** tested: `EventOrderTest` (every turn a probe acted in, golden recordings: neighbouring
+    events of different types come by descending priority, `getOthers()` in `onRobotDeath` is the number of other
+    robots alive after the turn's update, and no robot scanned a robot in the turn it died, 64 of them in a radar's
+    sweep), `recordProbes` ("A turn's events come by priority, team messages before deaths": three `MessageProbe`s
+    against three `RandomProbe`s, messages before the death in 36 turns, `getOthers()` right in every handler). The
+    undelivered message of a robot that died: verified in the bytecode.
 - **G-15 Event handlers that take turns are interrupted** by `EventInterruptedException` when events nest.
   - **Source:** wiki Game Physics. · **Status:** wiki.
 - **G-16 Time resets every round.** Store (round, tick) pairs.
@@ -252,7 +302,31 @@ to-test.
   - **What:** the first turn waits `millisWait × 10`; `MAX_SKIPPED_TURNS = 30`.
   - **Source:** `Battle.java`, `RobotPeer.java`. · **Status:** verified (semantics to-test).
 - **G-19 Waves fired while we skipped turns are missed** unless handled explicitly. XanderCat 12.8 fixed exactly this.
+  The scans of the skipped turns and of the turn we resume in are lost (G-50).
   - **Source:** XanderCat source and version history. · **Status:** to-test with a skipped-turn simulator.
+- **G-50 A skipped turn clears the events waiting for the robot.**
+  - **What:** when the engine wakes a robot that skipped turns, it first clears every non-critical event in the
+    robot's queue (`EventQueue.clear(false)`), then adds one `SkippedTurnEvent` per skipped turn. Only
+    `BattleEndedEvent`, `DeathEvent`, `RoundEndedEvent`, `SkippedTurnEvent` and `WinEvent` are critical. The queue
+    holds the events of every turn since the robot last acted, so the deaths, scans, hits and bullet ends of the
+    skipped turns and of the turn the robot resumes in are lost. Not lost: team messages, which travel in a list of
+    their own (all those sent meanwhile arrive in the resume turn); the state of the robot's `Bullet` objects
+    (`isActive`, the victim), which the engine sends apart from the events; and the `StatusEvent`, which the robot's
+    proxy makes in every turn the robot acts in. `getOthers()` is current, so a lost death shows only as a drop in it.
+  - **Bites when:** a bot learns of deaths, hits or its bullets' ends from events alone. Ogi does not handle it yet:
+    it learns of deaths only in `onRobotDeath`, so a lost death leaves its count of teammates alive one too high (the
+    battle phase, hence radar, gun and movement, wrong) or a dead enemy in `World` (the melee radar keeps turning to
+    it, the movement keeps avoiding it) for the rest of the round; a lost bullet end leaves the shot out of the hit
+    rates and its shadow on the enemy waves; a lost scan costs the duel's radar lock for a few turns.
+  - **Source:** `RobotPeer.executeImpl` (`checkSkippedTurn` before `readoutEvents`, `readoutTeamMessages` and
+    `readoutBullets`), `RobotPeer.checkSkippedTurn`, `EventQueue.clear(boolean)`, `HiddenAccess.isCriticalEvent`,
+    `Battle.handleDeadRobots`, `BasicRobotProxy.executeImpl` (the `StatusEvent`, the bullets' state),
+    `TeamRobotProxy.loadTeamMessages` (bytecode of 1.11.1). · **Status:** tested: `recordProbes` ("A skipped turn
+    clears the events waiting for the robot", `SkippedTurnCheck`, without debug mode): `SkipProbe` computes past the
+    turn limit every tenth turn; every death in a skipped turn or the resume turn is lost and every other one arrives
+    in its turn (12 lost and 19 arrived in a run on 2026-10-19), no scan arrives in a resume turn, every turn the
+    probe acts in has one status event, some of its bullets end without an end event (75 of 164), and every team
+    message arrives once, 1,260 of 3,252 in a resume turn.
 - **G-20 The CPU constant differs between rumble clients.**
   - **What:** turbo boost makes the constant loose; long-running clients degrade (rumble anomalies reported on Talk:BeepBoop in 2021).
   - **Source:** Talk:BeepBoop. · **Status:** wiki.
@@ -284,8 +358,17 @@ to-test.
 
 ## Teams and isolation
 
-- **G-22 No shared memory between teammates:** each robot has its own classloader and its own statics.
-  - **Source:** engine; XanderCat. · **Status:** verified.
+- **G-22 Statics are per robot and battle; no shared memory between teammates.**
+  - **What:** the engine makes a class loader for each robot when it creates the battle's robots, a new one in every
+    battle, and a new instance of the robot class from it every round. Statics therefore last the rounds of one
+    battle and never reach the next battle or a teammate, even one of the same class.
+  - **Bites when:** a bot keeps what it learned across rounds in a static (it lasts for the battle, not longer) or
+    expects teammates to share one.
+  - **Source:** `Battle.createPeers`, `RobotPeer.<init>` → `JavaHost.createRobotProxy`, `HostingRobotProxy.<init>`
+    (`JavaHost.createLoader`, a new `RobotClassLoader`), `HostingRobotProxy.loadRobotRound`
+    (`IRobotClassLoader.createRobotInstance`) (bytecode of 1.11.1); XanderCat. · **Status:** tested: `recordProbes`
+    ("Statics last the rounds of one battle and belong to one robot"): three `MessageProbe`s in one team each count
+    the rounds they started in a static field, 1 and then 2, in two battles in a row.
 - **G-23 Messages arrive one tick later.** They are `Serializable` and at most 32,768 bytes each. A message broadcast
   in turn t reaches every living teammate as a `MessageEvent` of turn t + 1, and none is lost. Whether serialisation
   counts against turn time is [unverified].

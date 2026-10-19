@@ -28,7 +28,8 @@ import java.util.TreeMap;
  * measures the rumble's APS: the whole rumble, or a sample of it whose groups weigh as many robots as they stand for.
  * A subset (the strong bots, some groups, bots picked by a trait) stands for less: its APS says how we do against
  * those bots, not where we stand. The margin lets the sets of a newer ranking with a few more robots keep the older
- * ones in; a subset leaves out at least a whole group (the 1v1 rumble's smallest, its top 30, is 2.5 % of it).
+ * ones in; a subset leaves out at least a whole group, e.g. a set without the rumble's top tier stands for a few
+ * per cent less than all of it.
  *
  * <p>Only comparisons that ended normally count: a cancelled or failed one may not have met every opponent. A job's
  * set and its result never change once it has ended, so both are read once.

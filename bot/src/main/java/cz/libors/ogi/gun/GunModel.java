@@ -16,7 +16,7 @@ import cz.libors.ogi.geom.Angles;
  * scored by the share of that range that would have hit, not by its one aim. The guess-factor gun is chosen over
  * circular targeting by the whole battle's record; against an enemy that is hard to hit the anti-surfer gun replaces
  * the chosen gun when it has the better record over the battle's bullets, and the random gun replaces either when its
- * record over them is better still (DrussGT's idea: a surfer that learned our aim is hit less often than at random).
+ * record over them is better still (a surfer that learned our aim is hit less often than at random).
  * The mirror gun aims only at a robot whose position follows ours ({@link MirrorAim}); it replaces the guess-factor
  * or circular gun once it has {@link #MIRROR_MIN_TRIES} weighted tries and the better record.
  *

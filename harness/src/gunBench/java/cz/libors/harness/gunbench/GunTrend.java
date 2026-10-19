@@ -3,6 +3,7 @@ package cz.libors.harness.gunbench;
 import cz.libors.ogi.gun.GunParameters;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -19,7 +20,8 @@ import java.util.stream.Stream;
  * a mover that does not react to it the rate rises or stays; a mover that learns to dodge it pulls the rate down.
  *
  * <p>Usage: {@code GunTrend logs=<dir>,... [robot=<name prefix>] [rounds=10]}: compares the first and the last
- * {@code rounds} rounds of each battle and prints the opponents sorted by the change, with its standard error.
+ * {@code rounds} rounds of each battle and prints the opponents sorted by the change, with its standard error. In a
+ * team battle every robot of ours that logged counts ({@link GunBattle#readAll}).
  */
 public final class GunTrend {
 
@@ -73,27 +75,30 @@ public final class GunTrend {
         String prefix = robot;
         int n = rounds;
         Map<String, long[]> byOpponent = new TreeMap<>();
-        files.parallelStream().map(f -> {
+        // A team battle holds a log of each of our robots, each with a gun of its own: their tries add up.
+        List<GunBattle> battles = files.parallelStream().flatMap(f -> {
             try {
-                GunBattle battle = GunBattle.read(f, prefix);
-                List<GunReplay.Tally> perRound = GunReplay.replayRounds(battle, GunParameters.DEFAULT);
-                long[] t = new long[4];
-                int count = perRound.size();
-                for (int r = 0; r < count; r++) {
-                    GunReplay.Tally tally = perRound.get(r);
-                    if (r < n) {
-                        t[0] += tally.firedTries();
-                        t[1] += tally.firedHits();
-                    }
-                    if (r >= count - n) {
-                        t[2] += tally.firedTries();
-                        t[3] += tally.firedHits();
-                    }
-                }
-                return Map.entry(battle.opponent(), t);
+                return GunBattle.readAll(f, prefix).stream();
             } catch (IOException e) {
-                throw new IllegalStateException(e);
+                throw new UncheckedIOException(e);
             }
+        }).toList();
+        battles.parallelStream().map(battle -> {
+            List<GunReplay.Tally> perRound = GunReplay.replayRounds(battle, GunParameters.DEFAULT);
+            long[] t = new long[4];
+            int count = perRound.size();
+            for (int r = 0; r < count; r++) {
+                GunReplay.Tally tally = perRound.get(r);
+                if (r < n) {
+                    t[0] += tally.firedTries();
+                    t[1] += tally.firedHits();
+                }
+                if (r >= count - n) {
+                    t[2] += tally.firedTries();
+                    t[3] += tally.firedHits();
+                }
+            }
+            return Map.entry(battle.opponent(), t);
         }).toList().forEach(e -> {
             long[] sum = byOpponent.computeIfAbsent(e.getKey(), k -> new long[4]);
             for (int i = 0; i < 4; i++) {
@@ -103,8 +108,8 @@ public final class GunTrend {
         List<Row> rows = new ArrayList<>();
         byOpponent.forEach((o, t) -> rows.add(new Row(o, t[0], t[1], t[2], t[3])));
         rows.sort(Comparator.comparingDouble(r -> r.change() / Math.max(r.error(), 1e-9)));
-        System.out.printf(Locale.ROOT, "Fired hit rate in the first %d rounds against the last %d, %d battles%n%n", n,
-                n, files.size());
+        System.out.printf(Locale.ROOT, "Fired hit rate in the first %d rounds against the last %d, %d battles, %d logs "
+                + "of our robots%n%n", n, n, files.size(), battles.size());
         System.out.printf(Locale.ROOT, "%-40s %10s %10s %8s %6s %6s%n", "opponent", "early %", "late %", "change",
                 "± se", "z");
         for (Row r : rows) {

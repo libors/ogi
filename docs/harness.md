@@ -15,6 +15,7 @@ results. Every score claim about the bot must come from here.
 | `SkeletonCheck` | Runs a fixed set of checks and writes `harness/build/skeleton-check.json` |
 | `ProbeRecordings` | Records probe battles and checks their integrity, coverage and determinism; see [Recordings](#recordings) |
 | `StrandedThreadCheck` | Part of `recordProbes`, in a JVM of its own without debug mode: a robot thread that stops calling the API outlives its battle (engine-model G-48) |
+| `SkippedTurnCheck` | Part of `recordProbes`, in a JVM of its own without debug mode: the events a skipped turn clears and those it does not (engine-model G-50) |
 | `recording.TurnRecorder` | Battle listener that writes a recording: every robot and bullet in every turn, plus debug properties |
 | `recording.Recording` | Reads a recording back into memory; no Robocode classes, so tests can use it without an engine |
 | `Json` | Minimal JSON writer and reader for records, lists and maps; one-line ASCII form for the queue's protocol |
@@ -25,6 +26,7 @@ results. Every score claim about the bot must come from here.
 | `gunbench.GunBench`, `gunbench.GunBattle`, `gunbench.GunReplay`, `gunbench.GunTrend` | The offline gun bench (source set `gunBench`): replays the gun's logs with other gun parameters, and the hit rate early against late in battles; see [Gun bench](#gun-bench) |
 | `meleebench.MeleeBench`, `meleebench.MeleeBattle`, `meleebench.MeleeReplay` | The offline melee bench (source set `gunBench` too): replays the melee gun's logs of recorded melee battles with other melee gun parameters and scores the bullets against the recorded positions; see [Melee bench](#melee-bench) |
 | `dangerbench.DangerBench`, `dangerbench.DangerBattle`, `dangerbench.DangerReplay` | The offline danger bench (source set `gunBench` too): replays the enemy bullets of full recordings through the surfer's danger model; see [Danger bench](#danger-bench) |
+| `positionbench.PositionBench`, `positionbench.PositionBattle` | The offline position bench (source set `gunBench` too): replays the melee movement's logged decisions of team recordings with other parameters; see [Position bench](#position-bench) |
 | `Sandbox` | Which robots are foreign, and whether Robocode's sandbox is active; `BattleRunner` refuses foreign robots without it. See [Foreign robots](#foreign-robots) |
 | `SandboxCheck` | Proves that the battle JVM sandboxes robots and passes them a minimal environment |
 | `foreign.JarCheck`, `foreign.ApiRules`, `foreign.ClassFile` | Checks a robot jar against an allowlist of the JDK and Robocode APIs before it runs |
@@ -34,6 +36,7 @@ results. Every score claim about the bot must come from here.
 | `queue.QueueJob`, `compare.CompareJob`, `compare.RecordJob` | A job in the queue; a comparison run as one, with pairs on many slots at once; recordings as one |
 | `compare.MeleeJob`, `compare.MeleeDraws`, `compare.MeleeLog` | A comparison against a melee set: draws of nine opponents, their log; see [A melee comparison](#a-melee-comparison-comparemeleejob) |
 | `queue.BattleCache` | Battles already played or being played, shared between jobs; see [Battle cache](#battle-cache-queuebattlecache) |
+| `queue.Statistics`, `queue.BattleTotals` | The queue's statistics page (`/stats`) and the totals of the battles the workers played over all jobs |
 | `queue.Protocol`, `queue.BattleSpec`, `queue.Ssh`, `queue.WorkerConfig` | Line protocol, a battle and its outcome on the wire, ssh and scp to Windows, where things are on a worker |
 
 Differential tests of the bot's engine model live in the `engineTest` source set (`harness/src/engineTest/`) and run
@@ -162,7 +165,9 @@ no rule of the game; the digests are identical with and without it.
 | `DataProbe` | like `RandomProbe`; counts the rounds it started in a file in its data directory and reports what the file held (`data`) | shows that robot data persists within a battle and is cleared before the next |
 | `SandboxProbe` | none | tries what the sandbox must block; used by `sandboxCheck`, not recorded ([Foreign robots](#foreign-robots)) |
 | `SpinProbe` | none | computes for 20 s without calling the robot API after three turns; used by the stranded-thread check, not recorded ([Robot threads](#robot-threads-that-outlive-their-battle)) |
-| `MessageProbe` | none | a `TeamRobot` that broadcasts the turn it acts in and reports the messages it received in the turn (`msg`: the turn, then `sender:sentTurn:eventTurn` per message); it spins its radar and fires at enemies it scans. Three of them make the team `MessageTeam` |
+| `MessageProbe` | none | a `TeamRobot` that broadcasts the turn it acts in and reports the messages it received in the turn (`msg`: the turn, then `sender:sentTurn:eventTurn` per message), every message, death and scan in the order the handlers ran with `getOthers()` (`ev`), and once a round the rounds it started, counted in a static field (`statics`); it spins its radar and fires at enemies it scans. Three of them make the team `MessageTeam` |
+| `SkipProbe` | none | a `TeamRobot` that computes past the turn limit every tenth turn from turn 20 (12 ms, doubled while no turn is skipped), spins its radar and shoots the robots it scans; after every `execute()` it prints what reached it (skipped turns, deaths, scans, team messages, status events, its bullets ended with and without an end event): the engine reads printed text out with every turn snapshot, while debug properties travel with a turn's commands, which arrive late after a spin. With a `MessageProbe` it makes the team `SkipTeam`; used by the skipped-turn check, not recorded |
+| `FireAssistProbe` | own `Random`, seeded from the round and the start position | a plain `Robot` (not an `AdvancedRobot`) with its radar on its gun that turns and moves at random and fires from `onScannedRobot` (`assistShot`: the time, the scan's absolute bearing as the engine computes it, the power) and now and then from `run()` (`plainShot`) |
 
 - **Commands:** every turn each command channel gets a new random command with a per-round probability: ahead,
   body, gun and radar turns, max velocity, max turn rate, the three adjust flags, fire.
@@ -174,8 +179,12 @@ no rule of the game; the digests are identical with and without it.
     velocity, max turn rate (radians), the adjust flags gun-for-robot, radar-for-gun and radar-for-robot, the fire
     power requested (`-` if none) and whether the robot API accepted it.
   - `fireGetters`: in a turn it tries to fire: time, the power requested, `getGunHeat()` and `getEnergy()` before
-    `setFireBullet` and after it, and whether the robot API accepted the shot (engine-model G-49).
-  - `ev`: one per event received (scans, hits, collisions, misses, deaths, skipped turns): type, event time, fields.
+    the call and after it, whether the robot API accepted the shot, and the call: `setFire` in odd turns,
+    `setFireBullet` in even ones (engine-model G-49).
+  - `fireAgain`: after an accepted shot, a second `setFireBullet` in the turn: time, the power, whether it was
+    accepted, `getGunHeat()` and `getEnergy()` after it.
+  - `ev`: one per event received (scans, hits, collisions, misses, deaths, skipped turns), in the order the handlers
+    ran: type, event time, fields; a death also with `getOthers()` in its handler (G-52).
   - Values are comma-separated; numbers are printed by `Double.toString`; angles are in radians, Robocode's
     convention.
 
@@ -211,7 +220,7 @@ end     round  turns
 
 | Check | Pass condition |
 |---|---|
-| Integrity, per recording | every live probe has a `cmd` of the current turn while two or more robots are alive; no skipped turns or problems |
+| Integrity, per recording | every live probe that reports its commands (`RandomProbe`'s `cmd`) has a `cmd` of the current turn while two or more robots are alive; no robot skipped a turn; no problems |
 | Different seeds | three seeds give three different digests, per scenario |
 | Replay | the first seed of each scenario, run again, gives the same digest (SHA-256 of the uncompressed text, without the debug properties that measure time: Ogi's `cpu`) |
 | `Utils.getRandom()` | two runs of `UtilsRandomProbe` with one seed are identical |
@@ -220,9 +229,12 @@ end     round  turns
 | Shared generator | `RandomProbe` and `UtilsDrawProbe` with one seed start round 1 at the same positions and round 2 elsewhere |
 | Fixed starts | 8 probes on 400×400 with a start each, one on top of another and one with an exponent in its heading: every robot round starts exactly there unless a robot is in the way (engine-model G-41), and each case occurs |
 | Team messages | `MessageTeam` against `RandomProbe`: in every turn a probe acted in, each message it received was sent in the turn before and stamped with this turn, and every teammate that acted in the turn before is among them (G-23). After the last enemy's death the round runs on without the probes acting; those turns do not count |
+| Team events | two battles in a row of `MessageTeam` against three `RandomProbe`s: in every turn a `MessageProbe` acted in, the messages, deaths and scans it handled came by priority, highest first, some turns hold messages and a death, and `getOthers()` in every handler already leaves out the robots that died in the turn (G-52); each probe's static count of its rounds reads 1, then 2, in both battles (G-22) |
+| Fire assist | `FireAssistProbe` against two `RandomProbe`s, 3 rounds: every shot from its scan handler leaves along the scan's bearing bit for bit, at least 20 of them where its gun pointed elsewhere, and every shot from `run()` along its gun heading (G-51) |
 | Own jar | the repository lists `cz.libors.Ogi <v>` from the robot jar and the team jar; `BattleRunner` picks the robot jar (G-42) |
 | Robot data | two battles in a row of `DataProbe` against `RandomProbe`: in both, the file is empty in round 1 (`getDataFile` creates it, G-47) and holds 1 in round 2 ([Robot data](#robot-data)) |
 | Stranded thread | `SpinProbe` stops calling the API and computes for 20 s, `sample.TrackFire` kills it, in a JVM of its own without debug mode (in debug mode the engine waits for the stuck turn instead, G-17): its thread is alive after the battle, takes most of a core and is gone once the probe stops by itself (G-48, [Robot threads](#robot-threads-that-outlive-their-battle)) |
+| Skipped turns | `SkipTeam` against six `sample.SittingDuck`s, 5 rounds, in a JVM of its own without debug mode (G-50): at least 10 resumes after skipped turns; every death in a skipped turn or the turn the probe resumes in never reaches it, and every other one reaches it in its turn (both occur); no scan in a resume turn, while at least a quarter of the other turns have one; one status event in every turn it acted in; some of its bullets end without an end event; every message of its teammate arrives once (the turns the teammate skipped aside), some of them in a resume turn; no problems |
 
 Scenarios, each with seeds 1, 2 and 3: `duel` (2 probes, 800×600, 3 rounds), `crowd` (6 probes, 400×400, 3 rounds,
 many collisions), `melee` (10 probes, 1000×1000, 2 rounds), `inactive` (2 passive probes, 800×600, 1 round),
@@ -294,7 +306,7 @@ a group may start again further down. Lines `weight [name] n` say how many robot
 for (e.g. a tier's size); with them every group needs a weight, and the report adds a rumble estimate (below). The
 estimate weighs only the set's own groups, so a set that holds some of the rumble's tiers (the strong and medium
 bots of a population, say) has no weights: with them its "rumble estimate" would be those tiers' mix, shown as the
-rumble's. Only trusted robots are in the repository: `sample-1v1.txt` and
+rumble's. Only trusted robots are in the repository: `sample-1v1.txt`, `sample-melee.txt` and
 `sample-team.txt` (the sample bots), and `lab-1v1.txt` (the sample bots plus the random-moving probes; their lines
 carry `botVersion` and must be edited when it changes), for gun and movement work. Sets of rumble bots stay out of
 git, in `.robocode/foreign/` on this machine (`-Popponents=.robocode/foreign/<set>.txt`); the jars they name must be
@@ -349,10 +361,12 @@ The run prints one line per pair and the tables at the end. It does not fail on 
 
 `./gradlew recordBattles -Pversions=<v>,<v>` records each version against each opponent of a set on the pair seeds
 that `compare` uses with the same run seed, so a pair from a comparison log can be replayed and examined turn by
-turn. Against a melee set it records the draws of a [melee comparison](#a-melee-comparison-comparemeleejob)
-instead (`-Pdraws=n`, draws 0 to n − 1, into `<out>/<version>/draw<d>.rec.gz`; `only` and fixed starts do not
-apply); `harness/opponents/sample-melee.txt` draws nine of Robocode's sample bots. A version is a git revision (built by `baselineJars`), a jar in `.robocode/baselines/` or the working tree's
-`botVersion`. Like `recordProbes`, it runs the engine in debug mode.
+turn. Against a team set it records our team, `cz.libors.OgiTeam`, as `compare` plays it. Against a melee set it
+records the draws of a [melee comparison](#a-melee-comparison-comparemeleejob) instead (`-Pdraws=n`, draws 0 to
+n − 1, into `<out>/<version>/draw<d>.rec.gz`; `pairs`, `only` and fixed starts are refused there, and `draws`
+against the other sets); `harness/opponents/sample-melee.txt` draws nine of Robocode's sample bots. A version is a git
+revision (built by `baselineJars`), a jar in `.robocode/baselines/` or the working tree's `botVersion`. Like
+`recordProbes`, it runs the engine in debug mode.
 
 ```sh
 ./gradlew recordBattles -Pversions=HEAD,0.1 -Ponly=sample.SpinBot,sample.TrackFire -Ppairs=3
@@ -374,7 +388,8 @@ f was fired from the plan of turn f − 2, whose line in turn f − 1 says it wa
 
 Each version's directory also gets `battles.tsv`, one line per battle recorded: the recording's file name, the
 opponent, the pair, the seed, the robot's bullets fired and hits as [Shots](#how-results-are-gathered) counts them,
-its skipped turns and problems. A battle recorded again appends a new line; the last one for a file describes it.
+its skipped turns and problems (a team's: those of its robots, which the engine names after their own class). A
+battle recorded again appends a new line; the last one for a file describes it.
 
 ## Gun bench
 
@@ -390,11 +405,13 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 ```
 
 - **`recordGunLogs`** is `recordBattles` (same options, same seeds) for `cz.libors.OgiGunLog`, which plays like Ogi
-  and logs its gun ([bot.md](bot.md#debug-overlay-czliborsogitrace)). Against foreign robots, queue them on the
-  desktop with `submitGunLogs` ([Recordings as a job](#recordings-as-a-job-comparerecordjob)). Its recordings keep
-  only the debug properties `gunshot`, `gunpass` and `gunshield`, about 0.9–1.7 MB per 35-round battle, in
-  `harness/build/gun-logs/<version>/`.
-  Only the working tree has an `OgiGunLog` jar.
+  and logs its gun ([bot.md](bot.md#debug-overlay-czliborsogitrace)), and against a team set for five of them as
+  `cz.libors.OgiGunLogTeam`. Against foreign robots, queue them on the desktop with `submitGunLogs`
+  ([Recordings as a job](#recordings-as-a-job-comparerecordjob)). Against a 1v1 set its recordings keep only the
+  debug properties `gunshot`, `gunpass` and `gunshield`, about 0.9–1.7 MB per 35-round battle, in
+  `harness/build/gun-logs/<version>/`; against a melee or team set they keep the melee gun's keys instead, for the
+  [Melee bench](#melee-bench) (`remoteRecordGunLogs` keeps the duel gun's keys for every set). Only the working tree
+  has the `OgiGunLog` jars.
 - **`gunBench`** reads every `*.rec.gz` of `-Plogs=<dir>,...` and replays each battle with a fresh model per target:
   in each turn the waves that passed teach the model, then the turn's plan asks it. The movement, the fire timing
   and the bullet power stay as recorded.
@@ -457,13 +474,15 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 | `differ` | plans whose guess factor or gun differ from the log |
 
 - **Parity:** with the bot's parameters every replayed decision must equal the logged one, bit for bit; the task
-  fails otherwise. `GunLogTest` checks the same on a simulated fight.
+  fails otherwise. `GunLogTest` checks the same on a simulated fight. Logs without a single plan (`gunshot`), such as
+  the melee gun's logs, are refused: a parity over no decisions would pass.
 - **Bullets shot down:** some robots shoot our bullets down with theirs (bullet shielding). The bench scores a wave
   by the target's position, so before `gunshield` such bullets counted as hits: against three such robots the bench
   showed 23–37 % fired against the harness's 6–12 % (2026-10-09). Left out, the bench shows 7.6–13.3 %. The harness
   counts them as misses, so its rate stays a little lower against these robots.
 - `./gradlew gunTrend -Plogs=<dir>` compares the fired hit rate in the first 10 rounds of each battle with the last 10
-  (`-Prounds`), per opponent, sorted by the change over its standard error.
+  (`-Prounds`), per opponent, sorted by the change over its standard error. In a team battle the logs of all our
+  robots add up.
 - **`fired %` against `harness %`:** checked bullet by bullet on four lab battles (2026-10-09), before the aim spread
   and the shadow shots: every bullet whose wave passed the target got the verdict the engine gave it, except bullets
   destroyed by an enemy bullet, which the bench leaves out (`shielded`). Since then the turret fires a few pixels off
@@ -490,9 +509,9 @@ bot's own `GunModel` on what the bot logged, so with the bot's parameters it dec
 
 The melee bench replays the melee gun's aims of recorded melee battles with other melee gun parameters
 (`MeleeGunParameters`: the feature weights, the neighbours, the ranges, the softening, how an enemy's distance
-weighs, the kernel's width, the age limit, the horizon and the records kept), in seconds instead of battles. It runs
-the bot's own `MeleeGun` on what the bot logged, so with the logging bot's parameters it aims exactly as the bot did,
-and it flies each bullet along the replayed aim against every robot's recorded positions.
+weighs, the kernel's width, the age limit, the horizon, the records kept and three switches), in seconds instead of
+battles. It runs the bot's own `MeleeGun` on what the bot logged, so with the logging bot's parameters it aims
+exactly as the bot did, and it flies each bullet along the replayed aim against every robot's recorded positions.
 
 ```sh
 ./gradlew submitGunLogs -Popponents=.robocode/foreign/rumble-melee-2026-10.txt -Pdraws=100   # on the queue
@@ -501,6 +520,7 @@ and it flies each bullet along the replayed aim against every robot's recorded p
 ./gradlew meleeBench -Plogs=<dir> -Pneighbours=24 -PenemyDistancePower=2
 ./gradlew meleeBench -Plogs=<the base's logs> -PotherLogs=<the variant's logs> -Pneighbours=24   # both ways
 ./gradlew meleeBench -Plogs=<dir> -Ptune=4
+./gradlew meleeBench -Plogs=<dir> -Ppowers=1.5,1.92,2.4,3
 ```
 
 - **The logs:** against a melee set `OgiGunLog` logs the melee gun's inputs and decisions (`MeleeGunLog`: keys
@@ -511,11 +531,12 @@ and it flies each bullet along the replayed aim against every robot's recorded p
   with the same keys. Each of our robots' logs is replayed as a battle of its own, with a memory of its own, as each
   robot played (`MeleeBattle.readAll`); a bullet whose first robot is a teammate of the logging robot counts as a
   miss; the robots of one recorded battle stay together, as one cluster in the interval and in one half of the
-  tuning's split. The bot plays team battles with `MeleeGunParameters.TEAM`: once it differs from `DEFAULT`, give it
-  as `-Pbase`. Record them with `-Pdebug=true`: without debug mode five logging robots of ours, each logging 5–10
-  scans a turn, lose turns' logs (a lost turn repeats the turn before's log), and 0.9 % of the replayed aims differed
-  (7 battles, 2026-10-17). The index of a team recording has no turn counts of ours (`skippedTurns`, `turns` … are
-  0): `RecordJob` looks for robots named after the team, not its members.
+  tuning's split. The bot plays team battles with `MeleeGunParameters.TEAM`, so the bench starts from it for logs of
+  team battles (`-Pbase` then gives values over `TEAM`) and refuses logs of team and melee battles at once. Record
+  them with `-Pdebug=true`: without debug mode five logging robots of ours, each logging 5–10 scans a turn, lose
+  turns' logs (a lost turn repeats the turn before's log), and 0.9 % of the replayed aims differed (7 battles,
+  2026-10-17). The index of a team recording counts the turns of all our robots, so the parity check leaves out a
+  team battle in which any of them skipped a turn.
 - **Replay:** per battle a fresh `MeleeGun.Memory`, per round a new `MeleeGun`, fed the logged scans and deaths in
   their order. At each aim that a bullet was fired on, the replayed gun aims. Bullets of the duel at the end come from
   the duel's guns and are not scored.
@@ -525,10 +546,12 @@ and it flies each bullet along the replayed aim against every robot's recorded p
   (they ended in `meleeend` with `b`: the aim did not decide them) and bullets still in the air at the round's end. A
   shot the replayed gun has no aim for counts as a miss (`no aim`).
 - **Parameters:** `-Pweights` (12, in the order of the features; missing ones are 0, so older command lines keep
-  their meaning), `-Pneighbours`, `-PwallRange`, `-PneighbourRange`,
-  `-PdistanceSoftening`, `-PenemyDistancePower`, `-PkernelWidth`, `-PmaxAge`, `-Phorizon` and `-PmaxRecords` give the
-  variant over the base. `-Pbase="neighbours=24;horizon=98"` gives the parameters the logging bot played with, over
-  `MeleeGunParameters.DEFAULT`. `-Probot=<prefix>` picks the logged robot (default `cz.libors.Ogi`).
+  their meaning), `-Pneighbours`, `-PwallRange`, `-PneighbourRange`, `-PdistanceSoftening`, `-PenemyDistancePower`,
+  `-PkernelWidth`, `-PmaxAge`, `-Phorizon` and `-PmaxRecords`, and the switches `-PeveryRound`, `-PreachingOnly`
+  and `-PsingleEnemy` (`true` or `false`, as `MeleeGunParameters` describes them), give the variant over the base.
+  `-Pbase="neighbours=24;horizon=98"` gives the parameters the logging bot played with, over
+  `MeleeGunParameters.DEFAULT`, or over `MeleeGunParameters.TEAM` for logs of team battles. `-Probot=<prefix>` picks
+  the logged robot (default `cz.libors.Ogi`).
 - **Parity:** with the base parameters every replayed aim must equal the logged one within 1e-9 rad, and the robot
   it was aimed at must be the same; the task fails if more than one aim in 1,000 differs. Battles in which the
   logging robot skipped a turn (the index's `skippedTurns`) are left out of the check: without debug mode a skipped
@@ -552,11 +575,12 @@ and it flies each bullet along the replayed aim against every robot's recorded p
   [Gun bench](#gun-bench), a target that reacts to being hit reacted to the logged gun's hits, so any other aim looks
   better on the replay. The variant's gain on the base's logs is effect + bias, the base's gain on the variant's logs
   is −effect + bias; the bench prints both, the effect and the bias.
-- **`-Ptune=<passes>`:** the gun bench's coordinate search over the 17 parameters, on half of the battles (shuffled
-  by `-PsplitSeed`, default 1), reported on both halves against the base. Integer parameters are rounded; the
-  weights and `enemyDistancePower` may also go to 0. It ends with the tuned parameters as `-P` options.
-  `-Pfixed=neighbours,maxRecords,...` leaves those parameters as given (`weights` for all eight): the search knows
-  nothing of the gun's time, and left alone it raised the counts to 12 times the gun's time for little.
+- **`-Ptune=<passes>`:** the gun bench's coordinate search over the 24 parameters (12 weights, 9 numbers and the 3
+  switches, which it tries flipped), on half of the battles (shuffled by `-PsplitSeed`, default 1), reported on both
+  halves against the base. Integer parameters are rounded; the weights and `enemyDistancePower` may also go to 0. It
+  ends with the tuned parameters as `-P` options. `-Pfixed=neighbours,maxRecords,...` leaves those parameters as
+  given (`weights` for all twelve): the search knows nothing of the gun's time, and left alone it raised the counts
+  to 12 times the gun's time for little.
 - **`-Ppowers=1.5,1.92,2.4,3`:** the same shots at other bullet powers (aimed and flown at that power): per power
   and band of the distance to the robot aimed at, the hit rate, the damage per bullet, the damage per turn of the
   gun's heat (1 + p/5 per bullet, cooling 0.1 a turn) and the energy a bullet nets (3p back per hit, p paid). A guide
@@ -581,18 +605,20 @@ The position bench replays the melee movement's decisions of recorded team battl
 - **Replay:** per round and robot a `MeleeMovement` with the parameters, fed each logged decision: the gang defence's
   switch, the position into the history, then `choose` over the logged candidates with their logged waves' damage.
   **Parity:** with `-Pbase` (the parameters the bot played with, over `DEFAULT`) every choice must be the logged one;
-  the task fails otherwise (332,881 of 332,881 on 48 battles against ranks 1–12, 2026-10-17).
+  the task fails otherwise (332,881 of 332,881 on 48 battles against ranks 1–12, 2026-10-17), and also when the
+  recordings hold no decision (`meleemove`: recorded without debug mode, or not by `OgiGunLogTeam`).
 - **Outcome of a destination**, over the horizon, driving straight there by the engine's rules and standing:
   - bullets in the air at the decision, the enemies' and the teammates': exact, from the recording, each move against
-    the box of the turn before (G-02); a bullet that hit this robot flies on;
+    the box of the turn before (G-02); a bullet that hit this robot flies on, and one that ended in a wall hits no
+    robot in its last move (the engine checks the walls before the robots);
   - the enemies' later bullets, at their recorded shots: the chance that this robot was the target (the enemy team's
     share of shots at our closest robot if it is the closest there, the rest split over the others) times the enemies'
     hit rate at that distance times the damage;
   - our robot's own later bullets, at the enemy each was aimed at: our hit rate at that distance times the damage.
 
   The shares and hit rates come from the same recordings (the robot a bullet was aimed at is the opposing robot whose
-  bearing at f − 2 is nearest its heading, as in `tools/team_position_analysis.py`). The model's damage from bullets
-  in the air matches what the logged choices met: 1.64 a decision against 1.68 within 30 turns (2026-10-17).
+  bearing at f − 2 is nearest its heading, `PositionBench.Model.aimed`). The model's damage from bullets in the air
+  matches what the logged choices met: 1.64 a decision against 1.68 within 30 turns (2026-10-17).
 - **Report:** per variant, the share of decisions it changes and, per decision, the change of damage taken from
   bullets in the air, from later bullets, friendly fire, damage dealt and net, with the 95 % interval over the
   battles as clusters; then per enemy team.
@@ -600,8 +626,8 @@ The position bench replays the melee movement's decisions of recorded team battl
   its destination for the whole horizon, while the bot decides anew every turn: the bench sees a destination's next
   seconds, not where a whole battle of such choices takes the team (formation, who gets ganged, kill order).
 - **Measured against the battles (2026-10-17):** both ways on 48 battles each, the teammate weight 1 against 3 came
-  out +0.015 ± 0.004 damage a decision for 1 (bias +0.013), and counting only our robots as closer to an enemy
-  (on the queue −1.64 APS) +0.006 ± 0.004; the queue had measured weight 3 at +2.10 APS over 1. The recordings
+  out +0.015 ± 0.004 damage a decision for 1 (bias +0.013), and counting only our robots as closer to an enemy,
+  which lost on the queue, +0.006 ± 0.004; the queue had measured weight 3 at +2.10 APS over 1. The recordings
   themselves show the queue's direction: robots with weight 1 met 9 % more damage from bullets in the air. So the
   bench's numbers are a diagnosis of a decision's next seconds, not a test of movement parameters.
 
@@ -640,6 +666,7 @@ never sees. The bench replays each battle through the bot's own `DangerModel`, `
   the opponent, the round, the turn it was fired in, its origin, our position when the enemy aimed and our lateral
   velocity then (positive counter-clockwise around the origin), its guess factor, half our width, whether it hit us,
   the share and its logarithm (`DangerBench.BULLET_COLUMNS`). Reports by situation (walls, distance) group these rows.
+  Not with `-Ptune`, which reports several parameter sets.
 - **Simple guns and the flattener:** a shot also carries where the `SimpleAims` would have aimed, from the enemy's
   recorded position of turn f − 2. A wave that passes us (`HitRange` over our recorded positions, as the surfer
   advances it) teaches the flattener where we were, also when the surfer learned its bullet before.
@@ -697,6 +724,11 @@ jar with anything in those packages, and `deployBots` runs the jar check.
     other names, nested archives, service registrations, multi-release classes, duplicates). A class the robot
     class loader would take from the JDK or the engine never counts as the jar's own, so it cannot hide references
     to the real one.
+  - **Which entries:** a jar lists its entries twice, in the stream of local records and in the central directory,
+    and Robocode reads both: it finds robots and member jars in the stream (`JarRoot.readJarStream`), and the robot
+    class loader reads the jar's classes through the central directory (a `jar:` URL). A crafted jar can show each
+    reader other entries, so the check judges the stream's entries, as Robocode finds them, and denies every entry
+    the two lists do not hold alike (`directory differs`), and a stream it cannot read to the end.
   - **Team jars** may carry their members as jars inside the jar: Robocode reads every entry named `*.jar` or
     `*.zip` as a jar of its own and loads robots from it (`JarRoot.readJarStream`). Such a member jar is checked
     like a jar of its own, its classes judged against its own classes only (a robot's class loader reaches only the
@@ -795,9 +827,11 @@ is waiting.
   one content.
 - Options: those of `compare` (`opponents`, default the lab set; `bounds`, `maxPairs`, `pairsPerOpponent`, `starts`,
   `seed`, `rounds`, `metric`), `note` (shown on the dashboard) and `timeout` (seconds per battle; default 900 for a
-  comparison, 300 for a recording, where a hung robot in debug mode holds its slot until then). Options are checked
+  1v1 or team comparison, 1800 for a melee comparison, 300 for a 1v1 recording and 600 for a melee or team
+  recording; a hung robot in debug mode holds its slot until then). Options are checked
   before a job is queued: whole numbers in range, `maxPairs` at least the test's burn-in of 2 pairs per opponent, our
-  own robots as subjects.
+  own robots as subjects, and no option of another format (`draws` against a 1v1 or team set, `pairsPerOpponent`
+  against a melee set).
 - **Order:** jobs run in queue order, the first job that has work for a free slot gets it. Moving a job up on the
   dashboard lets it take the slots as they free up; the job it passed keeps its state. A job waits while its jars
   are being copied, and later jobs use the slots meanwhile.
@@ -884,11 +918,12 @@ refuses melee sets. `recordBattles` and the recording jobs record a melee set's 
 
 `./gradlew submitGunLogs -Popponents=<set> -Ppairs=2` queues the gun's logs of the working tree (a snapshot's
 `OgiGunLog`, keys `gunshot,gunpass,gunshield`; against a melee or a team set the melee gun's keys, and against a team
-set five of them as `OgiGunLogTeam`, see [Melee bench](#melee-bench)) against a set, on the seeds of `compare` and `recordBattles`; `gunBench
--Plogs=.robocode/queue/jobs/<id>/recordings/<version>` then replays them here. `./gradlew submitRecordings
--Popponents=<set> -Ppairs=2` queues full recordings of the working tree's `Ogi` (robots, bullets and every debug
-property, about 2.3 MB per 1v1 battle; `-Pkeys` keeps only those debug properties and drops robots and bullets). The
-job type `record` takes any robot and keys (`queue.Submit`).
+set five of them as `OgiGunLogTeam`, recorded with `-Pdebug=true`, see [Melee bench](#melee-bench)) against a set, on
+the seeds of `compare` and `recordBattles`; `gunBench -Plogs=.robocode/queue/jobs/<id>/recordings/<version>` (or
+`meleeBench`) then replays them here. `./gradlew submitRecordings -Popponents=<set> -Ppairs=2` queues full recordings
+of the working tree's `Ogi` (robots, bullets and every debug property, about 2.3 MB per 1v1 battle; `-Pkeys` keeps
+only those debug properties and drops robots and bullets). The job type `record` takes any robot and keys
+(`queue.Submit`).
 
 ```sh
 ./gradlew submitRecordings -Popponents=.robocode/foreign/<set>.txt -Pdebug=false
@@ -930,9 +965,11 @@ its logs too, such as the melee movement's decisions for the [position bench](#p
     melee bench leaves such battles out of its parity check (Ogi skipped no turn in 100 draws of a comparison).
   - A melee battle's default timeout is 600 s; the longest of 199 draws took 185 s in debug mode.
 - **Against a team set** the subject is the working tree's `OgiTeam` (or a foreign team with `-Psubject`), and the
-  battles are pairs as against a 1v1 set, with the same index columns; the subject's numbers are its team's (the
-  runner names a team's result after the team). Like melee draws they run without debug mode and with a 600 s
-  timeout by default: ten robots, most of them foreign.
+  battles are pairs as against a 1v1 set, with the same index columns; the subject's numbers are its team's: the score
+  components and shots of the team's result, and the skipped turns, problems and own turn times of its robots, which
+  the engine names after their own class (`cz.libors.Ogi <v> (1)` in `cz.libors.OgiTeam <v> (1)`; the job finds them
+  in the recording's `robot` records). Like melee draws they run without debug mode and with a 600 s timeout by
+  default: ten robots, most of them foreign.
 - **In debug mode by default**, like `recordBattles` (engine-model G-17): a battle can ask for it
   (`BattleSpec.debug`), and the executor restarts an idle slot with `-Ddebug=true`, because the engine reads the flag
   once per JVM. A job's battles all want the same mode, and a worker plays one mode at a time: while battles of one
@@ -1011,10 +1048,11 @@ selection, a tooltip and a table's scroll position stay wherever the content sta
   - **Which sets measure the rumble:** a set stands for as many robots of the rumble as its weight lines add up to,
     or without weights as it has opponents (`OpponentSet.standsFor`). The largest number among the format's jobs is
     taken as the whole rumble, and a set that stands for at least 99 % of it counts: the whole rumble, or a sample
-    whose groups weigh as their tiers (`pop-1v1-2026-10`). A subset stands for less (the strong and medium tiers stand
-    for 300 of the 1v1 rumble's 1216, a set without its top 30 for 1186), so its "rumble estimate" is that subset's
-    mix and is left out. A newer ranking with a few more robots keeps the older sets in; one with more than 1 % more
-    would push them out, and the rule then needs another look. The page lists every set with its verdict.
+    whose groups weigh as their tiers (`pop-1v1-2026-10`). A subset stands for less (a set of the strong and medium
+    tiers for a fraction of the rumble, a set without its top tier for a few per cent less than all of it), so its
+    "rumble estimate" is that subset's mix and is left out. A newer ranking with a few more robots keeps the older
+    sets in; one with more than 1 % more would push them out, and the rule then needs another look. The page lists
+    every set with its verdict.
   - The APS is the scoreboard that estimates the rumble's: the rumble estimate of a weighted set, otherwise all
     opponents (a team set weighs every team the same; a melee comparison's draws give every group its share).
   - The jobs' sets and summaries are read on the first request (about half a second for 400 jobs), outside the

@@ -46,7 +46,7 @@ window.EXPLORER = {
         {team: false, from: 'E4', at: 'me', age: 6, power: 3, spread: 0.08}],
       damageLayer: true,
       story: `
-<p>Stage two: only the <b>8 candidates with the least risk</b> (numbered rings) are driven to in a prediction (straight there, then stand, at most 30 turns) against the waves in the air. The red dots show the waves' damage on the way to every point within reach.</p>
+<p>Stage two: only the <b>8 candidates with the least risk</b> (numbered rings; last turn's destination, while it competes, is always among them as #1) are driven to in a prediction (straight there, then stand, at most 30 turns) against the waves in the air. The red dots show the waves' damage on the way to every point within reach.</p>
 <ol>
 <li><b>Whom did it aim at?</b> A wave counts with the chance <code>1/(1+n)&sup2;</code>, where n is the number of other robots the shooter had closer than us. Nobody is nearer to E2 than we are, so its chance is 1. E1 has E6 nearer: 1/4. E4 has E7, E6 and E5 nearer: 1/16, under the 0.1 cut-off, so the bot leaves that wave out.</li>
 <li><b>When all of the 8 are hit, it's a trade-off.</b> The score is <code>risk/median + 3&middot;damage/max(0.1, median damage)</code>. Here every candidate takes some damage, the median is well above the floor, and the least-hit candidate (<b style="color:var(--gold)">&#9733;</b>) beats a better position (&#9670;). When most of the 8 are safe, the median is 0, the floor applies, and a wave vetoes a way instead (see the team page's <i>Bullets</i> tab).</li>

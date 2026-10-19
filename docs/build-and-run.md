@@ -29,7 +29,9 @@ battles.
 | `./gradlew compare -Pbaseline=HEAD` | Paired, sequential comparison of the working tree with a baseline revision; see [harness.md](harness.md#comparing-two-versions) |
 | `./gradlew recordBattles -Pversions=<v>,<v>` | Recordings of comparison battles; see [harness.md](harness.md#recording-comparison-battles) |
 | `./gradlew recordGunLogs`, `gunBench`, `gunTrend -Plogs=<dir>` | The gun's logs and the gun bench; see [harness.md](harness.md#gun-bench) |
+| `./gradlew meleeBench -Plogs=<dir>` | The melee bench; see [harness.md](harness.md#melee-bench) |
 | `./gradlew dangerBench -Precordings=<dir>` | The danger bench; see [harness.md](harness.md#danger-bench) |
+| `./gradlew positionBench -Precordings=<dir>` | The position bench; see [harness.md](harness.md#position-bench) |
 | `./gradlew :harness:baselineJars -Pbaseline=<rev>` | Only builds the robot and team jars of a git revision into `.robocode/baselines/` |
 | `./gradlew sandboxCheck` | Checks that robots run in Robocode's sandbox with a minimal environment; see [harness.md](harness.md#foreign-robots) |
 | `./gradlew jarCheck -Pjars=<jar or directory>,...` | Checks foreign robot jars against the allowlist before they run |
@@ -40,8 +42,8 @@ battles.
 | `./gradlew remoteSkeletonCheck` (and `remoteSandboxCheck`, `remoteRecordProbes`, `remoteCompare`, `remoteRecordBattles`, `remoteRecordGunLogs`) | The same on the Windows worker in a slot's environment; `-PremoteHost=ogi-desktop` for the WSL container |
 | `./gradlew queueServer` | The queue's server and dashboard (`http://localhost:8765/`) until stopped; `-Pworkers=ogi-win:12` (default), `local:4`; see [harness.md](harness.md#queue) |
 | `./gradlew submit -Pbaseline=HEAD` | Queues a comparison of the working tree (a snapshot, `snapshotJars`) with a baseline; the options of `compare`, plus `-Pnote` |
-| `./gradlew submitGunLogs -Popponents=<set>` | Queues the gun's logs of the working tree against a set, for the gun bench |
-| `./gradlew submitRecordings -Popponents=<set>` | Queues full recordings of the working tree against a set, for the danger bench |
+| `./gradlew submitGunLogs -Popponents=<set>` | Queues the gun's logs of the working tree against a set, for the gun bench, or against a melee or team set for the melee bench (team: add `-Pdebug=true`) |
+| `./gradlew submitRecordings -Popponents=<set>` | Queues full recordings of the working tree against a set, for the danger bench; with `-PgunLog=true -Pdebug=true` against a team set, for the position bench |
 | `./gradlew queueStatus`, `./gradlew queueCancel -Pjob=<id>` | The queue in a terminal; cancel a job |
 
 For Java 12–23 the harness adds `-Djava.security.manager=allow`, as Robocode's own launch scripts do. Java 24+ refuses
@@ -58,8 +60,8 @@ on the Windows worker only `SystemRoot`, `TEMP` and `TMP`.
   allows (see "Allowed Robocode versions" at <https://rumble.robowiki.net/RumbleStats>; 1.10.3, 1.11.0 and 1.11.1 on
   2026-10-08).
 - **Deployment:** `deployBots` deletes every `cz.libors.*` jar from `.robocode/<version>/robots/`, copies in the
-  freshly built robot, team and probe jars and the baseline jars from `.robocode/baselines/`, and deletes the robot
-  database cache so Robocode rescans. It also deploys the approved foreign jars from `.robocode/foreign/`, after
+  freshly built robot, team, gun-log and probe jars and the baseline jars from `.robocode/baselines/`, and deletes the
+  robot database cache so Robocode rescans. It also deploys the approved foreign jars from `.robocode/foreign/`, after
   the jar check (`checkForeignJars`) and a check of their SHA-256, and removes any other foreign jar
   ([harness.md](harness.md#foreign-robots)). Baseline jars are built from git revisions (`baselineJars`) and kept there
   across reinstalls; delete the ones no longer needed by hand.
@@ -80,7 +82,7 @@ cd .robocode/1.11.1 && ./robocode.sh
 | `cz.libors.OgiTeam_<v>.jar` | the same classes plus `cz/libors/OgiTeam.team` (five `cz.libors.Ogi` members, the first is the leader) | team |
 | `cz.libors.OgiGunLog_<v>.jar` | the classes plus `cz.libors.OgiGunLog`, which logs the gun for the gun bench | none; the build fails if a rumble jar holds it |
 | `cz.libors.OgiGunLogTeam_<v>.jar` | the same plus `cz/libors/OgiGunLogTeam.team` (five `cz.libors.OgiGunLog`), for the melee gun's logs of team battles | none |
-| `cz.libors.probe_<v>.jar` (built by `probe/`) | the probe robots `cz.libors.probe.*` with their `.properties` | none, local recordings only |
+| `cz.libors.probe_<v>.jar` (built by `probe/`) | the probe robots `cz.libors.probe.*` with their `.properties`, `cz/libors/probe/MessageTeam.team` (three `MessageProbe`) and `cz/libors/probe/SkipTeam.team` (a `SkipProbe` and a `MessageProbe`) | none, local recordings only |
 
 The version and author come from `botVersion` and `botAuthor` in `gradle.properties`.
 

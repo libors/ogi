@@ -86,6 +86,13 @@ public final class PositionBench {
         int decisions = battles.stream().flatMap(b -> b.rounds().stream()).mapToInt(r -> r.decisions().size()).sum();
         System.out.printf(Locale.ROOT, "%d battles, %d decisions, read in %.1f s; horizon %d turns%n", battles.size(),
                 decisions, (System.nanoTime() - start) / 1e9, horizon);
+        if (decisions == 0) {
+            // A parity over no decisions would pass. Only OgiGunLog in a team battle logs them, and a recording keeps
+            // them only in debug mode.
+            System.err.println("No decisions (meleemove) in the recordings: record OgiGunLogTeam against a team set "
+                    + "with -PgunLog=true -Pdebug=true");
+            System.exit(1);
+        }
         Model model = Model.estimate(battles);
         model.print();
 
@@ -270,8 +277,9 @@ public final class PositionBench {
             double[] now;
             if (b.end() != null && turn >= b.endTurn()) {
                 if (!flies) {
-                    // It hit a wall, a bullet or another robot in this turn: only its last move remains.
-                    if (turn > b.endTurn()) {
+                    // It hit a wall, a bullet or another robot in this turn: only its last move remains. The engine
+                    // checks the walls before the robots, so a bullet that ended in a wall hits no robot in that move.
+                    if (turn > b.endTurn() || "HIT_WALL".equals(b.end())) {
                         return 0;
                     }
                     now = b.at(turn);

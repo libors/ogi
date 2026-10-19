@@ -21,7 +21,7 @@ import java.util.TreeMap;
  * configuration is refused.
  *
  * <pre>
- * #ogi-melee  1
+ * #ogi-melee  2
  * config  key=value ...
  * battle  draw  side  seed  subjectIndex  score  survival  lastSurvivorBonus  bulletDamage  bulletDamageBonus
  *         ramDamage  ramDamageBonus  firsts  fired  hits  skippedTurns  opponentSkippedTurns  problems

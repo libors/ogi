@@ -162,6 +162,11 @@ public final class CompareJob extends QueueJob {
         if (set.format() == Format.MELEE) {
             throw new IllegalArgumentException(set.name() + " is a melee set: its comparison is a MeleeJob");
         }
+        if (spec.getProperty("draws") != null) {
+            // Ignored here, it would queue a sequential test where a fixed number of battles was asked for.
+            throw new IllegalArgumentException("draws are for melee sets; " + set.name()
+                    + " has pairs: use pairsPerOpponent=n");
+        }
         Bounds.parse(spec.getProperty("bounds", "gainer"));
         Measure.parse(spec.getProperty("metric", "score"));
         Compare.fixedStarts(spec.getProperty("starts", "random"));

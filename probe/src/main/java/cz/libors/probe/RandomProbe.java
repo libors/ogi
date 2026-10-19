@@ -31,7 +31,13 @@ import java.util.StringJoiner;
  *   <li>{@code cmd} every turn: time, distance, body, gun and radar turn remaining, max velocity, max turn rate, the
  *       adjust flags gun-for-robot, radar-for-gun and radar-for-robot, the fire power requested this turn ({@code -}
  *       if none) and whether the robot API accepted it. The engine applies these in the next turn.</li>
- *   <li>{@code ev} once per event received this turn: event type, event time, then the event's fields.</li>
+ *   <li>{@code ev} once per event received this turn, in the order the handlers ran: event type, event time, then
+ *       the event's fields; a death also with {@code getOthers()} in its handler.</li>
+ *   <li>{@code fireGetters} in a turn it tries to fire: time, the power requested, the gun heat and energy before
+ *       the call and after it, whether the robot API accepted the shot, and the call: {@code setFire} in odd turns,
+ *       {@code setFireBullet} in even ones (engine-model G-49).</li>
+ *   <li>{@code fireAgain} after an accepted shot, a second {@code setFireBullet} with the same power in the same
+ *       turn: time, the power, whether the robot API accepted it, and the gun heat and energy after it.</li>
  * </ul>
  *
  * <p>The random sequence is seeded from the start position, which the engine draws from its own random generator,
@@ -128,9 +134,21 @@ public class RandomProbe extends AdvancedRobot {
             power = p;
             double heat = getGunHeat();
             double energy = getEnergy();
-            fired = setFireBullet(p) != null;
-            // engine-model G-49: the getters include the shot set in this turn.
-            report("fireGetters", getTime(), p, heat, energy, getGunHeat(), getEnergy(), fired);
+            // Both calls end in the same proxy method; setFire returns nothing, so its shot shows in the gun heat.
+            boolean bySetFire = getTime() % 2 == 1;
+            if (bySetFire) {
+                setFire(p);
+                fired = getGunHeat() != heat;
+            } else {
+                fired = setFireBullet(p) != null;
+            }
+            // engine-model G-49: the getters include the shot set in this turn, and a second shot is refused.
+            report("fireGetters", getTime(), p, heat, energy, getGunHeat(), getEnergy(), fired,
+                    bySetFire ? "setFire" : "setFireBullet");
+            if (fired) {
+                Bullet again = setFireBullet(p);
+                report("fireAgain", getTime(), p, again != null, getGunHeat(), getEnergy());
+            }
         }
         finishCommands();
         report("cmd", getTime(), getDistanceRemaining(), getTurnRemainingRadians(), getGunTurnRemainingRadians(),
@@ -293,7 +311,8 @@ public class RandomProbe extends AdvancedRobot {
 
     @Override
     public void onRobotDeath(RobotDeathEvent e) {
-        report("ev", "RobotDeath", e.getTime(), e.getName());
+        // engine-model G-52: the robot that died this turn is no longer counted.
+        report("ev", "RobotDeath", e.getTime(), e.getName(), getOthers());
     }
 
     @Override

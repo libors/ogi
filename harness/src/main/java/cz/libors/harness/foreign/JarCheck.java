@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -102,11 +103,28 @@ public final class JarCheck {
     /**
      * Checks a jar; {@code ours} skips the rule against code in the trusted packages, for checking our own jars and
      * the sample robots against false alarms.
+     *
+     * <p>A jar has two lists of its entries, and Robocode reads both: it finds robots and member jars in the stream of
+     * local records ({@code JarRoot.readJarStream}), and the robot class loader reads the jar's classes through the
+     * central directory (a {@code jar:} URL). A crafted jar can show each reader other entries, so the check judges
+     * the stream's entries and denies every entry the two lists do not hold alike.
      */
     public static Report check(Path jar, boolean ours) throws IOException {
-        Map<String, byte[]> entries = new LinkedHashMap<>();
-        List<Finding> problems = new ArrayList<>();
-        long total = 0;
+        byte[] bytes = Files.readAllBytes(jar);
+        Entries stream = new Entries();
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (!entry.isDirectory() && !stream.add(entry.getName(), zip)) {
+                    break;
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // Robocode stops reading there too; the entries the directory lists beyond it are denied below.
+            stream.problems.add(new Finding(Level.DENY, "unreadable stream", "local records: " + e.getMessage(),
+                    new TreeSet<>(Set.of(jar.getFileName().toString()))));
+        }
+        Entries directory = new Entries();
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             Enumeration<? extends ZipEntry> all = zip.entries();
             while (all.hasMoreElements()) {
@@ -114,29 +132,56 @@ public final class JarCheck {
                 if (entry.isDirectory()) {
                     continue;
                 }
-                if (entries.containsKey(entry.getName())) {
-                    problems.add(entryFinding(Level.DENY, "duplicate entry", entry.getName()));
-                    continue;
-                }
-                byte[] bytes;
                 try (InputStream in = zip.getInputStream(entry)) {
-                    bytes = in.readNBytes((int) MAX_ENTRY_BYTES + 1);
+                    if (!directory.add(entry.getName(), in)) {
+                        break;
+                    }
                 }
-                total += bytes.length;
-                if (bytes.length > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES) {
-                    problems.add(entryFinding(Level.DENY, "oversized entry", entry.getName()));
-                    break;
-                }
-                entries.put(entry.getName(), bytes);
             }
         }
-        Report report = check(jar.getFileName().toString(), sha256(Files.readAllBytes(jar)), entries, ours);
+        List<Finding> problems = new ArrayList<>(stream.problems);
+        directory.problems.stream().filter(f -> !problems.contains(f)).forEach(problems::add);
+        Set<String> names = new TreeSet<>(stream.entries.keySet());
+        names.addAll(directory.entries.keySet());
+        for (String name : names) {
+            if (!Arrays.equals(stream.entries.get(name), directory.entries.get(name))) {
+                problems.add(entryFinding(Level.DENY, "directory differs", name));
+            }
+        }
+        Report report = check(jar.getFileName().toString(), sha256(bytes), stream.entries, ours);
         if (problems.isEmpty()) {
             return report;
         }
         List<Finding> findings = new ArrayList<>(problems);
         findings.addAll(report.findings());
         return new Report(report.jar(), report.sha256(), report.robots(), report.classes(), sort(findings));
+    }
+
+    /**
+     * The entries one reader of an archive sees, in its order, with their uncompressed content, and the entries it
+     * refused: a second one of a name, and one over the size limits, which ends the reading.
+     */
+    private static final class Entries {
+
+        final Map<String, byte[]> entries = new LinkedHashMap<>();
+        final List<Finding> problems = new ArrayList<>();
+        private long total;
+
+        /** Reads an entry's content; false once the size limits are exceeded. */
+        boolean add(String name, InputStream in) throws IOException {
+            if (entries.containsKey(name)) {
+                problems.add(entryFinding(Level.DENY, "duplicate entry", name));
+                return true;
+            }
+            byte[] bytes = in.readNBytes((int) MAX_ENTRY_BYTES + 1);
+            total += bytes.length;
+            if (bytes.length > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES) {
+                problems.add(entryFinding(Level.DENY, "oversized entry", name));
+                return false;
+            }
+            entries.put(name, bytes);
+            return true;
+        }
     }
 
     /**
@@ -257,25 +302,19 @@ public final class JarCheck {
      * a readable archive, holds a duplicate entry or exceeds the size limits.
      */
     private static Optional<Map<String, byte[]>> readMember(byte[] bytes) {
-        Map<String, byte[]> entries = new LinkedHashMap<>();
-        long total = 0;
+        Entries member = new Entries();
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
-                    continue;
-                }
-                byte[] content = zip.readNBytes((int) MAX_ENTRY_BYTES + 1);
-                total += content.length;
-                if (content.length > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES
-                        || entries.put(entry.getName(), content) != null) {
-                    return Optional.empty();
+                if (!entry.isDirectory() && !member.add(entry.getName(), zip)) {
+                    break;
                 }
             }
         } catch (IOException | RuntimeException e) {
             return Optional.empty();
         }
-        return entries.isEmpty() ? Optional.empty() : Optional.of(entries);
+        return member.entries.isEmpty() || !member.problems.isEmpty() ? Optional.empty()
+                : Optional.of(member.entries);
     }
 
     /**

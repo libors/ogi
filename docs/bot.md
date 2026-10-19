@@ -19,19 +19,20 @@ the offline benches run them without the engine.
 | `VirtualGuns` (`GunModel`, `MirrorAim`, `CircularAim`) | `gun` | the next shot's plan at the target, its waves and the virtual guns' records | round, models for the battle |
 | `MeleeGun` | `gun` | one aim at all enemies in a melee | round, records for the battle |
 | `BulletPower` | `gun` | the power of our next bullet, our hit records | battle |
-| `EnemyWaves` (`EnemyWave`, `FireDetector`, `DangerModel`) | `move` | the enemies' waves in the air, their shadows, the enemies' fire records, a melee way's danger | round, models for the battle |
+| `FireDetector` (`DetectedShot`, `Neighbours`) | `enemy` | each enemy's shots from its energy drops ([fire-detection.md](fire-detection.md)) | round |
+| `EnemyWaves` (`EnemyWave`, `DangerModel`) | `move` | the enemies' waves in the air, their shadows, the enemies' fire records, a melee way's danger | round, models for the battle |
 | `WaveSurfer` | `move` | the duel's movement against the waves, anti-ram | round |
-| `MeleeMovement` (`GangWatch`) | `move` | the movement in a melee and in a team's endgame | round |
+| `MeleeMovement` (`GangWatch`) | `move` | the movement in a melee and in a team's endgame; whether the enemies gang our robots | round; the gang count for the battle |
 | `OrbitMovement` | `move` | the duel's orbit while no wave is in the air | round |
 | `Shield` (`ShieldAim`, `ShieldPlanner`), `ShieldStance`, `ShieldTrial` | `shield` | shooting the enemy's bullets down, where we stand, when we give up | round; aims and trial for the battle |
 | `TeamFeed`, `TeamOutbox`, the packet records | `team` | the team's energy events in turn order; what we tell our teammates | round |
-| `Trace`, `Overlay` | `trace` | what the overlay shows, and painting it | a painted turn |
+| `Trace`, `Overlay` | `trace` | what the overlay shows, and painting it | a painted turn; the layers' switches for the battle (statics) |
 | `physics`, `wave`, `geom` | | the engine's rules bit for bit, waves and hit ranges, angles | |
 
 ## A turn
 
-Robocode delivers a turn's events before the robot acts, highest priority first, so hits and rams (20–55) arrive
-before scans (10), and painting (5) comes last (engine-model G-40). Then `act()` runs.
+Robocode delivers a turn's events before the robot acts (engine-model G-40), highest priority first (G-52): hits and
+rams (20–55) before scans (10), painting (5) last. Then `act()` runs.
 
 What acts depends on the battle's kind (`BattleKind`: duel, melee or team, from its first round's start) and on the
 round's phase (`Phase`, from the robots alive): `DUEL` (one enemy, no teammate), `MELEE` (two enemies or more),
@@ -40,22 +41,25 @@ round's phase (`Phase`, from the robots alive): `DUEL` (one enemy, no teammate),
 
 1. **Our state** goes to the enemy waves (`EnemyWaves`), which advance to our position at the end of this turn.
 2. **Target:** the closest enemy seen in the last 8 turns, from our scans or a teammate's. With none, but enemies
-   alive that we saw this round, we drive towards the field's centre and do nothing else this turn: from there the
-   radar reaches every point of the field (from a corner of the team field, 1200 × 1200, the far corners are out of
-   its 1200 px). Before the round's first scan we wait.
+   alive that we saw this round, we drive towards the field's centre; the radar still turns (it is steered before the
+   target is chosen) and the gun waves still advance, but we neither aim nor fire. From the centre the radar reaches
+   every point of the field (from a corner of the team field, 1200 × 1200, the far corners are out of its 1200 px).
+   Before the round's first scan we wait.
 3. **Radar:** locked on the target in 1v1, and on the last enemy in a team battle; in a melee towards the enemy
    scanned longest ago ([Melee radar](#melee-radar-meleeradar)); in a team battle on the enemies the team's plan
    gives this robot ([Team radar](#team-radar-teamradar)).
 4. **Movement:** in a melee and in a team's endgame, the safest place ([Melee movement](#melee-movement-meleemovement)).
    In a duel, until the enemy's trial fails, the bullet shield instead of the rest of this list
-   ([Bullet shield](#bullet-shield-czliborsogishield)); not in the duel at the end of a battle that started as a
-   melee: the last enemy has seen us move all battle, and a failed trial would cost the round we fought for. Otherwise the surfer's commands while an enemy wave is in the air; otherwise, in a duel, the wave the enemy can
-   fire next once its gun is cool (`WaveSurfer.gunHeatCommand`), the surfer's ways around a target that drives at us
-   (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A disabled target in a duel
-   (energy 0: it can neither fire nor move) is rammed instead, once none of its waves is in the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round,
-   a bullet kill 20 % ([engine-model.md](engine-model.md) G-46). From these commands `RobotMotion` predicts our position at the end of the next turn, exactly
-   unless we ram someone.
-5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading; the surfer follows
+   ([Bullet shield](#bullet-shield-czliborsogishield)); only in a battle that started as a duel (`BattleKind.DUEL`),
+   not in the duel at the end of a melee or a team battle: the last enemy has seen us move all battle, and a failed
+   trial would cost the round we fought for. Otherwise the surfer's commands while an enemy wave is in the air;
+   otherwise, in a duel, the wave the enemy can fire next once its gun is cool (`WaveSurfer.gunHeatCommand`), the
+   surfer's ways around a target that drives at us (`WaveSurfer.evade`), or orbiting the target (`OrbitMovement`). A
+   disabled target in a duel (energy 0: it can neither fire nor move) is rammed instead, once none of its waves is in
+   the air, and not shot at: a ram kill adds 30 % of all the damage we dealt it this round, a bullet kill 20 %
+   ([engine-model.md](engine-model.md) G-46). From these commands `RobotMotion` predicts our position at the end of
+   the next turn, exactly unless we ram someone.
+5. **Fire:** last turn's plan is fired if the gun is cool and has reached the planned heading; `EnemyWaves` follows
    the bullet for its shadows on the enemy waves (from the next turn's move on).
 6. **Gun waves** advance; last turn's plan becomes this turn's wave.
 7. **Aim:** the plan for the next turn's shot, from the predicted position, with the turret's random spread; in a
@@ -63,10 +67,10 @@ round's phase (`Phase`, from the robots alive): `DUEL` (one enemy, no teammate),
 
 ## What lasts for the battle
 
-Robocode makes a new robot instance for every round, while statics last for the battle and are per robot
-(engine-model G-22). The bot's only static is a `BattleMemory`; each component gets its part when the round starts,
-and everything else is per round. "Base name" keys the copies of one robot in an enemy team together (`Names.base`):
-they run the same code, so what we learn of one holds for the others.
+Robocode makes a new robot instance for every round from one class loader per robot and battle, so statics last for
+the battle's rounds and are per robot (engine-model G-22). The bot's only static is a `BattleMemory`; each component
+gets its part when the round starts, and everything else is per round. "Base name" keys the copies of one robot in
+an enemy team together (`Names.base`): they run the same code, so what we learn of one holds for the others.
 
 | Part | What it holds | Keyed by |
 |---|---|---|
@@ -120,9 +124,9 @@ The overlay's layers, switched by keys, are the overlay's own statics.
   instead of 1.06 s; the scan grew to 55–100 µs a turn by the last rounds.
 - **Bullet power** (`BulletPower`): 3 within 200 px, else 23/12 and one unit in the last place (1.916666666666667),
   at most the enemy's energy / 4 + 0.1 and our energy less 0.1. Ten times that bullet's speed lies just past a half
-  (142.5): a surfer built on the BasicSurfer pattern matches a bullet that hit it to its wave by the speeds rounded to
-  tenths, the wave's speed taken from our energy drop, whose floating-point noise rounds it the other way about four
-  times in five, and then it does not learn the hit (2026-10-12; 1.9, a whole 143, never failed the match). Powers of
+  (142.5): a surfer that matches a bullet that hit it to its wave by the speeds rounded to tenths, the wave's speed
+  taken from our energy drop, whose floating-point noise rounds it the other way about four times in five, and then
+  it does not learn the hit (2026-10-12; 1.9, a whole 143, never failed the match). Powers of
   2.2 lost a point on the population. Against the enemies we hit 25–55 % of the time, one power for all of them from
   1.48 to 2.48 (2026-10-14): the score is flat from 2.0 to 2.5 and falls below 2.0. A lower power hits more often,
   but deals less damage a turn, so the rounds last longer and the enemy hits us more; a higher one, below a hit rate
@@ -138,7 +142,7 @@ The overlay's layers, switched by keys, are the overlay's own statics.
     also sets the nearer distance, with its own threshold of 18 %). The faster bullet leaves the enemy a narrower escape
     angle: against the strong bots that gained about 1.5 points of score share and against the medium tier about 0.7,
     while 1.15 gained nothing (more hits do not make up for half the damage); 18 % instead of 25 % gave the medium tier
-    0.55 less. Ten times the speed of 1.45 is 156.5, so the BasicSurfers' rounding misses its hits too (2026-10-13).
+    0.55 less. Ten times the speed of 1.45 is 156.5, so such surfers' rounding misses its hits too (2026-10-13).
   - **In an energy race** (`RacePower`, `RACE_ENERGY`, `RACE_CLOSE_ENERGY`): in a duel, while our energy is below
     20, or the enemy's is below 20 and ours below 40, the round goes to whoever runs out last. Each robot loses
     energy through its own shots (a shot costs p, a hit returns 3p) and through the other's hits; with each gun firing as soon as it is cool (a shot every 10 + 2p turns), our hit rate h,
@@ -150,10 +154,10 @@ The overlay's layers, switched by keys, are the overlay's own statics.
     often); g is its hits per detected shot over the battle (`EnemyWaves.hitRateOnUs`), q its last shot's power. Against an enemy that hits us rarely and keeps
     firing, a weak bullet costs us almost nothing while its misses run it down; against one that hits us often, our
     damage has to end the round, and the power stays. The model predicts how long we last below 20 energy (about 155
-    turns at 1.65, measured 130) and how long Diamond lasts with its 0.1 below 20 (440, measured 450). Against the
-    strong and medium population it gained 0.4 points of score share below 20 alone (half a round won more a battle,
-    the damage kept) and 0.5 with the close races (against the strong tier 1.25, a round and a half won more a
-    battle); 0.1 below 20 for every enemy won the same rounds but lost the damage, the model below 30 whatever the
+    turns at 1.65, measured 130) and how long an enemy that fires 0.1 below 20 energy lasts (440, measured 450).
+    Against the strong and medium population it gained 0.4 points of score share below 20 alone (half a round won more
+    a battle, the damage kept) and 0.5 with the close races (against the strong tier 1.25, a round and a half won more
+    a battle); 0.1 below 20 for every enemy won the same rounds but lost the damage, the model below 30 whatever the
     enemy's energy lost damage too, and keeping 450 px while firing weak bullets cost our hit rate against the strong
     bots; against the weak tier, where few rounds become races, nothing changed (2026-10-14).
 - **Virtual guns:** every plan also holds the circular aim (`CircularAim`). A passed wave scores both guns only if
@@ -179,10 +183,10 @@ The overlay's layers, switched by keys, are the overlay's own statics.
   that would have hit, not by its one aim; the place in the range is drawn from a seeded generator of its own
   (`Ogi.randomAim`) once per bullet and held until the bullet fires, so that the turret reaches it in the turns
   before the gun is cool (a draw every turn made the turret chase it, and the bullets fired where a draw fell within
-  its reach: later and not uniformly); it goes into the shot, so the bench replays it. Against an enemy that is hard to hit it replaces
-  the gun that would fire (the anti-surfer gun's or the main gun's choice) once it has been scored on 30 bullets and
-  its record over them is the better one (DrussGT's idea). The range costs two predicted runs of the target, only in
-  the turns the guns search.
+  its reach: later and not uniformly); it goes into the shot, so the bench replays it. Against an enemy that is hard
+  to hit it replaces the gun that would fire (the anti-surfer gun's or the main gun's choice) once it has been scored
+  on 30 bullets and its record over them is the better one: a surfer that learned our aim is hit less often than at
+  random. The range costs two predicted runs of the target, only in the turns the guns search.
 - **Mirror gun** (`MirrorAim`): some robots drive to where a fixed map sends our own position some turns earlier, most
   of them to its point mirror through the field's centre, 2 to 46 turns late (16 such bots in the rumble, found on
   its recordings of 2026-10-11). They move as well as we do against a gun that reads their own movement: our main gun
@@ -228,8 +232,9 @@ The overlay's layers, switched by keys, are the overlay's own statics.
     differences: the wall ahead weighs 22.4, the turn rate 7.84, the speed 2.8, the distance covered 2, the centre
     distance 2, the closest robot's distance 1.96, the acceleration 1.4, its cosine 0.5, the enemies alive 0.5, its
     sine 0.25, the turns since a reversal 0.2 and those since slowing down 0 (the search left it out; features without
-    weight are skipped). Only records whose displacements
-    reach the bullet's arrival take part, from every earlier round and from this round before the last scan.
+    weight are skipped). Only records whose displacements reach the bullet's flight to the enemy's last scanned
+    position take part (a record that ends before the iterated flight still holds its neighbour's place and gives no
+    position), from every earlier round and from this round before the last scan.
     Positions outside the field are left out. Each position is a bearing from the bullet's origin with a triangle over
     two robot half-widths on each side, weighted 1 / (feature distance + 0.8), so the neighbours weigh almost alike,
     and 1 / the enemy's distance to the power 0.245; the gun aims at the bearing with the most weight, over all
@@ -279,20 +284,20 @@ The overlay's layers, switched by keys, are the overlay's own statics.
   - **An ensemble:** that data profile is one estimator. The others are thirteen simple guns (`SimpleAims`: head-on,
     linear with and without the walls, circular, linear with our lateral velocity averaged over the last 20 and 40
     turns, two pattern matches on our lateral velocity, rounded and truncated, and five that rumble bots use: the linear
-    lead without the arc sine, the average over 5 turns, and 0.5, 0.75 and 1.25 times the linear lead; each aimed from
-    the enemy's scanned position and our state of the turn it aimed), each a narrow kernel at its aim, and a flattener:
-    a KNN over where we ourselves were when this enemy's waves passed us (`DangerModel.visit`, the middle of the wave's
-    hit range on us; every wave, also those whose bullet hit us or one of ours, which the surfer no longer surfs but
-    follows until they pass), which is where a gun that learns our movement aims. Every observed bullet scores each
-    estimator by the share it gave the bullet's bin; the weights go with the prior times `exp(temper · record)`, the
-    record forgetting a part per bullet (`decay`). A simple gun the enemy does not use loses its weight within a few
-    bullets, so it costs no room against learning guns. How the simple guns were found: on full recordings against
-    foreign robots (2026-10-09) head-on bots matched their aim exactly and linear bots one of the two linear aims
-    within a few milliradians; of averaging windows from 5 to 60 turns, 20 and 40 explained most of the bullets of the
-    robots that average our lateral velocity (2026-10-11), and matches of at most 20, 40 and 60 symbols about as many
-    of the pattern matchers' bullets, more than 10; the last five came from the danger bench on recordings against the
-    whole rumble (2026-10-12): each explained more bullets of some bots than the others together, the five together of
-    143 bots.
+    lead without the arc sine, the average over 5 turns, and the linear lead with 0.5, 0.75 and 1.25 times our lateral
+    velocity (inside the arc sine); each aimed from the enemy's scanned position and our state of the turn it
+    aimed), each a narrow kernel at its aim, and a flattener: a KNN over where we ourselves were when this enemy's
+    waves passed us (`DangerModel.visit`, the middle of the wave's hit range on us; every wave, also those whose
+    bullet hit us or one of ours, which the surfer no longer surfs but follows until they pass), which is where a gun
+    that learns our movement aims. Every observed bullet scores each estimator by the share it gave the bullet's bin;
+    the weights go with the prior times `exp(temper · record)`, the record forgetting a part per bullet (`decay`). A
+    simple gun the enemy does not use loses its weight within a few bullets, so it costs no room against learning guns.
+    How the simple guns were found: on full recordings against foreign robots (2026-10-09) head-on bots matched their
+    aim exactly and linear bots one of the two linear aims within a few milliradians; of averaging windows from 5 to 60
+    turns, 20 and 40 explained most of the bullets of the robots that average our lateral velocity (2026-10-11), and
+    matches of at most 20, 40 and 60 symbols about as many of the pattern matchers' bullets, more than 10; the last
+    five came from the danger bench on recordings against the whole rumble (2026-10-12): each explained more bullets
+    of some bots than the others together, the five together of 143 bots.
   - **Lateral history** (`LateralHistory`, per enemy, for the battle): our lateral velocity as that enemy saw it, one
     value per turn in which we scanned it. The averaged guns take the mean of this round's last 20 or 40 values. The
     pattern gun finds the latest earlier occurrence of the longest run (3 to 40) of our newest lateral velocities
@@ -396,9 +401,7 @@ The overlay's layers, switched by keys, are the overlay's own statics.
   of theirs is in the air, beyond 350 px fewer than one in ten.
 - **Without an enemy wave** (while the enemy's gun is hot, and no target that drives at us) the bot orbits the target
   (`OrbitMovement`) and changes direction at random intervals, from its own seeded generator. It also steers towards
-  325 px, but turns towards the target at walls at any distance (the surfer only beyond 325 px). The surfer's own
-  orbit in its place (the last surfed way, no random switches) did not pass a non-regression test against the 1v1
-  population (−0.40 ± 0.43, 2026-10-17).
+  325 px, but turns towards the target at walls at any distance (the surfer only beyond 325 px).
 - **The distance moves the gun's hit rate:** a longer flight gives the target more room, so a movement change shows
   up in `-Pmetric=hits` too ([harness.md](harness.md#known-quirks)).
 
@@ -453,7 +456,7 @@ from everybody and nobody's closest robot. The waves are still detected and lear
   ([harness.md](harness.md#a-melee-comparison-comparemeleejob)). The distance law must be steep (1/d lost 1.3, 1/d³
   tied) and our recent positions must repel, but not too much (without them 1.6 less, at four times the weight 1.6
   less); predicting 12 candidates against the waves instead of 8 cost ten times the CPU for nothing; the other terms
-  changed little either way. Full power in a melee lost 1.4 (rounds won −10 points), 1.5 beyond close range tied.
+  changed little either way.
 
 ### Melee radar (`MeleeRadar`)
 
@@ -501,22 +504,26 @@ unseen in two turns of five (measured on recordings of team battles, 2026-10-16)
   spun while teammates lived).
 - Measured (2026-10-16): an enemy is scanned in 94 % of the turns instead of 60 %, by two robots at once in 18 % of
   them instead of 55 %; the score changed within noise (+0.2 ± 0.6 APS on the whole TeamRumble, the enemies hit us
-  2 % less), and the last enemy's lock likewise (+0.2 ± 0.7). Kept for what the sharp data allow later; doubling the
-  waves' weight with them did not pay (see [Team play](#team-play-czliborsogiteam)).
+  2 % less), and the last enemy's lock likewise (+0.2 ± 0.7). Kept for what the sharp data allow later.
 
 ## Team play (`cz.libors.ogi.team`)
 
 `cz.libors.OgiTeam` is five copies of Ogi, the first the leader (200 energy). Each plays the melee bot above while
-more than one enemy lives, and the duel when it is alone with one. In between, with one enemy left and teammates
-alive (`Phase.TEAM_ENDGAME`), the movement stays the melee's, the healthy robots closing in on the
-enemy ([Melee movement](#melee-movement-meleemovement)), while the duel's guns aim, without the mirror gun, the shadow
-shots and the duel's power rules (1.45, the race), which need a duel; the radars all keep the last enemy. What makes them a team:
+more than one enemy lives, and the duel, without the bullet shield, when it is alone with one. In between, with one
+enemy left and teammates alive (`Phase.TEAM_ENDGAME`), the movement stays the melee's, the healthy robots closing in
+on the enemy ([Melee movement](#melee-movement-meleemovement)), while the duel's guns aim, without the mirror gun,
+the shadow shots and the duel's power rules (1.45, the race), which need a duel; the radars all keep the last enemy.
+What makes them a team:
 
 - **One packet a turn** (`TeamPacket`, gathered in a `TeamOutbox`), broadcast after acting: the robot's own state and the position its commands
   take it to by the end of the next turn (exact unless it collides; teammates read the packet in that turn,
   engine-model G-23), its scans of enemies in the turn (`EnemySighting`), the bullets it fired (`TeamShot`) and the
   events that changed an enemy's energy (`TeamEvent`: our bullet hit it, its bullet hit us, we rammed it). Data of
-  another round are ignored; a teammate's scan of an enemy that died meanwhile is dropped (`World.dead`).
+  another round are ignored. A teammate's scan of an enemy that has died is dropped (`World.dead`) only when its
+  packet comes late, after the sender skipped a turn: the radar sees only live robots (engine-model G-13), and in the
+  turn of the death the packets with the scans of the turn before come before the death event (G-52), so those
+  scans are taken, and the death handler then clears the enemy everywhere but in the team's energy feed
+  (`TeamFeed`).
 - **Where the teammates are:** from the packets, every turn; the firing-line check (30 px at the teammate's distance)
   and the movement use them.
 - **Teammates' bullets:** each is a wave with one known heading (`EnemyWaves.teammateFired`); in the melee movement a
@@ -543,18 +550,11 @@ shots and the duel's power rules (1.45, the race), which need a duel; the radars
   against the gangs.
 - Measured on the whole TeamRumble (2026-10-16, [harness.md](harness.md), 4 pairs per team): the packet with the
   teammates' bullets dodged +21.2 APS, the copies' shared learning +1.4, the spread +4.1 (weight 1) and +2.1 (3; 10
-  gained nothing more); the
-  team's fire detection and the melee gun's shared scans changed the score within noise (we were hit 7 % less, hit
-  1 % more). Not kept: a droid as the fifth member (+0.6 ± 0.8), power 1.45 against enemies we hit rarely (−1.2), the
-  melee gun weighing enemies by 100 / energy (−1.2, it hit 5 points less), counting only teammates in the risk's
-  robots-closer term (−1.6), twice the waves' weight in the melee movement (−0.4, and −0.3 with the team radar's
-  sharp waves; the enemies' hit rate on us did not change).
+  gained nothing more); the team's fire detection and the melee gun's shared scans changed the score within noise
+  (we were hit 7 % less, hit 1 % more).
 - The gang defence (2026-10-16): +0.43 ± 0.38 APS on the whole TeamRumble (8 pairs per team), about +3 points of
   share against each team that gangs; only the two parts together pay (the retreat alone −0.1, the help alone
-  +1.1 against those teams, both +3.3); a pull of 1.0 instead of 0.5 exposed us more for no gain. Not kept: values
-  of a hit in the melee gun's weights — a bonus for an enemy one hit from death (−0.1, hit rate −1.5 points), for an
-  enemy that gangs one of us (0.0 against the gangs), and Smith's rule, the enemy's recent damage to us per energy
-  (−0.85, hit rate −4 points): moving the aim off the likeliest hit costs more than the earlier kills save.
+  +1.1 against those teams, both +3.3); a pull of 1.0 instead of 0.5 exposed us more for no gain.
 
 ## Bullet shield (`cz.libors.ogi.shield`)
 
@@ -643,16 +643,18 @@ become predictable to the last bits; anything that makes us move spoils that.
 - **Layers**, each switched by its key while the battle view has the focus, listed in the top left corner (green
   shown, red hidden; the choice lasts for the battle). The battle's kind comes from its first round's start
   (`BattleKind`): a duel offers neither the movement, the melee aim, the closest robots nor the team radar, a melee
-  not the team radar; a layer not offered is not listed and its key does nothing. At the battle's first paint a duel
-  shows both kinds of waves, a melee the movement and the melee aim, a team battle the radar (there the waves of all
-  robots cover each other), both the closest robots and the hits on us; the position history, the bullet powers and
-  the enemy info show in every kind. Once a melee's or a team
+  not the team radar; a layer not offered is not listed and its key does nothing. At the battle's start (its first
+  round's start, painting or not, so that a key pressed before a robot's first paint counts) a duel shows both kinds of
+  waves, a melee the movement and the melee aim, a team battle the radar (there the waves of all robots cover each
+  other), both the closest robots and the hits on us; the position history, the bullet powers and the enemy info show
+  in every kind. Once a melee's or a team
   battle's round is down to one enemy it is a duel (the duel's guns aim and, in a melee, the surfer moves): both
   kinds of waves with the gun panel show, the melee aim and, in a melee, the movement hide, until the next round
   brings back what was shown before (`Overlay.duel`). The line from a
-  wave's origin to its front is drawn dark, so that it does not cover the rest. Robocode hands a key press to every robot whose class overrides
-  `onKeyPressed` or another interactive handler (`JavaHost` marks it interactive, `Battle.sendInteractiveEvent`
-  delivers to those), so in a team battle every Ogi switches together.
+  wave's origin to its front is drawn dark, so that it does not cover the rest. Robocode hands a key press to every
+  live robot whose class overrides `onKeyPressed` or another interactive handler (`JavaHost` marks it interactive,
+  `Battle.sendInteractiveEvent` delivers to those, `RobotPeer.addEvent` drops it for a dead one), so in a team battle
+  every living Ogi switches together.
   - **E, enemy waves:** a grey arc around where the shooter stood, only over the maximum escape angle either side of
     the head-on aim (where we can be when it arrives), a dark line from there towards where we were at the shot to
     the wave's front, and the bullet's power to one decimal beyond it (where the enemy's bullet flies we do not know).
@@ -661,7 +663,8 @@ become predictable to the last bits; anything that makes us move spoils that.
     and standard deviation; green where our bullets shadow it), marks where head-on (a cross in a circle), linear (two
     lines along the bullet's way) and circular targeting (a circle) aimed at us (`SimpleAims`), and a thin yellow arc
     just outside the front over the headings that hit us as the wave passes.
-  - **G, gun waves:** each of our bullets the same in dark red (the arc over the maximum escape angle at its speed),
+  - **G, gun waves:** each bullet our guns aimed (not the shield's shots) the same in dark red (the arc over the
+    maximum escape angle at its speed),
     the bullet itself in yellow with its power beside it while it flies, and, as ticks inward from just behind the
     front, what the gun expected when it aimed it, in the turn before the shot (`ShotTrails`): its chance to hit at
     each bearing, the tick 60 px long for a chance of 1 and coloured on a fixed scale (blue none, red 40 % and more),
@@ -696,23 +699,25 @@ become predictable to the last bits; anything that makes us move spoils that.
     aims), the aimed enemy's drawn thicker; a grey line from each enemy's last scan to the weighted middle of its
     positions, where the gun expects it to go; and the aim itself in dark orange.
   - **B, bullet powers** (shown in every kind): the power beside each of our bullets in flight and each of our
-    teammates' in our bullets' yellow (not while layer G labels ours), and at the top of the column beside each enemy,
-    in dark red, the power of its last shot as fire detection saw it in this round (where an enemy's bullet flies we
-    do not know). A teammate's bullet is drawn where it has flown since its reported shot, until it leaves the field
-    or reaches a robot where we saw it last: its end nobody reports.
+    teammates' in our bullets' yellow (the guns' bullets not while layer G labels them; our teammates', the shield's
+    shots and the weakest bullet at a disabled enemy, which no gun wave follows, always), and at the top of the column
+    beside each enemy, in dark red, the power of its last shot as fire detection saw it in this round (where an
+    enemy's bullet flies we do not know). A teammate's bullet is drawn where it has flown since its reported shot,
+    until it leaves the field, reaches us, or reaches another robot where we saw it last: its end nobody reports.
   - **I, info** (shown in every kind), in the column beside each enemy below its last power: the turns until its
     gun is cool by fire detection's model of its gun heat, "7t" (`FireDetector.coolIn`; bright red when it can fire);
     in yellow, behind an arrow to the left, its hit rate on us: its shots over the battle that hit us, those ours shot
     down left out (in a melee its shots are aimed at anyone, and robots of one type share the record; not in a team,
     where it would be its hits on the painting robot alone over its shots at anyone, about a fifth of its real rate);
     in
-    green, behind an arrow to the right, ours on it: the share of our bullets aimed at it over the battle that hit it,
-    each rate from 5 shots on; with two enemies or more alive, the turns since our side (we or a teammate) last
+    green, behind an arrow to the right, ours on it: the share of our bullets aimed at it over the battle that hit it
+    (not in a team either: it would be the painting robot's bullets alone, drawn once as if the team's), each rate
+    from 5 shots on; with two enemies or more alive, the turns since our side (we or a teammate) last
     scanned it, "r1" (red from 3; a duel's radar locks). The arrows are drawn: Robocode draws a robot's text upright
     from its baseline (`MirroredGraphics.drawString`), so they stand 4 px above the baseline, at the numbers' middle.
     Below our robot, just under its body (Robocode draws the energy above a robot; robot names are best switched
     off in the GUI's view options), in dark grey, one a row downwards, its special states in the last turn
-    (`Ogi.stateView`):
+    (`OverlayFeed.stateView`):
     `shield` (shooting the enemy's bullets down), `anti-ram` (the surfer's ways against a robot that drives at us),
     `long-orbit` (the orbit at the preferred distance, with no wave to surf), `ram` (ramming a disabled enemy),
     `saving-energy` (the energy race's power), `searching` (the radar spins to find enemies: the round's first look
@@ -753,8 +758,10 @@ become predictable to the last bits; anything that makes us move spoils that.
   melee aim (A), its own trail (H), its states (I) and the hits on it with its row of damage (D). Keys **1** to **9** switch a member's own layers, **0** switches all of them on, or off when all were
   on (so that it never leaves them mixed). Below the legend a row lists the painting robots alive by their member
   number, each in its place (`1 2 3   5` while 4 is dead or does not paint), green while its own layers are on and red
-  while off; the legend is drawn by the painting robot with the lowest number. Every robot gets the keys, painting or
-  not (`Battle.SendInteractiveEventCommand` sends them to every interactive robot), so all keep the same switches; whether
+  while off; the legend is drawn by the painting robot with the lowest number. Every live robot gets the keys,
+  painting or not (`Battle.SendInteractiveEventCommand` sends them to every interactive robot), so the live ones keep
+  the same switches; a robot that is dead when a key is pressed misses it and keeps its old switches for the rest of
+  the battle, so from the next round its layers, or the shared ones, can be drawn twice or not at all. Whether
   a teammate paints comes in its state (`TeammateState.painted`), a turn late (engine-model G-23), so a teammate counts
   while its report of this turn or the last said so.
 - **Only while painting:** the shots, positions and hits are traced, and the melee gun and the movement keep their
@@ -766,8 +773,10 @@ become predictable to the last bits; anything that makes us move spoils that.
   console from the robot buttons on the right and press "Paint". Robocode paints before the robot acts, so the plan on
   screen is the shot of the current turn. Robocode calls `onPaint` only for a robot whose painting is enabled
   (`BasicRobotProxy` adds the `PaintEvent` only then); the switch is per robot, kept in its console's dialog, which the
-  GUI keeps by the robot's name across the battles of one session (`RobotDialogManager`; `RobotDialog.reset` leaves
-  the switch), so in a team battle enabling all five once lasts while the same version plays (Robocode 1.11.1).
+  GUI keeps by the robot's name from battle to battle while the robot plays in each of them
+  (`RobotDialogManager.trim` disposes, at a round's start, the dialogs of robots not in the battle;
+  `RobotDialog.reset` leaves the switch), so in a team battle enabling all five once lasts while the same version
+  plays every battle (Robocode 1.11.1).
 - **For the harness:** every turn with a target the bot sets the debug property `gun` (`Trace.gunLine`): the turn
   of the plan, whether last turn's plan was fired in this turn, the chosen gun, each gun's aim, the planned origin,
   the reference, the direction, the power, the data size, each gun's virtual hit rate and the target. A recording
@@ -802,10 +811,12 @@ become predictable to the last bits; anything that makes us move spoils that.
     rumble jars leave the class out. Formatting the log costs 0.1–0.25 ms per turn while the JVM is cold, and with it
     Ogi skipped a turn in the first battle of every `skeletonCheck` run (2026-10-09).
 - **Without the GUI:** `OverlayRenderTest` paints every layer (a gun that fought a simulated mover, an enemy wave, a
-  team's radar plan) into `bot/build/overlay/overlay.png`. The image is mirrored by hand, so its text is upside down.
+  team's radar plan) into `bot/build/overlay/overlay.png` and checks that each layer draws (switched off alone, it
+  changes the image), and that a member behind the one that draws the shared layers draws only its own. The image is
+  mirrored by hand, so its text is upside down.
 - **Own turn time (`TurnClock`):** the bot measures the wall time from its first event of a turn (`onStatus`,
-  which the engine delivers before the events Ogi handles; only a skipped turn's, a win's and a round's or battle's
-  end come earlier) to its `execute()`, and reports the previous turn's time in µs
+  which the engine delivers before the events Ogi handles, engine-model G-52; only a skipped turn's, a win's and a
+  round's or battle's end come earlier) to its `execute()`, and reports the previous turn's time in µs
   as the debug property `cpu`. The engine gives that part of the turn the CPU constant (and up to a millisecond more,
   engine-model G-45). The harness compares it with the constant of an idle machine
   ([harness.md](harness.md#how-results-are-gathered)). Measured on the Mac (2026-10-09, lab opponents): median

@@ -1,5 +1,6 @@
 package cz.libors.harness.gunbench;
 
+import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunParameters;
 
 import java.io.IOException;
@@ -102,6 +103,12 @@ public final class GunBench {
             }
         }).toList();
         long loaded = System.nanoTime();
+        if (battles.stream().noneMatch(b -> b.events().stream().anyMatch(GunLog.LoggedShot.class::isInstance))) {
+            // Nothing to replay, and a parity over no decisions would pass. recordGunLogs and submitGunLogs keep the
+            // melee gun's keys against a melee or team set.
+            usage("no plans (" + GunLog.SHOT + ") in the logs of " + options.get("logs") + ": logs of a melee or team "
+                    + "set hold the melee gun's keys, for the melee bench");
+        }
 
         if (options.containsKey("tune")) {
             System.out.printf(Locale.ROOT, "%d battles read in %.1f s%n", battles.size(), (loaded - start) / 1e9);

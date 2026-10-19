@@ -227,8 +227,10 @@ val checkForeignJars = tasks.register<JavaExec>("checkForeignJars") {
 val deployBots = tasks.register<Copy>("deployBots") {
     group = "robocode"
     description = "Copies our robot, team, probe and baseline jars and the approved foreign jars into the installation."
-    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar", ":probe:probeJar", baselineJars,
-        checkForeignJars)
+    // Every jar bot/build/robots holds is copied, so every one is built here: a stale OgiGunLogTeam jar would also
+    // shadow OgiGunLog, which it contains (the engine keeps the first jar it scans that lists a robot).
+    dependsOn(installRobocode, ":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar", ":bot:gunLogTeamJar",
+        ":probe:probeJar", baselineJars, checkForeignJars)
     val robotsDir = robocodeHome.dir("robots").asFile
     val approved = approvedForeignJars()
     val foreign = foreignDir.asFile
@@ -353,10 +355,10 @@ fun compareArguments(home: String, file: (String) -> String, out: () -> String):
 }
 
 /**
- * RecordBattles' arguments for [robot], placed like [compareArguments]; with [keys], only the debug properties it
- * gives for the opponent set's file.
+ * RecordBattles' arguments for [robot], or [team] against a team set, placed like [compareArguments]; with [keys],
+ * only the debug properties it gives for the opponent set's file.
  */
-fun recordArguments(robot: String, keys: ((String) -> String)?, home: String, file: (String) -> String,
+fun recordArguments(robot: String, team: String, keys: ((String) -> String)?, home: String, file: (String) -> String,
                     out: () -> String):
     () -> List<String> {
     val versions = providers.gradleProperty("versions")
@@ -369,6 +371,7 @@ fun recordArguments(robot: String, keys: ((String) -> String)?, home: String, fi
         listOf(
             home,
             "robot=$robot",
+            "team=$team",
             "versions=" + versionList.joinToString(","),
             "opponents=" + file(opponents.get()),
             "out=" + out(),
@@ -402,13 +405,16 @@ tasks.register<JavaExec>("compare") {
     argumentProviders.add(CommandLineArgumentProvider { arguments() })
 }
 
-/** Runs RecordBattles for [robot] on comparison seeds; with [keys], only those debug properties are recorded. */
-fun JavaExec.recordsBattles(robot: String, defaultOut: String, keys: ((String) -> String)?) {
+/**
+ * Runs RecordBattles for [robot], or [team] against a team set, on comparison seeds; with [keys], only those debug
+ * properties are recorded.
+ */
+fun JavaExec.recordsBattles(robot: String, team: String, defaultOut: String, keys: ((String) -> String)?) {
     onRobocode("cz.libors.harness.compare.RecordBattles")
     // Debug mode, as in recordProbes: no robot can skip a turn, so a recording does not depend on machine load.
     jvmArgs("-Ddebug=true")
     val out = providers.gradleProperty("out").orElse(defaultOut)
-    val arguments = recordArguments(robot, keys, robocodeHome.asFile.absolutePath, ::localFile) {
+    val arguments = recordArguments(robot, team, keys, robocodeHome.asFile.absolutePath, ::localFile) {
         localFile(out.get())
     }
     argumentProviders.add(CommandLineArgumentProvider { arguments() })
@@ -417,14 +423,15 @@ fun JavaExec.recordsBattles(robot: String, defaultOut: String, keys: ((String) -
 tasks.register<JavaExec>("recordBattles") {
     group = "verification"
     description = "Records comparison battles turn by turn, on the seeds compare uses; see docs/harness.md."
-    recordsBattles("cz.libors.Ogi", "harness/build/battle-recordings", null)
+    recordsBattles("cz.libors.Ogi", "cz.libors.OgiTeam", "harness/build/battle-recordings", null)
 }
 
 tasks.register<JavaExec>("recordGunLogs") {
     group = "verification"
     description = "Records the gun's log of comparison battles for the gun bench; see docs/harness.md."
-    // OgiGunLog plays like Ogi and logs its gun; only the working tree has its jar (bot/build/robots).
-    recordsBattles("cz.libors.OgiGunLog", "harness/build/gun-logs", ::gunLogKeys)
+    // OgiGunLog plays like Ogi and logs its gun, five of them as OgiGunLogTeam against a team set; only the working
+    // tree has their jars (bot/build/robots).
+    recordsBattles("cz.libors.OgiGunLog", "cz.libors.OgiGunLogTeam", "harness/build/gun-logs", ::gunLogKeys)
 }
 
 tasks.register<JavaExec>("gunBench") {
@@ -590,7 +597,9 @@ val harnessJar = tasks.register<Jar>("harnessJar") {
 val workerBundle = tasks.register<Sync>("workerBundle") {
     group = "robocode"
     description = "Assembles the remote worker's bundle from the working tree into harness/build/worker-bundle/."
-    dependsOn(":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar", ":probe:probeJar", baselineJars, downloadRobocode)
+    // Every jar of bot/build/robots, as in deployBots.
+    dependsOn(":bot:robotJar", ":bot:teamJar", ":bot:gunLogJar", ":bot:gunLogTeamJar", ":probe:probeJar",
+        baselineJars, downloadRobocode)
     into(layout.buildDirectory.dir("worker-bundle"))
     from(harnessJar) { into("lib") }
     from(project(":bot").layout.buildDirectory.dir("robots")) { into("robots") }
@@ -703,14 +712,16 @@ val remoteCompareArguments = compareArguments(remoteLayout.home("compare"), remo
 remoteTask("remoteCompare", "Runs compare on the remote worker in one process; the log there resumes like a local one.",
     "compare", "cz.libors.harness.compare.Compare", "", false) { remoteCompareArguments() }
 
-val remoteRecordArguments = recordArguments("cz.libors.Ogi", null, remoteLayout.home("battle-recordings"),
-    remoteLayout.file) { remoteLayout.out("battle-recordings") }
+val remoteRecordArguments = recordArguments("cz.libors.Ogi", "cz.libors.OgiTeam", null,
+    remoteLayout.home("battle-recordings"), remoteLayout.file) { remoteLayout.out("battle-recordings") }
 remoteTask("remoteRecordBattles", "Runs recordBattles on the remote worker.", "battle-recordings",
     "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteRecordArguments() }
 
 // The opponent set's path is the worker's there: the duel gun's keys only.
-val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", { _ -> "gunshot,gunpass,gunshield" },
-    remoteLayout.home("gun-logs"), remoteLayout.file) { remoteLayout.out("gun-logs") }
+val remoteGunLogArguments = recordArguments("cz.libors.OgiGunLog", "cz.libors.OgiGunLogTeam",
+    { _ -> "gunshot,gunpass,gunshield" }, remoteLayout.home("gun-logs"), remoteLayout.file) {
+    remoteLayout.out("gun-logs")
+}
 remoteTask("remoteRecordGunLogs", "Runs recordGunLogs on the remote worker.", "gun-logs",
     "cz.libors.harness.compare.RecordBattles", "-Ddebug=true", false) { remoteGunLogArguments() }
 
@@ -882,7 +893,7 @@ tasks.register<JavaExec>("submitRecordings") {
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(toolchainJava) }
     classpath = sourceSets.main.get().runtimeClasspath + fileTree(robocodeHome.dir("libs")) { include("*.jar") }
     val opponents = providers.gradleProperty("opponents").orElse("harness/opponents/lab-1v1.txt")
-    val passed = listOf("pairs", "seed", "rounds", "starts", "keys", "note", "timeout", "debug")
+    val passed = listOf("pairs", "draws", "seed", "rounds", "starts", "keys", "note", "timeout", "debug")
         .mapNotNull { key -> providers.gradleProperty(key).orNull?.let { "$key=$it" } }
     // A foreign robot as Robocode lists it ("kc.serpent.Hydra 0.21"): the worker's approved jar, nothing shipped.
     val subject = providers.gradleProperty("subject")

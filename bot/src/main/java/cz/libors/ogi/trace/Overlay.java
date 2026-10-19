@@ -43,9 +43,9 @@ import java.util.Locale;
  *   <li><b>B, bullet powers:</b> the power beside each of our and our teammates' bullets in flight, and each enemy's
  *       last shot's power to its right.</li>
  *   <li><b>I, info:</b> right of each enemy, under its last shot's power, the turns until its gun is cool, its
- *       hit rate on us, ours on it and, with two enemies or more, the age of our side's last scan of it; below us our
- *       special states in dark grey, a warning diamond round us while we are ganged and a line to the ganged teammate
- *       we help.</li>
+ *       hit rate on us and ours on it (not in a team, where both would be the drawing robot's alone) and, with two
+ *       enemies or more, the age of our side's last scan of it; below us our special states in dark grey, a warning
+ *       diamond round us while we are ganged and a line to the ganged teammate we help.</li>
  *   <li><b>R, team radar:</b> each of our robots in a colour of its own, with the arc its radar sweeps over the enemies
  *       the team's plan gives it, a line to each of them and a short one where its radar points. No rings: they hid
  *       the robots.</li>
@@ -207,7 +207,7 @@ public final class Overlay {
     private static final int INFO = 7;
     private static final int CLOSEST = 8;
     private static final int HITS = 9;
-    /** The kind of this battle, set at its first paint; null before. */
+    /** The kind of this battle, set at its first round's start ({@link #battle}); null before. */
     private static BattleKind kind;
     /** Our team's size, 0 outside a team; set every round, painting or not. */
     private static int members;
@@ -223,11 +223,12 @@ public final class Overlay {
     }
 
     /**
-     * The layers offered and shown when a battle's painting starts. A duel offers neither the movement, the melee aim,
-     * the closest robots nor the team radar, a melee not the team radar. Shown: in a duel both kinds of waves; in a
-     * melee the movement and the melee aim, and in a team battle the radar, where the waves of all robots would cover
-     * each other; in both the closest robots and the hits on us; the position history, the bullet powers and the enemy
-     * info in every kind. Keys change them afterwards.
+     * The layers offered and shown when a battle starts, at its first round's start, painting or not: a key pressed
+     * before this robot's first paint then switches its layers as it does on the teammates that paint already. A duel
+     * offers neither the movement, the melee aim, the closest robots nor the team radar, a melee not the team radar.
+     * Shown: in a duel both kinds of waves; in a melee the movement and the melee aim, and in a team battle the radar,
+     * where the waves of all robots would cover each other; in both the closest robots and the hits on us; the position
+     * history, the bullet powers and the enemy info in every kind. Keys change them afterwards.
      */
     public static void battle(BattleKind battleKind) {
         if (kind != null) {
@@ -272,11 +273,34 @@ public final class Overlay {
         }
     }
 
-    /** Offers and shows every layer, for a test that paints them all. */
+    /** Offers and shows every layer, every member's own layers too, for a test that paints them all. */
     static void showAll() {
         kind = BattleKind.TEAM;
         Arrays.fill(OFFERED, true);
         Arrays.fill(SHOWN, true);
+        Arrays.fill(OWN, true);
+    }
+
+    /** Back to the state before a battle's first round, for tests: the statics outlive a test class. */
+    static void reset() {
+        kind = null;
+        beforeDuel = null;
+        members = 0;
+        Arrays.fill(OFFERED, false);
+        Arrays.fill(SHOWN, false);
+        Arrays.fill(OWN, true);
+    }
+
+    /** Whether the layer of this key is shown, for tests; false for a key of no layer. */
+    static boolean shown(char key) {
+        int i = new String(KEYS).indexOf(key);
+        return i >= 0 && SHOWN[i];
+    }
+
+    /** Whether this battle offers the layer of this key, for tests. */
+    static boolean offered(char key) {
+        int i = new String(KEYS).indexOf(key);
+        return i >= 0 && OFFERED[i];
     }
 
     /** We play in a team of {@code size} robots (0: not in a team). */
@@ -702,13 +726,16 @@ public final class Overlay {
     }
 
     /**
-     * The bullets' powers: beside each of our and our teammates' bullets in flight in our bullets' colour (unless our
-     * waves' layer labels them already), and to the right of each enemy its last shot's power in dark red (where its
-     * bullets fly we do not know).
+     * The bullets' powers: beside each of our and our teammates' bullets in flight in our bullets' colour (ours that
+     * the guns aimed not while our waves' layer labels them already), and to the right of each enemy its last shot's
+     * power in dark red (where its bullets fly we do not know).
      */
     private static void paintPowers(Graphics2D g, Trace.PowerView v) {
         g.setColor(BULLET);
         for (Trace.PowerMark b : SHOWN[GUN_WAVES] ? List.<Trace.PowerMark>of() : v.ours()) {
+            g.drawString(String.format(Locale.ROOT, "%.1f", b.power()), (float) (b.x() + 6), (float) (b.y() + 4));
+        }
+        for (Trace.PowerMark b : v.others()) {
             g.drawString(String.format(Locale.ROOT, "%.1f", b.power()), (float) (b.x() + 6), (float) (b.y() + 4));
         }
         g.setColor(ENEMY_SHOT);
@@ -751,7 +778,7 @@ public final class Overlay {
     }
 
     /**
-     * Our special states above us, one a row upwards, centred, in dark grey; while we are ganged a warning diamond
+     * Our special states below us, one a row downwards, centred, in dark grey; while we are ganged a warning diamond
      * round us, and while we help a ganged teammate a line to it, both in the warning's colour.
      */
     private static void paintStates(Graphics2D g, Trace.StateView v) {

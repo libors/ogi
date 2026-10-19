@@ -210,9 +210,7 @@ public class Ogi extends TeamRobot {
         shield = new Shield(field, getGunCoolingRate(), BATTLE.shield);
         stance = new ShieldStance(field, getGunCoolingRate());
         overlay = new OverlayFeed(field, world, guns, meleeGun, meleeMovement, waves, teamRadar, BATTLE.hitRates);
-        int members = getTeammates() == null ? 0 : getTeammates().length + 1;
-        overlay.team(members);
-        Overlay.team(members);
+        overlay.roundStarted(BATTLE.kind, getTeammates() == null ? 0 : getTeammates().length + 1);
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
@@ -401,6 +399,7 @@ public class Ogi extends TeamRobot {
                 waves.ourBulletFired(bullet, now, bullet.getX(), bullet.getY(),
                         Angles.fromRobocode(bullet.getHeadingRadians()), bullet.getPower());
                 shield.fired(now);
+                overlay.shieldFired(now, bullet);
                 fired = bullet.getPower();
             }
         }
@@ -416,7 +415,9 @@ public class Ogi extends TeamRobot {
             double within = Math.atan2(RobotMotion.HALF_SIZE / 2.0, target.distanceTo(getX(), getY()));
             if (fired == 0 && getGunHeat() == 0 && getEnergy() > Rules.MIN_BULLET_POWER
                     && Math.abs(Angles.normalizeRelative(bearing - gunHeading)) < within) {
-                paid(setFireBullet(Rules.MIN_BULLET_POWER));
+                Bullet finisher = setFireBullet(Rules.MIN_BULLET_POWER);
+                paid(finisher);
+                overlay.shieldFired(now, finisher);
             }
             setTurnGunRightRadians(Angles.robocodeTurn(gunHeading, bearing));
             return;
@@ -981,7 +982,8 @@ public class Ogi extends TeamRobot {
 
     /**
      * A key pressed in the battle view switches a layer of the overlay, or in a team which robots draw their own layers
-     * ({@link Overlay#key}). Every robot gets the key, painted or not, so all keep the same choice.
+     * ({@link Overlay#key}). Every live robot gets the key, painted or not (the round's start offers the layers), so
+     * the live ones keep the same choice; a dead one misses it (bot.md "Debug overlay").
      */
     @Override
     public void onKeyPressed(KeyEvent e) {
@@ -1000,7 +1002,9 @@ public class Ogi extends TeamRobot {
         waves.teammateSeen(s.name(), s.time() + 1, s.nextX(), s.nextY());
         for (EnemySighting sighting : packet.sightings()) {
             if (world.dead(sighting.name())) {
-                // Scanned in the turn it died.
+                // Its death came first: a packet late by its sender's skipped turn. The scans of the turn before a
+                // death arrive in the death's turn ahead of it (engine-model G-52: messages 75, deaths 70): taken
+                // here, they are cleared by onRobotDeath, except in the team's energy feed.
                 continue;
             }
             enemySeen(sighting, false);

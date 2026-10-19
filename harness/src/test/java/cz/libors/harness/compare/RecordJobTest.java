@@ -185,6 +185,62 @@ class RecordJobTest {
     }
 
     @Test
+    void aTeamRecordingCountsItsMembersTurnsAndProblemsAsOurs(@TempDir Path tmp) throws IOException {
+        Path dir = tmp.resolve("j");
+        Files.createDirectories(dir);
+        Properties spec = new Properties();
+        spec.setProperty("type", "record");
+        spec.setProperty("submittedAt", "1");
+        spec.setProperty("robot", "cz.libors.OgiTeam");
+        spec.setProperty("version", "w1234567");
+        spec.setProperty("opponentSet", "team-test");
+        spec.setProperty("jar.cz.libors.OgiTeam_w1234567.jar", "c".repeat(64));
+        try (OutputStream out = Files.newOutputStream(dir.resolve("job.properties"))) {
+            spec.store(out, null);
+        }
+        Files.writeString(dir.resolve("opponents.txt"), "format team\nabc.FooTeam 1.0\n");
+        Files.writeString(dir.resolve("status.properties"), "state=QUEUED\norder=1\n");
+        RecordJob job = open(dir);
+        Work w = job.next("w").get(0);
+        assertEquals(List.of("cz.libors.OgiTeam w1234567", "abc.FooTeam 1.0"), w.spec().robots());
+
+        // The engine names a team's contestant after the team and its robots after their own classes.
+        BattleOutcome o = new BattleOutcome(w.spec().setup(), w.spec().seed(),
+                List.of(new ContestantResult("cz.libors.OgiTeam w1234567 (1)", 1, 3000, 0, 0, 0, 0, 0, 0, 8),
+                        new ContestantResult("abc.FooTeam 1.0 (2)", 2, 1000, 0, 0, 0, 0, 0, 0, 2)),
+                Map.of("cz.libors.Ogi w1234567 (1)", 3, "abc.Foo 1.0 (1)", 2), List.of(
+                        "cz.libors.Ogi w1234567 (2) [round 0, turn 5]: java.lang.IllegalStateException",
+                        "abc.Foo 1.0 (2) [round 1, turn 9]: java.lang.NullPointerException"), 0,
+                Map.of("cz.libors.OgiTeam w1234567 (1)", new BattleOutcome.Shots(500, 100)), 2000,
+                Map.of("cz.libors.Ogi w1234567 (1)", new BattleOutcome.TurnTimes(400, 700, 1, 0),
+                        "cz.libors.Ogi w1234567 (2)", new BattleOutcome.TurnTimes(300, 900, 0, 0)));
+        Map<String, Object> m = BattleSpec.outcomeToMap(o);
+        String recording = "#ogi-recording\t1\nbattle\tlabel=team vs abc.FooTeam 1.0\n"
+                + "robot\t0\tcz.libors.Ogi w1234567 (1)\t0\tcz.libors.OgiTeam w1234567 (1)\tfalse\n"
+                + "robot\t1\tcz.libors.Ogi w1234567 (2)\t0\tcz.libors.OgiTeam w1234567 (1)\tfalse\n"
+                + "robot\t2\tabc.Foo 1.0 (1)\t1\tabc.FooTeam 1.0 (2)\tfalse\n"
+                + "robot\t3\tabc.Foo 1.0 (2)\t1\tabc.FooTeam 1.0 (2)\tfalse\n"
+                + "r\t0\t0\t0\nend\t0\t812\n";
+        m.put("recording", Base64.getEncoder().encodeToString(gzip(recording)));
+        job.completed(w, m, "w");
+
+        List<String> lines = Files.readAllLines(dir.resolve("recordings/w1234567/battles.tsv"));
+        String[] f = lines.get(1).split("\t", -1);
+        Map<String, String> row = new java.util.HashMap<>();
+        for (int i = 0; i < f.length; i++) {
+            row.put(RecordJob.INDEX_COLUMNS.get(i), f[i]);
+        }
+        assertEquals("500", row.get("fired"));
+        assertEquals("3", row.get("skippedTurns"));
+        assertEquals("2", row.get("opponentSkippedTurns"));
+        assertEquals("1", row.get("problems"));
+        assertEquals("700", row.get("turns"));
+        assertEquals("900", row.get("turnMaxMicros"));
+        assertEquals("3000", row.get("score"));
+        assertEquals("1000", row.get("opponentScore"));
+    }
+
+    @Test
     void checkRefusesOurRobotWithoutItsJarAndTheSubjectAsItsOwnOpponent() {
         Properties spec = new Properties();
         spec.setProperty("opponentSet", "test");

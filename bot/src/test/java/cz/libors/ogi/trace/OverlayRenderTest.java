@@ -11,6 +11,7 @@ import cz.libors.ogi.move.MeleeMovement;
 import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.radar.TeamRadar;
 import cz.libors.ogi.world.EnemyState;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
@@ -25,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,12 +35,128 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * mirrors robot graphics (its text is upside down), so that the overlay can be looked at without the GUI: one of our
  * bullets with the weights of a gun that has fought a simulated mover, an enemy wave with a danger profile, and a
  * team's radar plan, the melee movement's choice among those robots, who is whose closest robot and the hits on us.
+ * Each layer has to draw something: switched off alone, it changes the image.
  */
 class OverlayRenderTest {
 
+    private static final Field FIELD = new Field(1000, 800);
+    private static final Color BACKGROUND = new Color(30, 30, 30);
+    private static final String KEYS = "egmrhabicd";
+
+    @BeforeEach
+    void reset() {
+        Overlay.reset();
+    }
+
     @Test
     void paintsEveryLayer() throws IOException {
-        Field field = new Field(1000, 800);
+        Overlay.team(5);
+        Overlay.showAll();
+        BufferedImage image = paint(everyLayer(1));
+        Path out = Path.of("build/overlay/overlay.png");
+        Files.createDirectories(out.getParent());
+        ImageIO.write(image, "png", out.toFile());
+        int inked = inked(image);
+        assertTrue(inked > 20000, "pixels painted: " + inked);
+    }
+
+    /**
+     * Each layer draws: switched off alone, it changes the image. Member 1 does not draw its own layers, so member 2
+     * draws everything but the legend, which every key would change.
+     */
+    @Test
+    void everyLayerDraws() {
+        Overlay.team(5);
+        Overlay.showAll();
+        Overlay.key('1');
+        Trace trace = everyLayer(2);
+        BufferedImage all = paint(trace);
+        for (char k : KEYS.toCharArray()) {
+            Overlay.key(k);
+            BufferedImage without = paint(trace);
+            Overlay.key(k);
+            assertTrue(differing(all, without) > 0, "layer " + k + " draws nothing");
+        }
+    }
+
+    /**
+     * A member behind a lower one that draws what the team shares draws only its own layers: its waves, movement,
+     * trail, melee aim, states and the hits on it, each of which changes the image; the radar, the powers and the
+     * closest robots it leaves to the other.
+     */
+    @Test
+    void aHigherMemberDrawsItsOwnLayersOnly() {
+        Overlay.team(5);
+        Overlay.showAll();
+        Trace trace = everyLayer(5);
+        BufferedImage all = paint(trace);
+        for (char k : KEYS.toCharArray()) {
+            Overlay.key(k);
+            BufferedImage without = paint(trace);
+            Overlay.key(k);
+            assertEquals("rbc".indexOf(k) < 0, differing(all, without) > 0, "layer " + k);
+        }
+    }
+
+    /** Layer G labels our bullets, not our teammates' nor our shield shots: B labels those whatever G shows. */
+    @Test
+    void theBulletsNoGunWaveLabelsKeepTheirPowerWhileTheGunWavesShow() {
+        Overlay.showAll();
+        Trace empty = new Trace();
+        empty.start(400, FIELD.width(), FIELD.height());
+        BufferedImage none = paint(empty);
+        Trace ours = new Trace();
+        ours.start(400, FIELD.width(), FIELD.height());
+        ours.powers(new Trace.PowerView(List.of(new Trace.PowerMark(400, 300, 2.0)), List.of(), List.of()));
+        assertEquals(0, differing(none, paint(ours)), "layer G labels our bullet");
+        Trace others = new Trace();
+        others.start(400, FIELD.width(), FIELD.height());
+        others.powers(new Trace.PowerView(List.of(), List.of(new Trace.PowerMark(400, 300, 2.0)), List.of()));
+        assertTrue(differing(none, paint(others)) > 0, "a teammate's bullet keeps its power");
+        Overlay.key('g');
+        assertTrue(differing(paint(empty), paint(ours)) > 0, "without layer G, B labels ours");
+    }
+
+    /** The image of the trace, the battlefield mirrored as Robocode mirrors robot graphics. */
+    private static BufferedImage paint(Trace trace) {
+        BufferedImage image = new BufferedImage((int) FIELD.width(), (int) FIELD.height(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
+        g.setColor(BACKGROUND);
+        g.fillRect(0, 0, image.getWidth(), image.getHeight());
+        g.setTransform(new AffineTransform(1, 0, 0, -1, 0, FIELD.height()));
+        Overlay.paint(g, trace);
+        g.dispose();
+        return image;
+    }
+
+    /** The pixels painted over the background. */
+    private static int inked(BufferedImage image) {
+        int n = 0;
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                n += image.getRGB(x, y) != BACKGROUND.getRGB() ? 1 : 0;
+            }
+        }
+        return n;
+    }
+
+    /** The pixels in which two images differ. */
+    private static int differing(BufferedImage a, BufferedImage b) {
+        int n = 0;
+        for (int y = 0; y < a.getHeight(); y++) {
+            for (int x = 0; x < a.getWidth(); x++) {
+                n += a.getRGB(x, y) != b.getRGB(x, y) ? 1 : 0;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * A trace with something for every layer, painted by member {@code member} of a team whose members 1, 2 and 5
+     * paint.
+     */
+    private static Trace everyLayer(int member) {
+        Field field = FIELD;
         double ourX = 300;
         double ourY = 400;
         Trace trace = new Trace();
@@ -173,9 +291,9 @@ class OverlayRenderTest {
         trace.radar(radar.describe(412, "ours (1)"));
         assertNotNull(trace.radar());
 
-        // The bullets' powers: two of our team's bullets in flight, two enemies' last shots.
-        trace.powers(new Trace.PowerView(
-                List.of(new Trace.PowerMark(300, 520, 1.9), new Trace.PowerMark(640, 300, 3.0)),
+        // The bullets' powers: one of our bullets and one of a teammate's in flight, two enemies' last shots.
+        trace.powers(new Trace.PowerView(List.of(new Trace.PowerMark(300, 520, 1.9)),
+                List.of(new Trace.PowerMark(640, 300, 3.0)),
                 List.of(new Trace.PowerMark(600, 420, 2.4), new Trace.PowerMark(820, 650, 0.9))));
         // Beside the enemies: the turns until their guns are cool (one can fire now), our hit rate on two of them.
         trace.info(new Trace.InfoView(List.of(new Trace.EnemyInfo(600, 420, 7, 0.31, 0.12, 1),
@@ -193,21 +311,8 @@ class OverlayRenderTest {
         trace.hits(new Trace.HitsView(List.of(new Trace.Hit(305, 410, 600, 420, 12, 0),
                 new Trace.Hit(290, 395, 820, 650, 40, 3), new Trace.Hit(295, 385, 750, 250, 70, 1),
                 new Trace.Hit(310, 390, 450, 720, 5, -1)), new double[] {32, 12, 8, 4}, 45, -22));
-        // We are member 1, painting with members 2 and 5: the legend lists 1 2       5.
-        Overlay.team(5);
-        trace.painters(new Trace.PaintersView(1, 5, new int[] {1, 2, 5}));
-
-        BufferedImage image = new BufferedImage((int) field.width(), (int) field.height(), BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = image.createGraphics();
-        g.setColor(new Color(30, 30, 30));
-        g.fillRect(0, 0, image.getWidth(), image.getHeight());
-        g.setTransform(new AffineTransform(1, 0, 0, -1, 0, field.height()));
-        Overlay.showAll();
-        Overlay.paint(g, trace);
-        g.dispose();
-        Path out = Path.of("build/overlay/overlay.png");
-        Files.createDirectories(out.getParent());
-        ImageIO.write(image, "png", out.toFile());
-        assertTrue(Files.size(out) > 1000);
+        // Members 1, 2 and 5 paint: the legend lists 1 2       5.
+        trace.painters(new Trace.PaintersView(member, 5, new int[] {1, 2, 5}));
+        return trace;
     }
 }

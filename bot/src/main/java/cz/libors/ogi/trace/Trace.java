@@ -148,8 +148,9 @@ public final class Trace {
      * What the overlay shows beside one enemy (layer I), at its last scan's position.
      *
      * @param coolIn    the turns until its gun is cool by fire detection, −1 if unknown
-     * @param ourRate   the share of our bullets aimed at it that hit it over the battle, NaN before enough ended
-     * @param theirRate the share of its shots that hit us over the battle, NaN before enough
+     * @param ourRate   the share of our bullets aimed at it that hit it over the battle, NaN before enough ended and
+     *                  in a team
+     * @param theirRate the share of its shots that hit us over the battle, NaN before enough and in a team
      * @param scanAge   the turns since our side's last scan of it, −1: not shown
      */
     public record EnemyInfo(double x, double y, long coolIn, double ourRate, double theirRate, long scanAge) {
@@ -219,10 +220,12 @@ public final class Trace {
     /**
      * The bullets' powers (layer B).
      *
-     * @param ours    our and our teammates' bullets in flight
+     * @param ours    our bullets in flight that the guns aimed: our gun waves' layer labels them while it is shown
+     * @param others  the bullets in flight that no gun wave of ours labels: our teammates', and ours fired while we
+     *                shield (the shield's shots, the weakest bullet at a disabled enemy)
      * @param enemies each enemy's last shot as fire detection saw it, at the enemy's last scan
      */
-    public record PowerView(List<PowerMark> ours, List<PowerMark> enemies) {
+    public record PowerView(List<PowerMark> ours, List<PowerMark> others, List<PowerMark> enemies) {
     }
 
     /**

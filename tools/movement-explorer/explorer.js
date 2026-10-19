@@ -27,7 +27,7 @@ const REFERENCE = `
   <li><b>history:</b> our position every 5 turns, the last 20;</li>
   ${teamOnly('<li><b>pull:</b> to = max(floor, |target &minus; D|), from = max(floor, |target &minus; us|). Finisher s = 1.0, floor 350 (the last enemy, our energy &ge; 30); ganged s = 0.5, floor 0 (nearest teammate); helper s = 0.5, floor 300 (nearest ganged teammate).</li>')}
 </ul>
-<p><b>3. Waves.</b> The 8 candidates with the least risk (the kept destination always among them) are predicted: drive straight there and stand, up to 30 turns. Each enemy wave adds bullet damage &times; the share of the shooter's predicted aim inside our hit range &times; the chance it aimed at us, <code>1/(1+n)&sup2;</code> with n ${TEAM
+<p><b>3. Waves.</b> Last turn's destination, whatever its risk, and the candidates with the least risk, 8 in all, are predicted: drive straight there and stand, up to 30 turns. Each enemy wave adds bullet damage &times; the share of the shooter's predicted aim inside our hit range &times; the chance it aimed at us, <code>1/(1+n)&sup2;</code> with n ${TEAM
     ? 'our teammates it had closer than us (an enemy never aims at its own)'
     : 'the other robots it had closer than us (most melee robots aim at the closest)'}; waves under 0.1 are skipped.${teamOnly(' A teammate\'s bullet adds its whole damage if the way crosses its line.')}</p>
 <div class="formula mono">score = risk / median(risk of the 8) + 3 &times; damage / max(0.1, median(damage of the 8))</div>
@@ -71,7 +71,7 @@ document.getElementById('app').innerHTML = `
       ${teamOnly('<span><i class="sw" style="background:var(--ours)"></i>teammate</span>')}
       <span><i class="sw" style="background:var(--enemy)"></i>enemy</span>
       <span><i class="ramp" id="rampSwatch"></i>risk: low &rarr; high (log, per view)</span>
-      <span>&#9675; candidate &middot; numbered ring: one of the 8 with the least risk, checked against the waves (the number is its rank by risk) &middot; &#9670; least risk (when the waves overrule it) &middot; <b style="color:var(--gold)">&#9733;</b> destination &middot; &#8853; field minimum: the safest point anywhere, if the robot could get there &middot; &#9633; kept destination &middot; grey dots: history</span>
+      <span>&#9675; candidate &middot; numbered ring: one of the 8 checked against the waves, #1 last turn's destination while it competes (&#9633;), then the others with the least risk in order of risk &middot; &#9670; least risk (when the waves overrule it) &middot; <b style="color:var(--gold)">&#9733;</b> destination &middot; &#8853; field minimum: the safest point anywhere, if the robot could get there &middot; &#9633; kept destination &middot; grey dots: history</span>
     </div>
   </section>
 
@@ -350,6 +350,19 @@ function render() {
     tooltip.style.display = 'none';
     return;
   }
+  // Show the decision the next Step makes: on every fifth turn the current position joins the history first (as in
+  // stepTurn and in the bot). In place, since robotsFor and aimChance tell the robots apart by identity.
+  const stored = me.history;
+  me.history = historyAt(me, state.turn);
+  try {
+    renderView(me);
+  } finally {
+    me.history = stored;
+  }
+}
+
+/** The viewed robot's decision of this turn, with its history as the decision uses it. */
+function renderView(me) {
   const dec = decide(me, state.robots, state.waves, FIELD, gangDefence, seedFor(me, state.turn, reroll));
   lastDecision = dec;
   const heat = computeHeat(me, dec);
@@ -727,9 +740,12 @@ function renderDecision(me, dec, heat, highlight) {
   let html = `<h2>Decision of ${me.id}${teamOnly(' <span class="muted" style="font-weight:400">(click one of ours to switch)</span>')}</h2>`;
   html += teamOnly(`<div>Role: <span class="role">${roleName(pl.role) || 'NONE'}</span> <span class="muted">${roleText}</span></div>`);
 
-  // The candidates' table: the 8 with the least risk, numbered as on the map.
+  // The candidates' table: the kept destination first, then those with the least risk, numbered as on the map.
   const anyWaves = dec.waved.some(c => c.parts && c.parts.length);
-  html += `<h3>The ${dec.waved.length} candidates with the least risk</h3>`;
+  const keptIn = dec.waved.some(c => c.kept);
+  html += keptIn
+    ? `<h3>The kept destination and the ${dec.waved.length - 1} other candidates with the least risk</h3>`
+    : `<h3>The ${dec.waved.length} candidates with the least risk</h3>`;
   html += anyWaves
     ? '<div class="tablewrap"><table class="cands"><tr><th>#</th><th title="the position\'s risk over the median risk of these candidates">risk</th><th title="the damage expected from the waves on the way there">dmg</th><th title="3 &times; dmg / max(0.1, median dmg)">+waves</th><th title="risk + waves (&times;0.9 for the kept destination)">=score</th><th title="the score against the destination\'s">vs &#9733;</th></tr>'
     : '<div class="tablewrap"><table class="cands"><tr><th>#</th><th title="the position\'s risk over the median risk of these candidates (&times;0.9 for the kept destination)">risk = score</th><th title="the score against the destination\'s">vs &#9733;</th></tr>';
@@ -746,7 +762,7 @@ function renderDecision(me, dec, heat, highlight) {
   html += `<div class="muted" style="font-size:12px">${anyWaves
     ? `<b>risk:</b> the position's risk over the median of these ${dec.waved.length}; <b>dmg:</b> the waves' damage on the way there; <b>+waves:</b> 3 &times; dmg over the median dmg (${fmt(median(dec.waved.map(c => c.damage)))}, counted as at least 0.1: ${fmt(dec.waveMedian)}); <b>score</b> = risk + waves, &times;0.9 for the kept destination; the least wins.`
     : 'No wave can reach us, so the score is the position\'s risk alone (over the median of these candidates, &times;0.9 for the kept destination); the least wins.'}
-    The other ${Math.max(0, dec.candidates.length - dec.waved.length)} candidates had more risk and were not scored further. Hover a row to find its point, or a point to find its row.</div>`;
+    The other ${Math.max(0, dec.candidates.length - dec.waved.length)} candidates had more risk than these${keptIn ? ' (the kept destination aside)' : ''} and were not scored further. Hover a row to find its point, or a point to find its row.</div>`;
 
   // Why this destination.
   if (best && Number.isFinite(best.risk)) {
@@ -1084,8 +1100,10 @@ function renderTooltip(hc) {
     } else if (i >= 0) {
       html = `<div class="tt-head">Candidate #${i + 1}: score ${fmt(hc.score)}, ${pct(hc.score / best.score - 1)} against <b style="color:var(--gold)">&#9733;</b></div>`;
     } else {
-      const rank = dec.candidates.slice().sort((a, b) => a.risk - b.risk).indexOf(hc) + 1;
-      html = `<div class="tt-head">Candidate, ${rank}. least risk of ${dec.candidates.length}: not among the ${dec.waved.length} scored against the waves</div>`;
+      // Ranked as the wave stage takes them: the kept destination has its place whatever its risk.
+      const others = dec.candidates.filter(c => !c.kept).sort((a, b) => a.risk - b.risk);
+      const kept = dec.candidates.length - others.length;
+      html = `<div class="tt-head">Candidate, ${others.indexOf(hc) + 1}. least risk of the ${others.length}${kept ? ' besides the kept destination' : ''}: not among the ${dec.waved.length} scored against the waves</div>`;
     }
   } else {
     html = '<div class="tt-head">Point under the mouse</div>';

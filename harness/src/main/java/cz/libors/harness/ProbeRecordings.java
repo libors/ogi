@@ -26,15 +26,17 @@ import java.util.stream.Collectors;
 /**
  * Records probe battles turn by turn as ground truth for the engine-model tests, and checks the recordings:
  * <ul>
- *   <li><b>integrity:</b> every live probe reported fresh commands in every turn while the round was open, and no
- *       robot skipped a turn;</li>
+ *   <li><b>integrity:</b> every live probe that reports its commands ({@code RandomProbe}'s {@code cmd}) reported
+ *       fresh ones in every turn while the round was open, no robot skipped a turn, and there were no problems;</li>
  *   <li><b>coverage:</b> how often the edge cases occurred (wall hits, robot collisions, velocity reversals, bullet
  *       outcomes);</li>
  *   <li><b>determinism</b> (engine-model G-26, G-33): a seeded battle replays exactly, different seeds differ, and
  *       which sources of randomness a seed controls;</li>
- *   <li><b>engine facts the harness relies on:</b> fixed starts (G-41), the robot's own jar (G-42), robot data
- *       cleared before every battle (G-47) and, in a JVM of its own without debug mode ({@link
- *       StrandedThreadCheck}), a robot thread that outlives its battle (G-48).</li>
+ *   <li><b>engine facts the harness or the bot relies on:</b> fixed starts (G-41), the robot's own jar (G-42), robot
+ *       data cleared before every battle (G-47), team messages (G-23), the order of a turn's events and what the
+ *       handlers see in a team (G-52), statics per robot and battle (G-22), fire assist (G-51) and, each in a JVM of
+ *       its own without debug mode, a robot thread that outlives its battle ({@link StrandedThreadCheck}, G-48) and
+ *       the events a skipped turn clears ({@link SkippedTurnCheck}, G-50).</li>
  * </ul>
  *
  * <p>Usage: {@code ProbeRecordings <robocodeHome> <probeVersion> <outputDir>}
@@ -146,10 +148,17 @@ public final class ProbeRecordings {
             checks.add(fixedStartsExperiment(runner, version, out, summaries));
             checks.add(robotDataExperiment(runner, version, out, summaries));
             checks.add(teamMessageExperiment(runner, version, out, summaries));
+            checks.addAll(teamEventsExperiment(runner, version, out, summaries));
+            checks.add(fireAssistExperiment(runner, version, out, summaries));
             checks.add(ownJarCheck(runner, version));
         }
-        // Once this JVM's engine is closed, as the check starts one of its own on the same home.
-        checks.add(strandedThreadExperiment(args[0], version));
+        // Once this JVM's engine is closed, as each check starts one of its own on the same home.
+        checks.add(childCheck("A robot thread that stops calling the API outlives its battle and keeps computing; the "
+                + "runner sees it until it ends (G-48)", StrandedThreadCheck.class, STRANDED_THREAD_SECONDS, args[0],
+                version));
+        checks.add(childCheck("A skipped turn clears the events waiting for the robot but the critical ones; team "
+                + "messages, bullet states and status events survive (G-50)", SkippedTurnCheck.class,
+                SKIPPED_TURN_SECONDS, args[0], version));
 
         Files.createDirectories(out);
         Map<String, Object> report = new LinkedHashMap<>();
@@ -388,6 +397,154 @@ public final class ProbeRecordings {
     }
 
     /**
+     * The order of a turn's events and what the handlers see (engine-model G-52), and statics (G-22): two battles in a
+     * row of {@code MessageTeam} against three {@code RandomProbe}s. In every turn a {@code MessageProbe} acted in, the
+     * messages, deaths and scans it handled must come by priority, highest first (75, 70, 10), and {@code getOthers()}
+     * in every handler must already leave out the robots that died in the turn, also in the message handlers that run
+     * before the death's; some turns must hold both messages and a death. Each probe counts the rounds it started in a
+     * static field: it must read 1 in the first round and 2 in the second, in both battles, so statics last the
+     * battle's rounds and belong to one robot, not to its teammates of the same class or to the next battle.
+     */
+    private static List<Check> teamEventsExperiment(BattleRunner runner, String version, Path out,
+                                                    List<Summary> summaries) throws IOException {
+        List<String> robots = new ArrayList<>(List.of("cz.libors.probe.MessageTeam " + version));
+        robots.addAll(Collections.nCopies(3, "cz.libors.probe.RandomProbe " + version));
+        BattleSetup setup = new BattleSetup("team-events", 800, 600, EXPERIMENT_ROUNDS, robots, EXPERIMENT_SEED);
+        Map<String, Integer> priority = Map.of("Message", 75, "RobotDeath", 70, "ScannedRobot", 10);
+        boolean intact = true;
+        int handled = 0;
+        int outOfOrder = 0;
+        int messagesAndDeath = 0;
+        int othersWrong = 0;
+        List<String> examples = new ArrayList<>();
+        List<String> statics = new ArrayList<>();
+        for (int battle = 1; battle <= 2; battle++) {
+            Summary s = record(runner, setup, out.resolve("determinism").resolve("team-events-" + battle + ".rec.gz"));
+            summaries.add(s);
+            intact &= s.intact();
+            Recording rec = Recording.read(Path.of(s.file()));
+            Set<Integer> probes = rec.robots().stream()
+                    .filter(r -> r.name().startsWith("cz.libors.probe.MessageProbe"))
+                    .map(Recording.RobotInfo::index).collect(Collectors.toSet());
+            Map<Long, Integer> alive = new HashMap<>();
+            for (RobotTick t : rec.robotTicks()) {
+                if (!t.state().equals("DEAD")) {
+                    alive.merge(key(t.round(), t.turn(), 0), 1, Integer::sum);
+                }
+            }
+            // (round, turn, robot) -> the types of the events handled in that turn, in the order the handlers ran
+            Map<Long, List<String>> turns = new LinkedHashMap<>();
+            Map<Integer, TreeMap<Integer, String>> counted = new TreeMap<>();
+            for (DebugEntry d : rec.debug()) {
+                if (!probes.contains(d.robot())) {
+                    continue;
+                }
+                if (d.key().equals("statics")) {
+                    counted.computeIfAbsent(d.robot(), k -> new TreeMap<>()).put(d.round(), d.value());
+                    continue;
+                }
+                String[] f = d.value().split(",");
+                if (!d.key().equals("ev") || Long.parseLong(f[1]) != d.turn()) {
+                    // A robot that does not act any more shows its last properties.
+                    continue;
+                }
+                handled++;
+                turns.computeIfAbsent(key(d.round(), d.turn(), d.robot()), k -> new ArrayList<>()).add(f[0]);
+                int others = alive.get(key(d.round(), d.turn(), 0)) - 1;
+                if (Integer.parseInt(f[3]) != others) {
+                    othersWrong++;
+                    if (examples.size() < 3) {
+                        examples.add("round " + d.round() + " turn " + d.turn() + " robot " + d.robot() + ": "
+                                + d.value() + ", others alive " + others);
+                    }
+                }
+            }
+            for (List<String> types : turns.values()) {
+                for (int i = 1; i < types.size(); i++) {
+                    outOfOrder += priority.get(types.get(i - 1)) < priority.get(types.get(i)) ? 1 : 0;
+                }
+                messagesAndDeath += types.contains("Message") && types.contains("RobotDeath") ? 1 : 0;
+            }
+            counted.values().forEach(perRound -> statics.add(perRound.values().toString()));
+        }
+        Check order = new Check("A turn's events come by priority, team messages before deaths; getOthers() in the "
+                + "handlers already leaves out the robots that died in the turn (G-52)", intact && handled > 0
+                && outOfOrder == 0 && othersWrong == 0 && messagesAndDeath > 0, String.format(Locale.ROOT,
+                "%d events handled, %d out of order, %d turns with messages and a death, getOthers() wrong %d%s",
+                handled, outOfOrder, messagesAndDeath, othersWrong, examples.isEmpty() ? "" : " " + examples));
+        List<String> expected = Collections.nCopies(6, List.of("1", "2").toString());
+        Check perRobot = new Check("Statics last the rounds of one battle and belong to one robot: neither its "
+                + "teammates of the same class nor the next battle see them (G-22)", intact && statics.equals(expected),
+                "rounds counted in a static, per probe and battle: " + statics);
+        return List.of(order, perRobot);
+    }
+
+    /**
+     * Fire assist (engine-model G-51): {@code FireAssistProbe}, a plain {@code Robot} whose radar turns with its gun,
+     * against two {@code RandomProbe}s. Its shots from {@code onScannedRobot} must leave along the scan's absolute
+     * bearing as the probe computed it, bit for bit, also where its gun pointed elsewhere; its shots from {@code
+     * run()} along its gun heading at the end of the turn it fired in (G-01).
+     */
+    private static Check fireAssistExperiment(BattleRunner runner, String version, Path out, List<Summary> summaries)
+            throws IOException {
+        BattleSetup setup = new BattleSetup("fire-assist", 800, 600, 3, List.of(
+                "cz.libors.probe.FireAssistProbe " + version, "cz.libors.probe.RandomProbe " + version,
+                "cz.libors.probe.RandomProbe " + version), EXPERIMENT_SEED);
+        Summary s = record(runner, setup, out.resolve("determinism").resolve("fire-assist.rec.gz"));
+        summaries.add(s);
+        Recording rec = Recording.read(Path.of(s.file()));
+        int probe = 0;
+        Map<Long, RobotTick> ticks = new HashMap<>();
+        rec.robotTicks().forEach(t -> ticks.put(key(t.round(), t.turn(), t.robot()), t));
+        // (round, owner, bullet id) -> the bullet's first tick, the turn after the shot
+        Map<Long, BulletTick> firstTicks = new HashMap<>();
+        for (BulletTick b : rec.bulletTicks()) {
+            firstTicks.merge(key(b.round(), b.bulletId(), b.owner()), b, (a, c) -> c.turn() < a.turn() ? c : a);
+        }
+        Map<Long, BulletTick> spawned = new HashMap<>();
+        firstTicks.values().forEach(b -> spawned.put(key(b.round(), b.turn(), b.owner()), b));
+        Map<Integer, Integer> lastTurn = new HashMap<>();
+        rec.roundEnds().forEach(e -> lastTurn.put(e.round(), e.turns()));
+        int assisted = 0;
+        int offGun = 0;
+        int plain = 0;
+        int missing = 0;
+        List<String> wrong = new ArrayList<>();
+        for (DebugEntry d : rec.debug()) {
+            boolean assist = d.key().equals("assistShot");
+            if (d.robot() != probe || !assist && !d.key().equals("plainShot")) {
+                continue;
+            }
+            String[] f = d.value().split(",");
+            if (Long.parseLong(f[0]) != d.turn() || d.turn() >= lastTurn.get(d.round())) {
+                continue;
+            }
+            BulletTick b = spawned.get(key(d.round(), d.turn() + 1, probe));
+            if (b == null) {
+                missing++;
+                continue;
+            }
+            double gun = ticks.get(key(d.round(), d.turn(), probe)).gunHeading();
+            double expected = assist ? Double.parseDouble(f[1]) : gun;
+            if (Double.doubleToLongBits(b.heading()) != Double.doubleToLongBits(expected)) {
+                wrong.add((assist ? "assisted" : "plain") + " round " + d.round() + " turn " + d.turn() + ": heading "
+                        + b.heading() + ", expected " + expected + ", gun " + gun);
+            } else if (assist) {
+                assisted++;
+                offGun += Double.doubleToLongBits(gun) != Double.doubleToLongBits(expected) ? 1 : 0;
+            } else {
+                plain++;
+            }
+        }
+        return new Check("A plain Robot's shot from onScannedRobot leaves along the scan's bearing, not its gun "
+                + "heading (fire assist, G-51)", s.intact() && wrong.isEmpty() && missing == 0 && offGun >= 20
+                && plain >= 5, String.format(Locale.ROOT, "%d shots along the scan's bearing, %d of them off the "
+                        + "gun heading; %d shots from run() along the gun heading; %d without a bullet; wrong %d%s",
+                assisted, offGun, plain, missing, wrong.size(), wrong.isEmpty() ? ""
+                        : " " + wrong.subList(0, Math.min(3, wrong.size()))));
+    }
+
+    /**
      * The team jar lists the robot under the same name and version as the robot's own jar (engine-model G-42);
      * {@link BattleRunner} must pick the robot's own jar.
      */
@@ -402,16 +559,18 @@ public final class ProbeRecordings {
                 "listed " + listed + ", picked " + picked);
     }
 
+    /** How long the stranded-thread check's JVM may take: its battle, the 20 s spin and the JVM's start and end. */
+    private static final int STRANDED_THREAD_SECONDS = 90;
+    /** How long the skipped-turn check's JVM may take: a battle of a few seconds and the JVM's start and end. */
+    private static final int SKIPPED_TURN_SECONDS = 120;
+
     /**
-     * The stranded-thread check ({@link StrandedThreadCheck}) in a JVM of its own without the engine's debug mode: in
-     * debug mode the engine waits for a stuck robot's turn instead of skipping it (G-17), and the probe's thread
+     * A check in a JVM of its own without the engine's debug mode, which prints {@code RESULT\tOK|FAIL\t<detail>}:
+     * in debug mode the engine waits for a robot's turn instead of skipping it (G-17), and a stuck probe's thread
      * would also keep computing in this JVM until it ends.
      */
-    /** How long the stranded-thread check's JVM may take: its battle, the 20 s spin and the JVM's start and end. */
-    private static final int CHILD_SECONDS = 90;
-
-    private static Check strandedThreadExperiment(String home, String version) throws IOException,
-            InterruptedException {
+    private static Check childCheck(String label, Class<?> main, int seconds, String home, String version)
+            throws IOException, InterruptedException {
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         // The parent's options, but not debug mode, agents or a debugger (a second JVM cannot share its port).
@@ -419,11 +578,10 @@ public final class ProbeRecordings {
                 .filter(a -> !a.startsWith("-Ddebug=") && !a.startsWith("-javaagent") && !a.startsWith("-agentlib")
                         && !a.startsWith("-Xrunjdwp") && !a.equals("-Xdebug"))
                 .forEach(command::add);
-        command.addAll(List.of("-cp", System.getProperty("java.class.path"), StrandedThreadCheck.class.getName(),
-                home, version));
-        Path output = Files.createTempFile("stranded-thread", ".txt");
+        command.addAll(List.of("-cp", System.getProperty("java.class.path"), main.getName(), home, version));
+        Path output = Files.createTempFile(main.getSimpleName(), ".txt");
         Process p = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile()).start();
-        if (!p.waitFor(CHILD_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+        if (!p.waitFor(seconds, java.util.concurrent.TimeUnit.SECONDS)) {
             p.destroyForcibly();
             p.waitFor();
         }
@@ -432,9 +590,8 @@ public final class ProbeRecordings {
         String last = lines.stream().filter(l -> l.startsWith("RESULT\t")).reduce((a, b) -> b).orElse("");
         String[] f = last.split("\t", 3);
         boolean passed = f.length == 3 && f[1].equals("OK") && p.exitValue() == 0;
-        return new Check("A robot thread that stops calling the API outlives its battle and keeps computing; the "
-                + "runner sees it until it ends (G-48)", passed,
-                f.length == 3 ? f[2] : "no result (exit " + p.exitValue() + "): " + String.join(" | ",
+        return new Check(label, passed, f.length == 3 ? f[2] : "no result (exit " + p.exitValue() + "): "
+                + String.join(" | ",
                         lines.subList(Math.max(0, lines.size() - 3), lines.size())));
     }
 

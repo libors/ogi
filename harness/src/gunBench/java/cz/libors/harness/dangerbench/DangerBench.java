@@ -30,7 +30,7 @@ import java.util.stream.Stream;
  * <p>{@code selection} is a tab-separated file with the columns {@code stratum} and {@code name}; the report then
  * gives a mean per stratum. {@code tune} runs a coordinate search from the given parameters on the recordings of pair
  * 0 and reports the result on the others (other seeds). {@code bullets} writes every bullet's score with where it was
- * aimed ({@link #BULLET_COLUMNS}), for reports by situation.
+ * aimed ({@link #BULLET_COLUMNS}), for reports by situation; not with {@code tune}.
  */
 public final class DangerBench {
 
@@ -56,6 +56,10 @@ public final class DangerBench {
         }
         if (!options.containsKey("recordings")) {
             usage("missing recordings");
+        }
+        if (options.containsKey("tune") && options.containsKey("bullets")) {
+            // The search reports three parameter sets; which one's bullets the file held would be a guess.
+            usage("bullets= does not go with tune=: write the bullets of the parameters you want in a run without it");
         }
         List<Path> files = new ArrayList<>();
         for (String dir : options.get("recordings").split(",")) {

@@ -26,7 +26,7 @@ window.EXPLORER = {
   <ol>
   <li><b>No preferred distance.</b> Unlike the duel's 325 px, the melee movement keeps no distance from anyone: every robot only repels, with 1/d&sup2;. The robot goes wherever is farthest from everybody that its reach allows. Nothing but the 45 px margin keeps it off the walls, so the field minimum (&#8853;) usually lies on a wall or in a corner.</li>
   <li><b>Teammates repel more than enemies.</b> A teammate weighs 3. An enemy of our energy weighs 1 when the way runs across its line and 2 when it runs straight along it, divided by 1 + the robots that are closer to it than the point is. Here A and B make up most of the destination's risk (see <i>Why this destination</i>). The robots keep apart, so bullets aimed at one don't hit another, and the enemies' fire is split (measured +2 to +4 APS).</li>
-  <li><b>A cluster of enemies weighs less than its head count.</b> <code>n</code> counts every robot closer to the enemy, its own teammates too, although an enemy never shoots its own. Counting only ours lost 1.6 APS. Hover near E2: two robots are closer to it than most points, so its term is a third.</li>
+  <li><b>A cluster of enemies weighs less than its head count.</b> <code>n</code> counts every robot closer to the enemy, its own teammates too, although an enemy never shoots its own. Counting only ours scored worse in battles. Hover near E2: two robots are closer to it than most points, so its term is a third.</li>
   <li><b>The way counts, not only the point.</b> The same point costs up to twice as much when the way to it runs straight at or away from an enemy, because head-on and linear guns hit that. So the robot retreats at an angle.</li>
   <li><b>Candidates bunch on the outer ring.</b> A random distance above <code>reach</code> is clamped to it. With an enemy at 300 px the reach is 180 px, at 130 px it is 78 px, so all the steps get short.</li>
   <li><b>History.</b> Our position every 5 turns, the last 20 of them, multiplies the risk by 1 + &Sigma;400/d&sup2;. Press <i>Play</i>: the robots never settle on the minimum. They drift around it and along the walls.</li>
@@ -42,12 +42,12 @@ window.EXPLORER = {
         {team: true, from: 'A', at: 'E3', age: 5, power: 2.5}],
       damageLayer: true,
       story: `
-  <p>Stage two: only the <b>8 candidates with the least risk</b> (numbered rings) are driven to in a prediction (straight there, then stand, at most 30 turns) against the bullets in the air. The red dots show the waves' damage on the way to every point within reach, so you can see what the 8 miss.</p>
+  <p>Stage two: only the <b>8 candidates with the least risk</b> (numbered rings; last turn's destination, while it competes, is always among them as #1) are driven to in a prediction (straight there, then stand, at most 30 turns) against the bullets in the air. The red dots show the waves' damage on the way to every point within reach, so you can see what the 8 miss.</p>
   <ol>
   <li><b>Enemy wave</b> (E2 at me): bullet damage &times; the share of its aim inside our hit range &times; the chance that it aimed at us, <code>1/(1+n)&sup2;</code>, where n counts our teammates it had closer than us (an enemy never aims at its own). Under 0.1 the wave is skipped.</li>
   <li><b>Teammate's bullet</b> (A at E3): its heading is known exactly, so a way whose hit range covers its line costs the full damage (13 for power 2.5).</li>
   <li><b>The waves veto rather than weigh.</b> The score is <code>risk/median + 3&middot;damage/max(0.1, median damage)</code>. The risks of the best 8 differ by a few percent. When most of the 8 are safe, the median damage is 0 and the floor 0.1 applies: one point of expected damage then adds 30 to a score of about 1. Only when all 8 are hit does the term become a real trade-off, and the least-hit point wins.</li>
-  <li><b>Safe points outside the 8 don't exist for the bot.</b> A point the waves miss but whose position risk is 9th or worse is never considered. Look for blank (dot-free) areas without a ring.</li>
+  <li><b>Safe points outside the 8 don't exist for the bot.</b> A point the waves miss but whose position risk is 9th or worse (8th or worse while a riskier last turn's destination holds a ring) is never considered. Look for blank (dot-free) areas without a ring.</li>
   </ol>
   <div class="try"><b>Try:</b> drag the wave's aim handle (the small circle beyond its arc). Drag B in between E2 and me: the chance drops to 1/4, and with two teammates closer to 1/9. Raise the spread in the wave's inspector.</div>`,
     },

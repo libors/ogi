@@ -331,19 +331,28 @@ function decide(me, all, waves, field, gangDefence, rng) {
   return out;
 }
 
-/** One turn of our robots: each decides from the others' current positions, then all move (enemies stand). */
+/** The random generator of a robot's candidates in a turn. */
 function seedFor(r, turn, offset) {
   return mulberry32(r.seed * 7919 + turn * 104729 + 3 + offset * 31337);
 }
 
+/**
+ * The history a decision of this turn uses: every HISTORY_EVERY turns the current position joins it first, as
+ * MeleeMovement.remember does before the choice. A new array then; r.history itself is not changed.
+ */
+function historyAt(r, turn) {
+  if (turn % C.HISTORY_EVERY !== 0) return r.history;
+  const h = [[r.x, r.y], ...r.history];
+  if (h.length > C.HISTORY_SIZE) h.length = C.HISTORY_SIZE;
+  return h;
+}
+
+/** One turn of our robots: each decides from the others' current positions, then all move (enemies stand). */
 function stepTurn(state, field, gangDefence, seedOffset = 0) {
   const decisions = new Map();
   for (const r of state.robots) {
     if (r.kind === 'enemy' || r.dead) continue;
-    if (state.turn % C.HISTORY_EVERY === 0) {
-      r.history.unshift([r.x, r.y]);
-      while (r.history.length > C.HISTORY_SIZE) r.history.pop();
-    }
+    r.history = historyAt(r, state.turn);
     const rng = seedFor(r, state.turn, seedOffset);
     decisions.set(r, decide(r, state.robots, state.waves, field, gangDefence, rng));
   }
@@ -384,5 +393,5 @@ function stepTurn(state, field, gangDefence, seedOffset = 0) {
 }
 if (typeof module !== 'undefined') {
   module.exports = {P, C, ROLE, MODE, mulberry32, hyp, bearing, robotsFor, pull, distances, risk, candidates,
-    aimChance, wavesDamage, choose, decide, stepTurn, enemiesNear, seedFor};
+    aimChance, wavesDamage, choose, decide, historyAt, stepTurn, enemiesNear, seedFor};
 }

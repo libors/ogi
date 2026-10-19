@@ -30,13 +30,20 @@ class ShieldTest {
      */
     @Test
     void plannedShotsCollideWithTheExpectedBulletInEitherOrder() {
-        assertMostPlannedShotsCollide(0.5, 2.5, 3, 150, 600, 0.9);
+        assertMostPlannedShotsCollide(3, 0.5, 2.5, 3, 150, 600, 8, 0.9);
     }
 
-    /** An enemy close by leaves only crossings near us: its bullet must not touch our box first, from any side. */
+    /**
+     * An enemy close by leaves only crossings near us: its bullet must not touch our box first, from any side, with
+     * any seed. The planner takes the expected line as passing through our centre, with {@code CLEARANCE} (2 px) to
+     * spare: a line further off enters our box sooner, by up to about 4 px when it comes in 20–30° off an axis, so
+     * here the enemy has moved at most 2 px sideways since it aimed.
+     */
     @Test
     void shotsAtCloseEnemiesMeetTheBulletBeforeItReachesUs() {
-        assertMostPlannedShotsCollide(1.5, 1.5, 3, 75, 110, 0.5);
+        for (long seed = 1; seed <= 20; seed++) {
+            assertMostPlannedShotsCollide(seed, 1.5, 1.5, 3, 75, 110, 2, 0.5);
+        }
     }
 
     /**
@@ -45,12 +52,18 @@ class ShieldTest {
      */
     @Test
     void shotsOfTheEnemysSpeedAreFoundToo() {
-        assertMostPlannedShotsCollide(0.1, 0, 0.1, 150, 600, 0.9);
+        assertMostPlannedShotsCollide(3, 0.1, 0, 0.1, 150, 600, 8, 0.9);
     }
 
-    private static void assertMostPlannedShotsCollide(double minPower, double powerRange, double maxPower,
-                                                      double minDistance, double maxDistance, double share) {
-        Random random = new Random(3);
+    /**
+     * Random cases from {@code seed}: we stand, the enemy {@code minDistance} to {@code maxDistance} away fired a
+     * bullet of {@code minPower} plus up to {@code powerRange} at us head-on from where it was a turn before, up to
+     * {@code maxDrift} px sideways of where it fired from; a plan in more than {@code share} of them.
+     */
+    private static void assertMostPlannedShotsCollide(long seed, double minPower, double powerRange, double maxPower,
+                                                      double minDistance, double maxDistance, double maxDrift,
+                                                      double share) {
+        Random random = new Random(seed);
         int planned = 0;
         int cases = 300;
         for (int k = 0; k < cases; k++) {
@@ -73,7 +86,7 @@ class ShieldTest {
             me.bodyHeading = Angles.toRobocode(bearing + Math.PI / 2);
             me.gunHeading = Angles.toRobocode(bearing + 0.1 * (random.nextDouble() - 0.5));
             // The enemy aimed head-on from where it was the turn before; it has moved since, sideways.
-            double drift = 8 * (2 * random.nextDouble() - 1);
+            double drift = maxDrift * (2 * random.nextDouble() - 1);
             double bx = ex - drift * Math.sin(bearing);
             double by = ey + drift * Math.cos(bearing);
             double expected = Angles.bearing(bx, by, me.x, me.y);
@@ -96,11 +109,12 @@ class ShieldTest {
             for (double off : new double[] {0, 0.9 * p.margin(), -0.9 * p.margin()}) {
                 for (boolean enemyFirst : new boolean[] {true, false}) {
                     assertTrue(collides(wave, expected + off, moved, now + 1, p.power(), enemyFirst),
-                            "case " + k + " " + p + " off " + off + (enemyFirst ? " enemy first" : " ours first"));
+                            "seed " + seed + " case " + k + " " + p + " off " + off
+                                    + (enemyFirst ? " enemy first" : " ours first"));
                 }
             }
         }
-        assertTrue(planned > cases * share, "a plan in most cases: " + planned);
+        assertTrue(planned > cases * share, "seed " + seed + ", a plan in most cases: " + planned);
     }
 
     /** Whether the enemy's bullet along {@code heading} meets ours, fired in turn {@code fireTime} by {@code gun}. */

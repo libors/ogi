@@ -27,18 +27,22 @@ import java.util.stream.Stream;
  * replayed aim must equal the logged one.
  *
  * <p>Usage: {@code MeleeBench logs=<dir>,... [robot=<name prefix>] [base=<parameters>] [otherLogs=<dir>,...]
- * [<parameter>=<value>]... [tune=<passes>] [splitSeed=n] [fixed=<parameter>,...]}
+ * [<parameter>=<value>]... [powers=p,...] [tune=<passes>] [splitSeed=n] [fixed=<parameter>,...]}
  *
  * <ul>
  *   <li>{@code base}: the parameters the logging bot played with, as {@code key=value} pairs separated by
- *       {@code ;} over {@link MeleeGunParameters#DEFAULT}; the parity check holds them to the logs.</li>
- *   <li>The parameter options ({@link #NAMES}; {@code weights} takes 8 values separated by commas) give the
- *       variant, over the base. Without any, the variant is the base.</li>
+ *       {@code ;} over {@link MeleeGunParameters#DEFAULT}, or over {@link MeleeGunParameters#TEAM} for logs of team
+ *       battles, as the bot plays them; the parity check holds them to the logs.</li>
+ *   <li>The parameter options ({@link #NAMES}; {@code weights} takes up to {@link MeleeGun#FEATURES} values
+ *       separated by commas, those not given weigh 0; the switches take true or false) give the variant, over the
+ *       base. Without any, the variant is the base.</li>
  *   <li>{@code otherLogs}: logs of a bot that played with the variant, on the same draws. The bench then measures
  *       both ways: the variant's gain on the base's logs is effect + bias, the base's gain on the variant's logs is
  *       −effect + bias.</li>
  *   <li>{@code tune}: a coordinate search from the variant on half of the battles, reported on both halves;
- *       {@code fixed} names parameters it leaves as they are (the option names, {@code weights} for all eight).</li>
+ *       {@code fixed} names parameters it leaves as they are (the option names, {@code weights} for all
+ *       {@link MeleeGun#FEATURES}).</li>
+ *   <li>{@code powers}: instead, the variant's shots at these powers, per power and distance band.</li>
  * </ul>
  * Exits with 1 if more than one in 1,000 replayed aims of the base parameters differ from the logs.
  */
@@ -83,15 +87,18 @@ public final class MeleeBench {
         if (!options.containsKey("logs")) {
             usage("missing logs");
         }
-        MeleeGunParameters base = parameters(MeleeGunParameters.DEFAULT, overrides(options.getOrDefault("base", "")));
-        MeleeGunParameters variant = parameters(base, options);
         long start = System.nanoTime();
         Logs logs = Logs.read(options.get("logs"), options.get("robot"));
         Logs other = options.containsKey("otherLogs") ? Logs.read(options.get("otherLogs"), options.get("robot"))
                 : null;
         System.out.printf(Locale.ROOT, "%d battles read in %.1f s%s%n", logs.battles.size(),
                 (System.nanoTime() - start) / 1e9, other == null ? "" : ", and " + other.battles.size() + " other");
-        System.out.println("Base:    " + base);
+        boolean team = team(other == null ? logs.battles
+                : Stream.concat(logs.battles.stream(), other.battles.stream()).toList());
+        MeleeGunParameters base = parameters(team ? MeleeGunParameters.TEAM : MeleeGunParameters.DEFAULT,
+                overrides(options.getOrDefault("base", "")));
+        MeleeGunParameters variant = parameters(base, options);
+        System.out.println("Base:    " + base + (team ? " (team battles: over TEAM)" : ""));
         System.out.println("Variant: " + variant);
 
         if (options.containsKey("powers")) {
@@ -136,6 +143,20 @@ public final class MeleeBench {
                     effect, 1.96 * se, bias, 1.96 * se);
         }
         System.exit(ok ? 0 : 1);
+    }
+
+    /**
+     * Whether the logs are of team battles, in which the logging robot has teammates and the bot aims with
+     * {@link MeleeGunParameters#TEAM} instead of {@link MeleeGunParameters#DEFAULT}; the base starts from those.
+     * Logs of both kinds at once are refused: no one base holds for both.
+     */
+    private static boolean team(List<MeleeBattle> battles) {
+        long team = battles.stream().filter(b -> !b.teammates().isEmpty()).count();
+        if (team > 0 && team < battles.size()) {
+            usage(team + " of " + battles.size() + " logs are of team battles, the rest of melee battles: the bot "
+                    + "plays them with other parameters, replay them apart");
+        }
+        return team > 0;
     }
 
     /**
@@ -529,8 +550,8 @@ public final class MeleeBench {
     private static void usage(String problem) {
         System.err.println(problem);
         System.err.println("Usage: MeleeBench logs=<dir>,... [robot=<name prefix>] [base=<key=value;...>] "
-                + "[otherLogs=<dir>,...] [weights=w,...] [" + String.join("=x] [", OPTIONS) + "=x] [tune=<passes>] "
-                + "[splitSeed=n] [fixed=<parameter>,...]");
+                + "[otherLogs=<dir>,...] [weights=w,...] [" + String.join("=x] [", OPTIONS) + "=x] [powers=p,...] "
+                + "[tune=<passes>] [splitSeed=n] [fixed=<parameter>,...]");
         System.exit(2);
     }
 }

@@ -1,6 +1,8 @@
 package cz.libors.ogi.radar;
 
 import cz.libors.ogi.geom.Angles;
+import cz.libors.ogi.physics.RadarScan;
+import cz.libors.ogi.physics.RobotMotion;
 import cz.libors.ogi.radar.MeleeRadar.Seen;
 import cz.libors.ogi.radar.TeamRadar.Arc;
 import cz.libors.ogi.radar.TeamRadar.Watcher;
@@ -12,6 +14,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -99,10 +103,21 @@ class TeamRadarTest {
             Collections.shuffle(enemies, random);
             assertEquals(plan, TeamRadar.assign(NOW, team, enemies));
         }
-        // Every enemy in range goes to exactly one robot.
+        // Every enemy in some robot's range goes to exactly one robot: none twice, none left out.
         List<String> watched = new ArrayList<>();
         plan.values().forEach(watched::addAll);
         assertEquals(watched.stream().distinct().count(), watched.size());
+        Set<String> inRange = new TreeSet<>();
+        for (Seen e : enemies) {
+            for (Watcher w : team) {
+                if (Math.hypot(e.x() - w.x(), e.y() - w.y()) + RobotMotion.MAX_VELOCITY * (NOW + 1 - e.time())
+                        <= RadarScan.RADIUS) {
+                    inRange.add(e.name());
+                }
+            }
+        }
+        assertEquals(inRange, new TreeSet<>(watched));
+        assertTrue(inRange.size() >= 4, "most enemies within some robot's range: " + inRange);
     }
 
     @Test

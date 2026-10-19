@@ -5,14 +5,18 @@ A bot never sees enemy bullets in flight. It infers each shot from the shooter's
 
 ## Inputs
 
-Everything comes from what the bot itself receives, in the turn it happens (engine-model G-40):
+Outside a team, everything comes from what the bot itself receives, in the turn it happens (engine-model G-40), with
+a turn's hits and rams before its scans (G-52). In a team (`EnergyEvents.team`) the detectors take the whole team's
+scans and events through `TeamFeed`: turn t in turn t + 1 while a teammate lives, once every teammate's report of t
+is in (G-23), and in turn t once none does; each turn's events first, then the first scan of each enemy. A shot's
+wave is followed from its fire turn all the same.
 
 | Input | Source | Effect on the enemy's energy |
 |---|---|---|
-| `scanned(time, x, y, velocity, energy)` | `ScannedRobotEvent` | the measurement |
-| `ourBulletHit(power)` | `BulletHitEvent` | −(4p + 2·max(p − 1, 0)) |
-| `hitUs(power)` | `HitByBulletEvent` | +3p |
-| `rammed()` | `HitRobotEvent` | −0.6 |
+| `scanned(time, x, y, velocity, energy)` | `ScannedRobotEvent`; in a team ours or a teammate's (`EnemySighting`) | the measurement |
+| `ourBulletHit(power)` | `BulletHitEvent`; in a team any of our robots' (`TeamEvent`) | −(4p + 2·max(p − 1, 0)) |
+| `hitUs(power)` | `HitByBulletEvent`; in a team a hit on any of our robots (`TeamEvent`) | +3p |
+| `rammed()` | `HitRobotEvent`; in a team any of our robots' (`TeamEvent`) | −0.6 |
 | `zapped()` | our own unexplained loss of 0.1 (engine-model G-38) | −0.1 |
 | `nearOtherRobot()` | another robot, enemy or teammate, seen within 150 px of the enemy in the last 16 turns (`Neighbours`) | rams among others: −0.6 each |
 
@@ -66,3 +70,7 @@ as the gun is cool" estimate is seldom exact; bots that fire as soon as they can
   into one drop.
 - **Real shots of 0.6, 1.2, 1.8 or 2.4** are lost when another robot is near the shooter (rule 5).
 - **A shot and a wall hit in the same turn** can hide the shot when the drop stays within the wall damage range.
+- **In a team** our robots report their hits and rams, so of the other robots' bullets only the enemies' hits on each
+  other stay unseen. The team route has losses of its own: scans and events that arrive after their turn was handed
+  on are dropped (`TeamFeed.late`), and only the first scan of each enemy in a turn counts. The quality above is the
+  direct route's.

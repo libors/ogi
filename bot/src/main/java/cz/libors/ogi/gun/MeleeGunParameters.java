@@ -20,8 +20,10 @@ import java.util.Locale;
  * @param maxRecords          records kept per enemy; the oldest go first
  * @param everyRound          whether the records of earlier rounds count whatever turn of their round they were
  *                            scanned in; otherwise only those scanned before the enemy's last scan in its round
- * @param reachingOnly        whether the neighbours come only from records whose displacements reach the bullet's
- *                            flight; otherwise a record that ends sooner takes a neighbour's place and gives nothing
+ * @param reachingOnly        whether the neighbours come only from records whose displacements reach the flight to
+ *                            the enemy's last scanned position; a record that ends before the iterated flight still
+ *                            takes a neighbour's place and gives nothing, as does any record that ends sooner without
+ *                            the filter
  * @param singleEnemy         whether a bearing's weight counts one enemy's positions only (the best enemy's best
  *                            bearing wins); otherwise all enemies' positions add up
  */

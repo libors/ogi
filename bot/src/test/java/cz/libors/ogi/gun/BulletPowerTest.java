@@ -18,7 +18,7 @@ class BulletPowerTest {
     }
 
     @Test
-    void neverMoreThanKillsTheTargetOrThanWeCanAfford() {
+    void atMostAQuarterOfTheTargetsEnergyAndATenthAndNeverMoreThanWeCanAfford() {
         BulletPower power = new BulletPower();
         assertEquals(1.1, power.power(ENEMY, 400, 4, 100, false, 0.1, 2), 1e-12);
         assertEquals(0.9, power.power(ENEMY, 400, 100, 1, false, 0.1, 2), 1e-12);

@@ -26,7 +26,11 @@ public final class World {
 
     private final Map<String, EnemyState> enemies = new HashMap<>();
     private final Map<String, Teammate> teammates = new HashMap<>();
-    /** Robots that died this round: a teammate's scan of one, taken just before it died, arrives a turn late. */
+    /**
+     * Robots that died this round: a teammate's scan of one that comes after its death (the packet late by the
+     * sender's skipped turn) is ignored. A scan of the turn before the death comes in the death's turn ahead of the
+     * death event (engine-model G-52) and is taken; {@link #robotDied} then removes it.
+     */
     private final Set<String> dead = new HashSet<>();
 
     /** Records a sighting; older or duplicate sightings of the same enemy are ignored. */

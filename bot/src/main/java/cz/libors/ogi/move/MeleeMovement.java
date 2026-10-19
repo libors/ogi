@@ -65,7 +65,7 @@ public final class MeleeMovement {
     public static final double GANG_RADIUS = 250;
     /** The debug property of a logged decision ({@link #logging}). */
     public static final String LOG = "meleemove";
-    /** What the gang defence makes of us in this turn ({@link #pullRole}). */
+    /** What the team pull makes of us in this turn ({@link #pullRole}): nothing draws us. */
     public static final int NO_PULL = 0;
     /** Ganged: drawn to our nearest teammate. */
     public static final int GANGED = 1;
@@ -129,12 +129,15 @@ public final class MeleeMovement {
         return logLine;
     }
 
-    /** What the gang defence made of us in the last turn: {@link #NO_PULL}, {@link #GANGED} or {@link #HELPER}. */
+    /**
+     * What the team pull made of us in the last turn: {@link #NO_PULL}, {@link #GANGED}, {@link #HELPER} or
+     * {@link #FINISHER}.
+     */
     public int pullRole() {
         return pullRole;
     }
 
-    /** The robot the gang defence draws us to, {x, y}, or NaN. */
+    /** The robot the pull draws us to, {x, y} (a teammate; for {@link #FINISHER} the enemy), or NaN. */
     public double[] pullTarget() {
         return new double[] {pullX, pullY};
     }
@@ -149,7 +152,7 @@ public final class MeleeMovement {
         return traced;
     }
 
-    /** Turns the team pull on or off: on against enemies that gang our robots. */
+    /** Turns the gang defence on or off: on against enemies that gang our robots; the finisher pulls either way. */
     public void gangDefence(boolean on) {
         gangDefence = on;
     }

@@ -142,7 +142,7 @@ class FireDetectionTest {
                     if (e[0].equals("ScannedRobot")) {
                         double[] p = known.get(e[2]);
                         FireDetector detector = detector(detectors, trace, e[2]);
-                        // As the bot does it (WaveSurfer.scanned), scan by scan in event order.
+                        // As the bot does it (EnemyWaves.scanned), scan by scan in event order.
                         neighbours.seen(e[2], turn, p[1], p[2]);
                         if (neighbours.nearOther(e[2], turn)) {
                             detector.nearOtherRobot();

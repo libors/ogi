@@ -1,5 +1,6 @@
 package cz.libors.ogi.trace;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -7,6 +8,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OverlayTeamTest {
+
+    @BeforeEach
+    void reset() {
+        Overlay.reset();
+    }
 
     @Test
     void digitsSwitchOneMemberAndZeroSwitchesAllAlike() {

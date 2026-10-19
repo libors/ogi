@@ -336,16 +336,18 @@ public final class RecordJob extends QueueJob {
         BattleOutcome outcome = work.spec().outcomeFromMap(outcomeMap);
         String subject = work.spec().robots().get(0);
         BattleOutcome.Shots shots = outcome.shots(subject);
-        int skipped = outcome.skippedTurns(subject);
+        // A team's robots are named after their own class, not after the team.
+        Own own = Own.of(outcome, robotsOf(bytes, subject));
+        int skipped = own.skippedTurns();
         int allSkipped = outcome.skippedTurns().values().stream().mapToInt(Integer::intValue).sum();
-        BattleOutcome.TurnTimes times = outcome.turnTimes(subject);
+        BattleOutcome.TurnTimes times = own.turnTimes();
         Path index = out.resolve("battles.tsv");
         String header = Files.exists(index) ? "" : String.join("\t", INDEX_COLUMNS) + "\n";
         List<String> fields = new ArrayList<>(List.of(file.getFileName().toString(), opponent,
                 Integer.toString(pair), Long.toString(outcome.seed()), Integer.toString(shots.fired()),
-                Integer.toString(shots.hits()), Integer.toString(skipped),
-                Integer.toString(outcome.problems(subject).size()), Integer.toString(allSkipped - skipped),
-                Integer.toString(times.turns()), Long.toString(times.maxMicros()), Integer.toString(times.overHalf()),
+                Integer.toString(shots.hits()), Integer.toString(skipped), Integer.toString(own.problems()),
+                Integer.toString(allSkipped - skipped), Integer.toString(times.turns()),
+                Long.toString(times.maxMicros()), Integer.toString(times.overHalf()),
                 Integer.toString(times.overIdleConstant()), Boolean.toString(work.spec().debug())));
         fields.addAll(components(outcome, subject));
         fields.addAll(components(outcome, opponent));
@@ -440,12 +442,11 @@ public final class RecordJob extends QueueJob {
      * gzip-compressed (tests send plain text).
      */
     static String roundTurns(byte[] recording) throws IOException {
-        if (recording.length < 2 || (recording[0] & 0xff) != 0x1f || (recording[1] & 0xff) != 0x8b) {
+        if (!gzipped(recording)) {
             return "";
         }
         List<String> turns = new ArrayList<>();
-        try (BufferedReader in = new BufferedReader(new InputStreamReader(
-                new GZIPInputStream(new ByteArrayInputStream(recording)), StandardCharsets.UTF_8))) {
+        try (BufferedReader in = lines(recording)) {
             String line;
             while ((line = in.readLine()) != null) {
                 if (line.startsWith("end\t")) {
@@ -454,6 +455,57 @@ public final class RecordJob extends QueueJob {
             }
         }
         return String.join(",", turns);
+    }
+
+    /**
+     * The robots that play for {@code contestant}, from the recording's {@code robot} records: a team's members,
+     * which the engine names after their own class ({@code cz.libors.Ogi v (1)} in {@code cz.libors.OgiTeam v (1)}),
+     * or the robot itself. Just the contestant if the bytes are not gzip-compressed (tests send plain text) or name
+     * no robot of it.
+     */
+    static List<String> robotsOf(byte[] recording, String contestant) throws IOException {
+        List<String> robots = new ArrayList<>();
+        if (gzipped(recording)) {
+            try (BufferedReader in = lines(recording)) {
+                String line;
+                while ((line = in.readLine()) != null) {
+                    if (line.startsWith("robot\t")) {
+                        String[] f = line.split("\t");
+                        if (f[4].equals(contestant) || f[4].startsWith(contestant + " (")) {
+                            robots.add(f[2]);
+                        }
+                    } else if (!line.startsWith("#") && !line.startsWith("battle\t")) {
+                        break;
+                    }
+                }
+            }
+        }
+        return robots.isEmpty() ? List.of(contestant) : robots;
+    }
+
+    /**
+     * The skipped turns, problems (engine errors included) and own turn times of a contestant's robots
+     * ({@link #robotsOf}): {@link BattleOutcome} keys them by robot, so a team's would not match its name.
+     */
+    record Own(int skippedTurns, int problems, BattleOutcome.TurnTimes turnTimes) {
+
+        static Own of(BattleOutcome outcome, List<String> robots) {
+            int skipped = robots.stream().mapToInt(outcome::skippedTurns).sum();
+            int problems = (int) outcome.problems().stream()
+                    .filter(p -> p.startsWith("engine:") || robots.stream().anyMatch(p::startsWith)).count();
+            BattleOutcome.TurnTimes times = robots.stream().map(outcome::turnTimes)
+                    .reduce(BattleOutcome.TurnTimes.NONE, BattleOutcome.TurnTimes::plus);
+            return new Own(skipped, problems, times);
+        }
+    }
+
+    private static boolean gzipped(byte[] recording) {
+        return recording.length >= 2 && (recording[0] & 0xff) == 0x1f && (recording[1] & 0xff) == 0x8b;
+    }
+
+    private static BufferedReader lines(byte[] recording) throws IOException {
+        return new BufferedReader(new InputStreamReader(new GZIPInputStream(new ByteArrayInputStream(recording)),
+                StandardCharsets.UTF_8));
     }
 
     @Override
