@@ -6,7 +6,9 @@ import cz.libors.ogi.gun.CircularAim;
 import cz.libors.ogi.gun.MeleeGun;
 import cz.libors.ogi.gun.MeleeGunParameters;
 import cz.libors.ogi.gun.VirtualGuns;
+import cz.libors.ogi.move.EnemyWaves;
 import cz.libors.ogi.move.MeleeMovement;
+import cz.libors.ogi.physics.EngineRobot;
 import cz.libors.ogi.radar.TeamRadar;
 import cz.libors.ogi.world.EnemyState;
 import org.junit.jupiter.api.Test;
@@ -30,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Paints every layer of the overlay into {@code build/overlay/overlay.png}, with the battlefield mirrored as Robocode
  * mirrors robot graphics (its text is upside down), so that the overlay can be looked at without the GUI: one of our
  * bullets with the weights of a gun that has fought a simulated mover, an enemy wave with a danger profile, and a
- * team's radar plan, and the melee movement's choice among those robots.
+ * team's radar plan, the melee movement's choice among those robots, who is whose closest robot and the hits on us.
  */
 class OverlayRenderTest {
 
@@ -94,15 +96,19 @@ class OverlayRenderTest {
                 Math.asin(8 / 17.15), Double.NaN,
                 Double.NaN, null, null, null, null, Double.NaN, Double.NaN));
 
-        // The melee movement among the robots below, with a few recent positions of ours.
+        // The melee movement among the robots below, with a few recent positions of ours; no enemy wave in the air.
         MeleeMovement movement = new MeleeMovement(field, new Random(3));
         movement.tracing(true);
+        EnemyWaves noWaves = new EnemyWaves(field, 0.1);
+        EngineRobot me = new EngineRobot();
         List<MeleeMovement.Robot> robots = List.of(new MeleeMovement.Robot(600, 420, 100, true),
                 new MeleeMovement.Robot(750, 250, 100, true), new MeleeMovement.Robot(820, 650, 100, true),
                 new MeleeMovement.Robot(450, 720, 100, true), new MeleeMovement.Robot(150, 700, 100, false),
                 new MeleeMovement.Robot(500, 120, 100, false));
         for (int t = 0; t <= 20; t += 5) {
-            movement.command(395 + t, ourX - 2 * t, ourY - t, 0, 100, robots);
+            me.x = ourX - 2 * t;
+            me.y = ourY - t;
+            movement.command(395 + t, me.x, me.y, 0, 100, robots, noWaves, me);
         }
         trace.move(movement.traced());
         assertNotNull(trace.move());
@@ -179,6 +185,14 @@ class OverlayRenderTest {
         trace.states(new Trace.StateView(400, 400, List.of(Trace.State.ANTI_RAM, Trace.State.GANGED), true, 300,
                 520));
         assertNotNull(trace.states());
+        // Who is whose closest robot: two enemies ours, two each other.
+        trace.closest(new Trace.ClosestView(new double[][] {{600, 420, 300, 400, 1}, {750, 250, 600, 420, 0},
+                {820, 650, 600, 420, 0}, {450, 720, 150, 700, 1}},
+                new double[][] {{300, 400, 1}, {150, 700, 1}, {500, 120, 0}}));
+        // Hits on us of every class, one fire detection missed; the round came down to a duel 22 behind.
+        trace.hits(new Trace.HitsView(List.of(new Trace.Hit(305, 410, 600, 420, 12, 0),
+                new Trace.Hit(290, 395, 820, 650, 40, 3), new Trace.Hit(295, 385, 750, 250, 70, 1),
+                new Trace.Hit(310, 390, 450, 720, 5, -1)), new double[] {32, 12, 8, 4}, 45, -22));
         // We are member 1, painting with members 2 and 5: the legend lists 1 2       5.
         Overlay.team(5);
         trace.painters(new Trace.PaintersView(1, 5, new int[] {1, 2, 5}));

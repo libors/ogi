@@ -99,6 +99,15 @@ public final class EnemyWaves {
         final Map<String, int[]> fireRecords = new HashMap<>();
     }
 
+    /**
+     * Where a bullet that hit us was fired from, as its wave has it ({@link #learnHit}).
+     *
+     * @param closer the robots its shooter could aim at that it had closer than us when it aimed ({@link #closer}): in
+     *               a melee the other enemies, in a team battle our teammates; 0 in a duel
+     */
+    public record HitOrigin(double x, double y, long fireTime, int closer) {
+    }
+
     private final Field field;
 
     private final double coolingRate;
@@ -258,7 +267,7 @@ public final class EnemyWaves {
         return shot;
     }
 
-    /** In a team battle: an enemy's shot was aimed at us or at our teammates ({@link #aimChance}). */
+    /** In a team battle: an enemy's shot was aimed at us or at our teammates ({@link #closer}). */
     public void teamBattle() {
         teamBattle = true;
     }
@@ -324,11 +333,12 @@ public final class EnemyWaves {
 
     /**
      * The same, but the shooter's energy is told apart elsewhere ({@link #enemyHit}): in a team, together with the
-     * teammates' hits.
+     * teammates' hits. Returns where the bullet was fired from, null if no wave matched it.
      */
-    public void learnHit(String shooter, long time, double x, double y, double heading, double power) {
+    public HitOrigin learnHit(String shooter, long time, double x, double y, double heading, double power) {
         fireRecord(shooter)[1]++;
-        learn(shooter, time, x, y, heading, power, 0);
+        EnemyWave w = learn(shooter, time, x, y, heading, power, 0);
+        return w == null ? null : new HitOrigin(w.wave.x(), w.wave.y(), w.wave.fireTime(), w.closer);
     }
 
     /**
@@ -555,7 +565,8 @@ public final class EnemyWaves {
         }
         EnemyWave w = new EnemyWave(wave, range, direction, features, model(shot.shooter()).predict(features, simple),
                 learning);
-        w.aimedAtUs = aimChance(shot.shooter(), from[0], from[1], us, aimed);
+        w.closer = closer(shot.shooter(), from[0], from[1], us, aimed);
+        w.aimedAtUs = 1 / Math.pow(1 + w.closer, AIM_EXPONENT);
         for (BulletPath b : ourBullets) {
             addShadows(w, b);
         }
@@ -563,12 +574,12 @@ public final class EnemyWaves {
     }
 
     /**
-     * The chance that a shooter at ({@code x}, {@code y}) aimed at us in turn {@code t}, where we were at {@code us}:
-     * 1 / (1 + the robots it could aim at that it had closer than us), each where it was seen nearest to that turn
-     * (the power is {@link #AIM_EXPONENT}). Most melee robots aim at the enemy closest to them: in a melee the other
-     * enemies, in a team battle our teammates, never its own.
+     * The robots a shooter at ({@code x}, {@code y}) could aim at that it had closer than us in turn {@code t}, where
+     * we were at {@code us}, each where it was seen nearest to that turn: in a melee the other enemies, in a team
+     * battle our teammates, never its own. Most melee robots aim at the enemy closest to them, so the chance that it
+     * aimed at us is 1 / (1 + these) to the power {@link #AIM_EXPONENT}.
      */
-    private double aimChance(String shooter, double x, double y, double[] us, long t) {
+    private int closer(String shooter, double x, double y, double[] us, long t) {
         double ours = Math.hypot(us[0] - x, us[1] - y);
         int closer = 0;
         Map<String, Map<Long, double[]>> others = teamBattle ? teammatePositions : enemyPositions;
@@ -587,7 +598,7 @@ public final class EnemyWaves {
                 closer++;
             }
         }
-        return 1 / Math.pow(1 + closer, AIM_EXPONENT);
+        return closer;
     }
 
     /**
@@ -677,10 +688,10 @@ public final class EnemyWaves {
     /**
      * Matches a bullet of {@code shooter} that ended in turn {@code time} at this position to its wave, by power and
      * travelled distance (the engine reported it {@code movesBack} bullet moves short of the wave's radius, within one
-     * move), and learns its guess factor.
+     * move), and learns its guess factor. Returns the wave, null if none matched.
      */
-    private void learn(String shooter, long time, double x, double y, double heading, double power,
-                       double movesBack) {
+    private EnemyWave learn(String shooter, long time, double x, double y, double heading, double power,
+                            double movesBack) {
         for (Iterator<EnemyWave> it = waves.iterator(); it.hasNext(); ) {
             EnemyWave w = it.next();
             if (!w.wave.shooter().equals(shooter) || Math.abs(w.wave.power() - power) > POWER_TOLERANCE) {
@@ -694,9 +705,10 @@ public final class EnemyWaves {
                 }
                 it.remove();
                 spent.add(w);
-                return;
+                return w;
             }
         }
+        return null;
     }
 
     /**

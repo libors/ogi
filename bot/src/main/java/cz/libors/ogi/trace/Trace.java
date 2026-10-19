@@ -60,12 +60,61 @@ public final class Trace {
     /**
      * The melee movement's choice in this turn ({@code MeleeMovement}).
      *
-     * @param candidates every candidate destination, {x, y, risk}; the lower the risk, the safer
-     * @param waved      the candidates whose way was also scored against the enemy waves, {x, y}
-     * @param pullX      the robot the destinations are drawn to (the gang defence), NaN if none
+     * @param candidates the candidate destinations whose way was also scored against the enemy waves (those with the
+     *                   least risk), {x, y, risk}; the lower the risk, the safer
+     * @param fears      each enemy's part of the chosen destination's risk, {x, y, share}: whom we fear there; the
+     *                   enemies' and the teammates' shares sum to 1
+     * @param mates      the teammates' share of that risk, NaN without teammates
+     * @param crowding   what our recent positions near the destination multiply its risk by, 1 or more
+     * @param pull       what the pull multiplies it by, NaN without a pull
+     * @param pullX      the robot the destinations are drawn to (the gang defence, the finisher), NaN if none
      */
-    public record MoveView(double x, double y, double[][] candidates, double[][] waved, double destinationX,
-                           double destinationY, double pullX, double pullY) {
+    public record MoveView(double x, double y, double[][] candidates, double destinationX, double destinationY,
+                           double[][] fears, double mates, double crowding, double pull, double pullX,
+                           double pullY) {
+    }
+
+    /**
+     * Who is whose closest robot, by where the robots were seen last (layer C): most melee robots fire at the robot
+     * closest to them.
+     *
+     * @param enemies each enemy and the robot closest to it, {x, y, closestX, closestY, 1 if that robot is ours
+     *                (we or a teammate) else 0}
+     * @param ours    each of our robots, {x, y, k}: the enemies whose closest robot it is
+     */
+    public record ClosestView(double[][] enemies, double[][] ours) {
+    }
+
+    /**
+     * A bullet that hit us (layer D).
+     *
+     * @param x      where it hit us
+     * @param fromX  where its shooter stood when it fired, as its wave has it; where we saw the shooter last if no wave
+     *               matched the bullet (fire detection missed the shot)
+     * @param age    turns since the hit
+     * @param closer the robots its shooter could aim at that it had closer than us when it aimed, −1 without a wave
+     */
+    public record Hit(double x, double y, double fromX, double fromY, long age, int closer) {
+    }
+
+    /**
+     * The class of a hit by the robots its shooter had closer than us ({@link Hit#closer}), the index of
+     * {@link HitsView#taken}: 0 none, 1 one or two, 2 three or more, 3 no wave matched the bullet.
+     */
+    public static int hitClass(int closer) {
+        return closer < 0 ? 3 : closer == 0 ? 0 : closer < 3 ? 1 : 2;
+    }
+
+    /**
+     * The bullets that hit us in the last turns and the round's damage, counted while we painted (layer D).
+     *
+     * @param taken the damage the enemies' bullets did us, by their shooter's view when it aimed: {we were its
+     *              closest robot, 1 or 2 robots were closer, 3 or more were closer, no wave matched the bullet}
+     * @param dealt the damage our bullets did the enemies
+     * @param duel  our energy minus the last enemy's when a melee or a team battle came down to the two of us, NaN
+     *              before
+     */
+    public record HitsView(List<Hit> hits, double[] taken, double dealt, double duel) {
     }
 
     /**
@@ -234,6 +283,8 @@ public final class Trace {
     private final List<GunView> guns = new ArrayList<>();
     private RadarView radar;
     private MoveView move;
+    private ClosestView closest;
+    private HitsView hits;
     private PositionView positions;
     private MeleeAimView meleeAim;
     private PowerView powers;
@@ -253,6 +304,8 @@ public final class Trace {
         guns.clear();
         radar = null;
         move = null;
+        closest = null;
+        hits = null;
         positions = null;
         meleeAim = null;
         powers = null;
@@ -349,6 +402,24 @@ public final class Trace {
     /** The melee movement's choice, null outside a melee or before one was traced. */
     public MoveView move() {
         return move;
+    }
+
+    public void closest(ClosestView view) {
+        closest = view;
+    }
+
+    /** Who is whose closest robot, null if not traced. */
+    public ClosestView closest() {
+        return closest;
+    }
+
+    public void hits(HitsView view) {
+        hits = view;
+    }
+
+    /** The bullets that hit us and the round's damage, null if not traced. */
+    public HitsView hits() {
+        return hits;
     }
 
     /** Our last bullet: the enemy it was fired at and the gun that aimed it ("melee" for the melee gun). */

@@ -104,8 +104,6 @@ public final class MeleeMovement {
     /** Whether {@link #command} logs its decisions ({@link #logLine}). */
     private boolean logging;
     private String logLine;
-    /** The candidates of the last {@link #choose}, {x, y, risk, kept}, and how many. */
-    private double[][] scored = new double[0][];
 
     public MeleeMovement(Field field, Random random) {
         this(field, random, MeleeMovementParameters.DEFAULT);
@@ -211,7 +209,7 @@ public final class MeleeMovement {
         destinationY = bestY;
         logLine = logging && now % HISTORY_EVERY == 0
                 ? logLine(now, x, y, heading, energy, robots, candidates, waves) : null;
-        traced = tracing ? trace(x, y, scored, n, waved) : null;
+        traced = tracing ? trace(x, y, energy, robots, waved) : null;
         return Move.to(x, y, heading, bestX, bestY);
     }
 
@@ -237,7 +235,7 @@ public final class MeleeMovement {
         pull(x, y, energy, robots);
         int n = candidates.length;
         // {x, y, risk, kept}
-        scored = new double[n][];
+        double[][] scored = new double[n][];
         for (int i = 0; i < n; i++) {
             double[] c = candidates[i];
             scored[i] = new double[] {c[0], c[1], risk(x, y, c[0], c[1], energy, robots, distances), c[2]};
@@ -305,16 +303,39 @@ public final class MeleeMovement {
         return sb.toString();
     }
 
-    private Trace.MoveView trace(double x, double y, double[][] candidates, int n, List<double[]> waved) {
-        double[][] all = new double[n][];
-        for (int i = 0; i < n; i++) {
-            all[i] = new double[] {candidates[i][0], candidates[i][1], candidates[i][2]};
+    /**
+     * The choice for the overlay: the candidates also scored against the waves, and the chosen destination's risk by
+     * robot (whom we fear there), with what the crowding and the pull multiply it by.
+     */
+    private Trace.MoveView trace(double x, double y, double energy, List<Robot> robots, List<double[]> waved) {
+        double[][] shown = new double[waved.size()][];
+        for (int i = 0; i < shown.length; i++) {
+            shown[i] = new double[] {waved.get(i)[0], waved.get(i)[1], waved.get(i)[2]};
         }
-        double[][] scored = new double[waved.size()][];
-        for (int i = 0; i < scored.length; i++) {
-            scored[i] = new double[] {waved.get(i)[0], waved.get(i)[1]};
+        double[][] distances = distances(robots);
+        double way = Angles.bearing(x, y, destinationX, destinationY);
+        double[] parts = new double[robots.size()];
+        double sum = 0;
+        int enemies = 0;
+        for (int i = 0; i < robots.size(); i++) {
+            parts[i] = part(i, way, destinationX, destinationY, energy, robots, distances);
+            sum += parts[i];
+            enemies += robots.get(i).enemy() ? 1 : 0;
         }
-        return new Trace.MoveView(x, y, all, scored, destinationX, destinationY, pullX, pullY);
+        double[][] fears = new double[enemies][];
+        double mates = enemies < robots.size() ? 0 : Double.NaN;
+        for (int i = 0, k = 0; i < robots.size(); i++) {
+            double share = sum > 0 ? parts[i] / sum : 0;
+            Robot r = robots.get(i);
+            if (r.enemy()) {
+                fears[k++] = new double[] {r.x(), r.y(), share};
+            } else {
+                mates += share;
+            }
+        }
+        return new Trace.MoveView(x, y, shown, destinationX, destinationY, fears, mates,
+                crowding(destinationX, destinationY),
+                Double.isNaN(pullX) ? Double.NaN : pulled(x, y, destinationX, destinationY), pullX, pullY);
     }
 
     /**
@@ -377,37 +398,55 @@ public final class MeleeMovement {
         double way = Angles.bearing(x, y, px, py);
         double sum = 0;
         for (int i = 0; i < robots.size(); i++) {
-            Robot e = robots.get(i);
-            double d2 = (e.x() - px) * (e.x() - px) + (e.y() - py) * (e.y() - py);
-            if (!e.enemy()) {
-                sum += parameters.teammateWeight() / Math.max(d2, 1);
-                continue;
-            }
-            int closer = 0;
-            for (int j = 0; j < robots.size(); j++) {
-                if (j != i && (parameters.closerCountsEnemies() || !robots.get(j).enemy())
-                        && distances[i][j] * distances[i][j] < d2) {
-                    closer++;
-                }
-            }
-            double threat = Math.max(parameters.minThreat(),
-                    Math.min(parameters.maxThreat(), e.energy() / Math.max(energy, 0.1)));
-            double line = Math.abs(Math.cos(way - Angles.bearing(px, py, e.x(), e.y())));
-            sum += threat * (1 + parameters.perpendicularWeight() * line)
-                    / (Math.pow(Math.max(d2, 1), parameters.distanceExponent() / 2)
-                    * Math.pow(1 + closer, parameters.closerExponent()));
+            sum += part(i, way, px, py, energy, robots, distances);
         }
+        return sum * (crowding(px, py) * pulled(x, y, px, py));
+    }
+
+    /**
+     * Robot {@code i}'s part of the risk of driving along {@code way} to ({@code px}, {@code py}), before the
+     * crowding and the pull: an enemy's threat there, or a teammate's repulsion.
+     */
+    private double part(int i, double way, double px, double py, double energy, List<Robot> robots,
+                        double[][] distances) {
+        Robot e = robots.get(i);
+        double d2 = (e.x() - px) * (e.x() - px) + (e.y() - py) * (e.y() - py);
+        if (!e.enemy()) {
+            return parameters.teammateWeight() / Math.max(d2, 1);
+        }
+        int closer = 0;
+        for (int j = 0; j < robots.size(); j++) {
+            if (j != i && (parameters.closerCountsEnemies() || !robots.get(j).enemy())
+                    && distances[i][j] * distances[i][j] < d2) {
+                closer++;
+            }
+        }
+        double threat = Math.max(parameters.minThreat(),
+                Math.min(parameters.maxThreat(), e.energy() / Math.max(energy, 0.1)));
+        double line = Math.abs(Math.cos(way - Angles.bearing(px, py, e.x(), e.y())));
+        return threat * (1 + parameters.perpendicularWeight() * line)
+                / (Math.pow(Math.max(d2, 1), parameters.distanceExponent() / 2)
+                * Math.pow(1 + closer, parameters.closerExponent()));
+    }
+
+    /** What our recent positions near ({@code px}, {@code py}) multiply its risk by: 1 and more. */
+    private double crowding(double px, double py) {
         double crowd = 1;
         for (double[] p : history) {
             double d2 = (p[0] - px) * (p[0] - px) + (p[1] - py) * (p[1] - py);
             crowd += parameters.historyWeight() / Math.max(d2, 1);
         }
-        if (!Double.isNaN(pullX)) {
-            double from = Math.max(pullFloor, Math.hypot(pullX - x, pullY - y));
-            double to = Math.max(pullFloor, Math.hypot(pullX - px, pullY - py));
-            crowd *= Math.exp(pullStrength * (to - from) / 100);
+        return crowd;
+    }
+
+    /** What the pull multiplies the risk of driving from ({@code x}, {@code y}) to ({@code px}, {@code py}) by. */
+    private double pulled(double x, double y, double px, double py) {
+        if (Double.isNaN(pullX)) {
+            return 1;
         }
-        return sum * crowd;
+        double from = Math.max(pullFloor, Math.hypot(pullX - x, pullY - y));
+        double to = Math.max(pullFloor, Math.hypot(pullX - px, pullY - py));
+        return Math.exp(pullStrength * (to - from) / 100);
     }
 
     /**

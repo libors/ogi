@@ -891,6 +891,7 @@ public class Ogi extends TeamRobot {
         waves.ourBulletEnded(e.getBullet());
         if (!isTeammate(e.getName())) {
             energy.hitByUs(e.getName(), e.getBullet().getPower(), e.getTime());
+            overlay.hitEnemy(e.getTime(), e.getBullet().getPower());
         }
     }
 
@@ -898,8 +899,9 @@ public class Ogi extends TeamRobot {
     public void onHitByBullet(HitByBulletEvent e) {
         expectedEnergy -= Rules.getBulletDamage(e.getPower());
         if (!isTeammate(e.getName())) {
-            waves.learnHit(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
-                    Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+            EnemyWaves.HitOrigin origin = waves.learnHit(e.getName(), e.getTime(), e.getBullet().getX(),
+                    e.getBullet().getY(), Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
+            overlay.hitUs(e.getTime(), e.getBullet().getX(), e.getBullet().getY(), e.getName(), e.getPower(), origin);
             energy.hitUs(e.getName(), e.getPower(), e.getTime());
             shield.hitByBullet(e.getName(), e.getTime(), e.getBullet().getX(), e.getBullet().getY(),
                     Angles.fromRobocode(e.getHeadingRadians()), e.getPower());
@@ -972,8 +974,8 @@ public class Ogi extends TeamRobot {
     @Override
     public void onPaint(Graphics2D g) {
         if (overlay != null) {
-            overlay.paint(g, getTime(), getX(), getY(), BATTLE.kind, phase(), enemiesAlive(), getName(), radarTurn,
-                    inFlight.keySet());
+            overlay.paint(g, getTime(), getX(), getY(), getEnergy(), BATTLE.kind, phase(), enemiesAlive(), getName(),
+                    radarTurn, inFlight.keySet());
         }
     }
 

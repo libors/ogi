@@ -35,6 +35,8 @@ final class EnemyWave {
     final boolean learns;
     /** In a melee, the chance that the shooter aimed at us (as {@link EnemyWaves} estimates it); 1 in a duel. */
     double aimedAtUs = 1;
+    /** The robots the shooter could aim at that it had closer than us when it aimed, which {@link #aimedAtUs} is of. */
+    int closer;
 
     EnemyWave(Wave wave, HitRange range, int direction, double[] features, DangerModel.Prediction prediction,
               boolean learns) {

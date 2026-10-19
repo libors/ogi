@@ -36,9 +36,10 @@ import java.util.TreeSet;
 /**
  * What the debug overlay shows (bot.md "Debug overlay"), gathered for one round: the components describe themselves
  * into a {@link Trace}, this adds what only the robot knows (our special states, our bullets and their plans, the
- * melee gun's last aim, the numbers beside each enemy) and keeps the overlay's own state, and {@link Overlay} paints
- * it. Robocode paints only while painting is on for this robot in the GUI, before the robot acts: what is fed only
- * {@link #painting} costs a battle without the GUI nothing.
+ * melee gun's last aim, the numbers beside each enemy, who is whose closest robot, the hits on us and the round's
+ * damage) and keeps the overlay's own state, and {@link Overlay} paints it. Robocode paints only while painting is
+ * on for this robot in the GUI, before the robot acts: what is fed only {@link #painting} costs a battle without the
+ * GUI nothing.
  */
 final class OverlayFeed {
 
@@ -80,6 +81,18 @@ final class OverlayFeed {
     private final Map<String, Long> paintingTeammates = new HashMap<>();
     /** Our team's size, 0 outside a team. */
     private int members;
+    /** The bullets that hit us while we painted, the newest last (layer D). */
+    private final List<HitMark> hits = new ArrayList<>();
+    /** This round's damage taken while we painted, by the shooter's view ({@link Trace.HitsView#taken}). */
+    private final double[] taken = new double[4];
+    /** This round's damage our bullets did the enemies while we painted. */
+    private double dealt;
+    /** Our energy minus the last enemy's when a melee or a team battle came down to the two of us; NaN before. */
+    private double duel = Double.NaN;
+
+    /** A bullet that hit us in turn {@code time}, fired from ({@code fromX}, {@code fromY}). */
+    private record HitMark(long time, double x, double y, double fromX, double fromY, int closer) {
+    }
 
     OverlayFeed(Field field, World world, VirtualGuns guns, MeleeGun meleeGun, MeleeMovement meleeMovement,
                 EnemyWaves waves, TeamRadar teamRadar, HitRates hitRates) {
@@ -155,6 +168,33 @@ final class OverlayFeed {
         }
     }
 
+    /**
+     * An enemy's bullet of {@code power} hit us at ({@code x}, {@code y}) in turn {@code time}, fired from
+     * {@code origin}, null if no wave matched it; kept if we painted in the turn before.
+     */
+    void hitUs(long time, double x, double y, String shooter, double power, EnemyWaves.HitOrigin origin) {
+        if (paintedAt < time - 1) {
+            return;
+        }
+        HitMark hit;
+        if (origin != null) {
+            hit = new HitMark(time, x, y, origin.x(), origin.y(), origin.closer());
+        } else {
+            // Fire detection missed the shot: the line goes to where we saw the shooter last.
+            double[] seen = world.enemy(shooter).map(e -> new double[] {e.x(), e.y()}).orElse(new double[] {x, y});
+            hit = new HitMark(time, x, y, seen[0], seen[1], -1);
+        }
+        hits.add(hit);
+        taken[Trace.hitClass(hit.closer())] += Rules.getBulletDamage(power);
+    }
+
+    /** Our bullet of {@code power} hit an enemy in turn {@code time}; counted if we painted in the turn before. */
+    void hitEnemy(long time, double power) {
+        if (paintedAt >= time - 1) {
+            dealt += Rules.getBulletDamage(power);
+        }
+    }
+
     /** A teammate's bullet reported in turn {@code time}, kept if we painted in the turn before. */
     void teamShot(TeamShot shot, long time) {
         if (paintedAt >= time - 1) {
@@ -163,11 +203,11 @@ final class OverlayFeed {
     }
 
     /**
-     * Paints the overlay of turn {@code now}, before the robot acts: our position ({@code x}, {@code y}), the radar's
-     * last turn and our bullets in flight.
+     * Paints the overlay of turn {@code now}, before the robot acts: our position ({@code x}, {@code y}) and energy,
+     * the radar's last turn and our bullets in flight.
      */
-    void paint(Graphics2D g, long now, double x, double y, BattleKind kind, Phase phase, int enemies, String me,
-               double radarTurn, Collection<Bullet> ourBullets) {
+    void paint(Graphics2D g, long now, double x, double y, double energy, BattleKind kind, Phase phase, int enemies,
+               String me, double radarTurn, Collection<Bullet> ourBullets) {
         paintedAt = now;
         Overlay.battle(kind);
         Overlay.duel(enemies == 1);
@@ -193,6 +233,13 @@ final class OverlayFeed {
         }
         trace.powers(powerView(now, ourBullets));
         trace.info(infoView(now, phase));
+        trace.closest(closestView(now, x, y));
+        if (Double.isNaN(duel) && kind != BattleKind.DUEL && phase == Phase.DUEL) {
+            for (EnemyState e : world.enemies()) {
+                duel = energy - e.energy();
+            }
+        }
+        trace.hits(hitsView(now));
         trace.states(stateView(x, y, phase, radarTurn));
         if (members > 0) {
             trace.painters(paintersView(now, me));
@@ -241,17 +288,69 @@ final class OverlayFeed {
 
     /**
      * Beside each enemy: the turns until its gun is cool, our hit rate on it, its on us and the age of our side's last
-     * scan of it.
+     * scan of it. Not its hit rate on us in a team: it would be its hits on this robot over its shots at anyone.
      */
     private Trace.InfoView infoView(long now, Phase phase) {
         List<Trace.EnemyInfo> enemies = new ArrayList<>();
         for (EnemyState e : world.enemies()) {
             // The scan's age with two enemies or more: a duel's radar locks.
             enemies.add(new Trace.EnemyInfo(e.x(), e.y(), waves.coolIn(e.name(), now),
-                    hitRates.rate(e.name(), INFO_MIN_BULLETS), waves.hitsOnUsPerShot(e.name(), INFO_MIN_BULLETS),
+                    hitRates.rate(e.name(), INFO_MIN_BULLETS),
+                    members > 0 ? Double.NaN : waves.hitsOnUsPerShot(e.name(), INFO_MIN_BULLETS),
                     phase == Phase.MELEE ? now - e.time() : -1));
         }
         return new Trace.InfoView(enemies);
+    }
+
+    /**
+     * Who is whose closest robot, where the robots were seen last: in a melee among all robots, in a team battle among
+     * ours only (an enemy does not fire at its teammates).
+     */
+    private Trace.ClosestView closestView(long now, double x, double y) {
+        List<double[]> ours = new ArrayList<>();
+        ours.add(new double[] {x, y, 0});
+        for (World.Teammate t : world.recentTeammates(now, Ogi.MAX_TEAMMATE_AGE)) {
+            ours.add(new double[] {t.x(), t.y(), 0});
+        }
+        List<EnemyState> enemies = new ArrayList<>(world.enemies());
+        double[][] lines = new double[enemies.size()][];
+        for (int i = 0; i < enemies.size(); i++) {
+            EnemyState e = enemies.get(i);
+            double[] closest = null;
+            double best = Double.POSITIVE_INFINITY;
+            for (double[] o : ours) {
+                double d = Math.hypot(o[0] - e.x(), o[1] - e.y());
+                if (d < best) {
+                    best = d;
+                    closest = o;
+                }
+            }
+            boolean ourRobot = true;
+            for (int j = 0; j < enemies.size() && members == 0; j++) {
+                EnemyState other = enemies.get(j);
+                double d = Math.hypot(other.x() - e.x(), other.y() - e.y());
+                if (j != i && d < best) {
+                    best = d;
+                    closest = new double[] {other.x(), other.y()};
+                    ourRobot = false;
+                }
+            }
+            if (ourRobot) {
+                closest[2]++;
+            }
+            lines[i] = new double[] {e.x(), e.y(), closest[0], closest[1], ourRobot ? 1 : 0};
+        }
+        return new Trace.ClosestView(lines, ours.toArray(new double[0][]));
+    }
+
+    /** The bullets that hit us in the last {@link Overlay#HIT_TURNS} turns, and the round's damage. */
+    private Trace.HitsView hitsView(long now) {
+        hits.removeIf(h -> now - h.time() >= Overlay.HIT_TURNS);
+        List<Trace.Hit> shown = new ArrayList<>();
+        for (HitMark h : hits) {
+            shown.add(new Trace.Hit(h.x(), h.y(), h.fromX(), h.fromY(), now - h.time(), h.closer()));
+        }
+        return new Trace.HitsView(shown, taken.clone(), dealt, duel);
     }
 
     /**

@@ -17,7 +17,7 @@ import java.util.Locale;
 /**
  * Paints a {@link Trace} with Robocode's robot graphics, the one place that turns the trace into pixels.
  *
- * <p>Seven layers, each switched by a key while the battle view has the focus (Robocode hands key presses to every
+ * <p>Ten layers, each switched by a key while the battle view has the focus (Robocode hands key presses to every
  * robot that overrides {@code onKeyPressed}), with a legend in the top left corner; which are shown at first depends
  * on the kind of battle ({@link #battle}):
  * <ul>
@@ -30,9 +30,11 @@ import java.util.Locale;
  *   <li><b>G, gun waves:</b> dark red arcs for our bullets, ticks of the gun's chance to hit just behind the front,
  *       the bullet itself yellow with its power beside it; the guns' records at the bottom left, the gun of our last
  *       bullet in yellow.</li>
- *   <li><b>M, movement</b> (melee and team): every candidate destination of the minimum-risk movement as a dark area
- *       coloured by its risk, blue safest to red, ringed where it was also scored against the waves; the chosen one
- *       ringed in dark orange and joined to us by a dashed line.</li>
+ *   <li><b>M, movement</b> (melee and team): the candidate destinations of the minimum-risk movement also scored
+ *       against the waves, as dark areas coloured by their risk, blue safest to red; the chosen one ringed in dark
+ *       orange and joined to us by a dashed line; a line from us to each enemy as wide as its share of the chosen
+ *       destination's risk, and below the destination the teammates' share and what the crowding and the pull
+ *       multiply it by.</li>
  *   <li><b>H, position history:</b> where we were in each of the last turns, violet dots fading with age, and the
  *       enemies' scanned positions, turquoise, fading likewise.</li>
  *   <li><b>A, melee aim:</b> the melee gun's last aim: the predicted positions of every enemy where the bullet
@@ -47,13 +49,19 @@ import java.util.Locale;
  *   <li><b>R, team radar:</b> each of our robots in a colour of its own, with the arc its radar sweeps over the enemies
  *       the team's plan gives it, a line to each of them and a short one where its radar points. No rings: they hid
  *       the robots.</li>
+ *   <li><b>C, closest robots</b> (melee and team): a line from each enemy to the robot closest to it, red to ours,
+ *       faint to another enemy, and left of each of our robots how many enemies it is the closest robot of.</li>
+ *   <li><b>D, hits on us:</b> where each bullet hit us in the last turns, with a line back to where it was fired
+ *       from, coloured by how many robots its shooter had closer than us; at the top right the round's damage taken by
+ *       the same classes, dealt, and our energy lead when the round came down to a duel.</li>
  * </ul>
  *
  * <p>In a team battle every robot whose painting is enabled paints, so what is the same on every robot (the team
- * radar, the bullet powers, the column beside each enemy, the enemies' position history) is drawn by one of them only:
- * the painting robot with the lowest member number whose own layers are on, which also draws its gun panel (headed
- * by its number). Keys 1 to 9 switch a member's own layers (its waves, movement, melee aim, trail and states), 0
- * switches all of them on, or off when all were on.
+ * radar, the bullet powers, the column beside each enemy, the enemies' position history, the closest robots) is drawn
+ * by one of them only: the painting robot with the lowest member number whose own layers are on, which also draws its
+ * gun panel (headed by its number). Keys 1 to 9 switch a member's own layers (its waves, movement, melee aim, trail,
+ * states and the hits on it, whose damage it writes in a row of its own), 0 switches all of them on, or off when all
+ * were on.
  * Below the legend the painting robots' numbers, green while their own layers are on and red while off; the legend is
  * drawn by the painting robot with the lowest number.
  *
@@ -90,6 +98,30 @@ public final class Overlay {
     private static final Color RISKY_AREA = new Color(76, 16, 16);
     private static final double AREA_RADIUS = 8;
     private static final Color DESTINATION = new Color(200, 100, 20);
+    /**
+     * Whom the movement fears: a line to each enemy, 1 px plus this many for a share of 1 of the chosen destination's
+     * risk, drawn from this share on and labelled from the next.
+     */
+    private static final Color FEAR = new Color(255, 190, 90, 80);
+    private static final Color FEAR_TEXT = new Color(230, 175, 90);
+    private static final double FEAR_WIDTH = 8;
+    private static final double MIN_FEAR = 0.02;
+    private static final double FEAR_LABEL = 0.1;
+    /** A line from an enemy to the robot closest to it (layer C): red to ours, faint to another enemy. */
+    private static final Color CLOSEST_OURS = new Color(255, 70, 70, 190);
+    private static final Color CLOSEST_OTHER = new Color(150, 150, 150, 60);
+    /** The enemies whose closest robot ours is stand this far left of its centre (layer C). */
+    private static final double CLOSEST_LABEL = 30;
+    /**
+     * The hits on us (layer D) by their shooter's view when it aimed ({@link Trace#hitClass}): we were its closest
+     * robot (red, as layer C's lines to us), 1 or 2 robots were closer, 3 or more, no wave matched (dashed).
+     */
+    private static final Color[] HIT_CLASSES = {new Color(255, 60, 60), new Color(255, 165, 40),
+            new Color(230, 80, 255), new Color(200, 200, 200)};
+    private static final String[] HIT_CLASS_NAMES = {"closest", "1-2 closer", "3+ closer", "unseen"};
+    /** A hit stays on the overlay this many turns, fading. */
+    public static final int HIT_TURNS = 100;
+    private static final double HIT_CROSS = 5;
     private static final BasicStroke DASHED = new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
             10f, new float[] {6f, 5f}, 0f);
     private static final Color OUR_TRAIL = new Color(170, 90, 255);
@@ -160,9 +192,9 @@ public final class Overlay {
      * The layers: their keys, names, whether each is offered in this battle's kind and whether it is shown (statics
      * last for the battle).
      */
-    private static final char[] KEYS = {'e', 'g', 'm', 'r', 'h', 'a', 'b', 'i'};
+    private static final char[] KEYS = {'e', 'g', 'm', 'r', 'h', 'a', 'b', 'i', 'c', 'd'};
     private static final String[] NAMES = {"enemy waves", "gun waves", "movement", "team radar", "position history",
-            "melee aim", "bullet powers", "info"};
+            "melee aim", "bullet powers", "info", "closest robots", "hits on us"};
     private static final boolean[] SHOWN = new boolean[KEYS.length];
     private static final boolean[] OFFERED = new boolean[KEYS.length];
     private static final int ENEMY_WAVES = 0;
@@ -173,6 +205,8 @@ public final class Overlay {
     private static final int MELEE_AIM = 5;
     private static final int POWERS = 6;
     private static final int INFO = 7;
+    private static final int CLOSEST = 8;
+    private static final int HITS = 9;
     /** The kind of this battle, set at its first paint; null before. */
     private static BattleKind kind;
     /** Our team's size, 0 outside a team; set every round, painting or not. */
@@ -189,10 +223,11 @@ public final class Overlay {
     }
 
     /**
-     * The layers offered and shown when a battle's painting starts. A duel offers neither the movement, the melee aim
-     * nor the team radar, a melee not the team radar. Shown: in a duel both kinds of waves; in a melee the movement and
-     * the melee aim, and in a team battle the radar, where the waves of all robots would cover each other; the position
-     * history, the bullet powers and the enemy info in every kind. Keys change them afterwards.
+     * The layers offered and shown when a battle's painting starts. A duel offers neither the movement, the melee aim,
+     * the closest robots nor the team radar, a melee not the team radar. Shown: in a duel both kinds of waves; in a
+     * melee the movement and the melee aim, and in a team battle the radar, where the waves of all robots would cover
+     * each other; in both the closest robots and the hits on us; the position history, the bullet powers and the enemy
+     * info in every kind. Keys change them afterwards.
      */
     public static void battle(BattleKind battleKind) {
         if (kind != null) {
@@ -203,6 +238,7 @@ public final class Overlay {
         OFFERED[MOVE] = kind != BattleKind.DUEL;
         OFFERED[MELEE_AIM] = kind != BattleKind.DUEL;
         OFFERED[RADAR] = kind == BattleKind.TEAM;
+        OFFERED[CLOSEST] = kind != BattleKind.DUEL;
         SHOWN[ENEMY_WAVES] = kind == BattleKind.DUEL;
         SHOWN[GUN_WAVES] = kind == BattleKind.DUEL;
         SHOWN[MOVE] = kind == BattleKind.MELEE;
@@ -211,6 +247,8 @@ public final class Overlay {
         SHOWN[MELEE_AIM] = kind == BattleKind.MELEE;
         SHOWN[POWERS] = true;
         SHOWN[INFO] = true;
+        SHOWN[CLOSEST] = kind != BattleKind.DUEL;
+        SHOWN[HITS] = kind != BattleKind.DUEL;
     }
 
     /**
@@ -310,12 +348,18 @@ public final class Overlay {
                 paintTrail(g, positions.ours(), OUR_TRAIL);
             }
         }
+        if (roles.shared() && SHOWN[CLOSEST] && trace.closest() != null) {
+            paintClosest(g, trace.closest());
+        }
         if (roles.shared() && SHOWN[RADAR] && trace.radar() != null) {
             paintRadar(g, trace.radar());
         }
         if (roles.own()) {
             if (SHOWN[MOVE] && trace.move() != null) {
                 paintMove(g, trace.move());
+            }
+            if (SHOWN[HITS] && trace.hits() != null) {
+                paintHits(g, trace);
             }
             if (SHOWN[MELEE_AIM] && trace.meleeAim() != null) {
                 paintMeleeAim(g, trace.meleeAim());
@@ -483,11 +527,27 @@ public final class Overlay {
     }
 
     /**
-     * The melee movement: our recent positions (grey), every candidate destination coloured by its risk on a log
-     * scale (blue safest to red), a ring round those also scored against the waves, the chosen one ringed and joined
-     * to us, and a line to the robot the gang defence draws us to.
+     * The melee movement: a line from us to each enemy as wide as its share of the chosen destination's risk (whom we
+     * fear there, labelled from {@link #FEAR_LABEL}), the candidates also scored against the waves coloured by their
+     * risk on a log scale (blue safest to red), the chosen one ringed and joined to us, below it the teammates' share
+     * of its risk and what the crowding and the pull multiply it by, and a line to the robot the pull draws us to.
      */
     private static void paintMove(Graphics2D g, Trace.MoveView m) {
+        for (double[] f : m.fears()) {
+            if (f[2] < MIN_FEAR) {
+                continue;
+            }
+            g.setColor(FEAR);
+            g.setStroke(new BasicStroke((float) (1 + FEAR_WIDTH * f[2]), BasicStroke.CAP_BUTT,
+                    BasicStroke.JOIN_MITER));
+            g.draw(new Line2D.Double(m.x(), m.y(), f[0], f[1]));
+            if (f[2] >= FEAR_LABEL) {
+                g.setColor(FEAR_TEXT);
+                g.drawString(Math.round(100 * f[2]) + "%", (float) (m.x() + 0.6 * (f[0] - m.x()) + 6),
+                        (float) (m.y() + 0.6 * (f[1] - m.y()) + 4));
+            }
+        }
+        g.setStroke(new BasicStroke(1f));
         double[][] c = m.candidates();
         double[] logs = new double[c.length];
         for (int i = 0; i < c.length; i++) {
@@ -497,12 +557,6 @@ public final class Overlay {
         for (int i = 0; i < c.length; i++) {
             g.setColor(blend(SAFE_AREA, RISKY_AREA, shares[i]));
             dot(g, c[i][0], c[i][1], AREA_RADIUS);
-        }
-        g.setColor(WAVED);
-        g.setStroke(new BasicStroke(1f));
-        for (double[] p : m.waved()) {
-            g.draw(new Ellipse2D.Double(p[0] - AREA_RADIUS - 2, p[1] - AREA_RADIUS - 2, 2 * AREA_RADIUS + 4,
-                    2 * AREA_RADIUS + 4));
         }
         if (!Double.isNaN(m.pullX())) {
             g.setColor(PULL);
@@ -516,6 +570,91 @@ public final class Overlay {
             g.draw(new Ellipse2D.Double(m.destinationX() - AREA_RADIUS - 3, m.destinationY() - AREA_RADIUS - 3,
                     2 * AREA_RADIUS + 6, 2 * AREA_RADIUS + 6));
             g.setStroke(new BasicStroke(1f));
+            StringBuilder text = new StringBuilder();
+            if (!Double.isNaN(m.mates())) {
+                text.append("mates ").append(Math.round(100 * m.mates())).append("%  ");
+            }
+            text.append(String.format(Locale.ROOT, "crowd \u00d7%.2f", m.crowding()));
+            if (!Double.isNaN(m.pull())) {
+                text.append(String.format(Locale.ROOT, "  pull \u00d7%.2f", m.pull()));
+            }
+            String line = text.toString();
+            g.setColor(GUN_TEXT);
+            g.drawString(line, (float) (m.destinationX() - g.getFontMetrics().stringWidth(line) / 2.0),
+                    (float) (m.destinationY() - AREA_RADIUS - 18));
+        }
+    }
+
+    /**
+     * From each enemy a line to the robot closest to it, red to ours and faint to another enemy, and left of each of
+     * our robots how many enemies it is the closest robot of ("k2", red from 1).
+     */
+    private static void paintClosest(Graphics2D g, Trace.ClosestView v) {
+        g.setStroke(new BasicStroke(1.2f));
+        for (double[] e : v.enemies()) {
+            g.setColor(e[4] > 0 ? CLOSEST_OURS : CLOSEST_OTHER);
+            g.draw(new Line2D.Double(e[0], e[1], e[2], e[3]));
+        }
+        g.setStroke(new BasicStroke(1f));
+        for (double[] o : v.ours()) {
+            String k = "k" + (int) o[2];
+            g.setColor(o[2] > 0 ? HIT_CLASSES[0] : STATE_TEXT);
+            g.drawString(k, (float) (o[0] - CLOSEST_LABEL - g.getFontMetrics().stringWidth(k)), (float) (o[1] - 4));
+        }
+    }
+
+    /**
+     * The bullets that hit us in the last {@link #HIT_TURNS} turns, fading: a cross where each hit, a line back to a
+     * ring where it was fired from, in the colour of its shooter's view ({@link #HIT_CLASSES}); and in the top right
+     * corner, one row per robot of our team, the round's damage taken by the same classes, dealt, and our energy lead
+     * when the round came down to a duel.
+     */
+    private static void paintHits(Graphics2D g, Trace trace) {
+        Trace.HitsView v = trace.hits();
+        for (Trace.Hit h : v.hits()) {
+            int alpha = (int) Math.round(230 * (1 - (double) h.age() / HIT_TURNS));
+            if (alpha <= 0) {
+                continue;
+            }
+            g.setColor(withAlpha(HIT_CLASSES[Trace.hitClass(h.closer())], alpha));
+            g.setStroke(h.closer() < 0 ? DASHED : new BasicStroke(1.5f));
+            g.draw(new Line2D.Double(h.x(), h.y(), h.fromX(), h.fromY()));
+            g.setStroke(new BasicStroke(1f));
+            g.draw(new Ellipse2D.Double(h.fromX() - 4, h.fromY() - 4, 8, 8));
+            g.setStroke(new BasicStroke(2f));
+            g.draw(new Line2D.Double(h.x() - HIT_CROSS, h.y() - HIT_CROSS, h.x() + HIT_CROSS, h.y() + HIT_CROSS));
+            g.draw(new Line2D.Double(h.x() - HIT_CROSS, h.y() + HIT_CROSS, h.x() + HIT_CROSS, h.y() - HIT_CROSS));
+        }
+        g.setStroke(new BasicStroke(1f));
+        List<String> parts = new ArrayList<>();
+        List<Color> colors = new ArrayList<>();
+        int member = trace.painters() == null ? 1 : trace.painters().me();
+        if (trace.painters() != null) {
+            parts.add("robot " + member + "  ");
+            colors.add(TEXT);
+        }
+        parts.add("taken");
+        colors.add(GUN_TEXT);
+        for (int i = 0; i < HIT_CLASS_NAMES.length; i++) {
+            parts.add(String.format(Locale.ROOT, "  %s %.0f", HIT_CLASS_NAMES[i], v.taken()[i]));
+            colors.add(HIT_CLASSES[i]);
+        }
+        parts.add(String.format(Locale.ROOT, "   dealt %.0f", v.dealt()));
+        colors.add(OUR_RATE);
+        if (!Double.isNaN(v.duel())) {
+            parts.add(String.format(Locale.ROOT, "   duel %+.0f", v.duel()));
+            colors.add(TEXT);
+        }
+        float width = 0;
+        for (String p : parts) {
+            width += g.getFontMetrics().stringWidth(p);
+        }
+        float x = (float) (trace.fieldWidth() - 10 - width);
+        float y = (float) (trace.fieldHeight() - 20 - 14 * (member - 1));
+        for (int i = 0; i < parts.size(); i++) {
+            g.setColor(colors.get(i));
+            g.drawString(parts.get(i), x, y);
+            x += g.getFontMetrics().stringWidth(parts.get(i));
         }
     }
 

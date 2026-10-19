@@ -2,6 +2,8 @@ package cz.libors.ogi.move;
 
 import cz.libors.ogi.geom.Field;
 import cz.libors.ogi.move.MeleeMovement.Robot;
+import cz.libors.ogi.physics.EngineRobot;
+import cz.libors.ogi.trace.Trace;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -33,6 +35,30 @@ class MeleeMovementTest {
         double exposed = m.risk(400, 200, 500, 200, 100, alone, new double[][] {{0}});
         double shielded = m.risk(400, 200, 500, 200, 100, covered, new double[][] {{0, 290}, {290, 0}});
         assertTrue(shielded < exposed, shielded + " with a closer robot against " + exposed + " without");
+    }
+
+    @Test
+    void theTracedChoiceShowsTheWavedCandidatesAndSplitsTheDestinationsRiskByRobot() {
+        MeleeMovement m = new MeleeMovement(FIELD, new Random(1));
+        m.tracing(true);
+        List<Robot> robots = List.of(new Robot(650, 500, 100, true), new Robot(900, 900, 100, true),
+                new Robot(300, 500, 0, false));
+        EngineRobot me = new EngineRobot();
+        me.x = 500;
+        me.y = 500;
+        m.command(0, 500, 500, 0, 100, robots, new EnemyWaves(FIELD, 0.1), me);
+        Trace.MoveView v = m.traced();
+        assertEquals(MeleeMovementParameters.DEFAULT.waveCandidates(), v.candidates().length);
+        assertArrayEquals(m.destination(), new double[] {v.destinationX(), v.destinationY()});
+        double sum = v.mates();
+        for (double[] f : v.fears()) {
+            sum += f[2];
+        }
+        assertEquals(1, sum, 1e-12);
+        assertEquals(2, v.fears().length);
+        assertTrue(v.fears()[0][2] > v.fears()[1][2], "the near enemy weighs more");
+        assertTrue(v.crowding() > 1, "our position of this turn is in the history");
+        assertTrue(Double.isNaN(v.pull()));
     }
 
     @Test

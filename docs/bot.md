@@ -636,15 +636,17 @@ become predictable to the last bits; anything that makes us move spoils that.
 - **`Trace`** holds what the bot decided this turn, as consumers see it; the gun, the surfer, the team radar and
   `ShotTrails` describe themselves into it, and `OverlayFeed` (in `cz.libors`) adds what only the robot knows: our
   special states (`Trace.State`), our bullets and their plans, the melee gun's last aim, the numbers beside each
-  enemy. **`Overlay`** is the one place that paints it.
+  enemy, who is whose closest robot, the hits on us and the round's damage. **`Overlay`** is the one place that paints
+  it.
 - **Robocode mirrors robot graphics** to battlefield coordinates (y up), so points in the mathematical convention are
   drawn as they are; arcs are polylines, never `Arc2D`.
 - **Layers**, each switched by its key while the battle view has the focus, listed in the top left corner (green
   shown, red hidden; the choice lasts for the battle). The battle's kind comes from its first round's start
-  (`BattleKind`): a duel offers neither the movement, the melee aim nor the team radar, a melee not the team radar;
-  a layer not offered is not listed and its key does nothing. At the battle's first paint a duel shows both kinds of
-  waves, a melee the movement and the melee aim, a team battle the radar (there the waves of all robots cover each
-  other); the position history, the bullet powers and the enemy info show in every kind. Once a melee's or a team
+  (`BattleKind`): a duel offers neither the movement, the melee aim, the closest robots nor the team radar, a melee
+  not the team radar; a layer not offered is not listed and its key does nothing. At the battle's first paint a duel
+  shows both kinds of waves, a melee the movement and the melee aim, a team battle the radar (there the waves of all
+  robots cover each other), both the closest robots and the hits on us; the position history, the bullet powers and
+  the enemy info show in every kind. Once a melee's or a team
   battle's round is down to one enemy it is a duel (the duel's guns aim and, in a melee, the surfer moves): both
   kinds of waves with the gun panel show, the melee aim and, in a melee, the movement hide, until the next round
   brings back what was shown before (`Overlay.duel`). The line from a
@@ -676,10 +678,15 @@ become predictable to the last bits; anything that makes us move spoils that.
     count in the column's head), by which the anti-surfer and random guns replace the chosen gun against a target that
     is hard to hit (`GunModel.choose`); the rate that decides a gun's place is the brighter one. Then the melee gun's
     bullets' hit rate on any enemy over the battle; the gun that aimed our last bullet in yellow.
-  - **M, movement** (melee and team battles): `MeleeMovement`'s last choice. Every candidate destination as a dark
-    area coloured by its risk on a log scale against the others (dark blue safest to dark red), unlike the bright dots
-    of the waves; a grey ring round the candidates also scored against the waves, the chosen destination ringed in
-    dark orange and joined to us by a dashed line, and a violet line to the robot the gang defence draws us to.
+  - **M, movement** (melee and team battles): `MeleeMovement`'s last choice. The candidate destinations also scored
+    against the waves (the 8 with the least risk) as dark areas coloured by their risk on a log scale against each
+    other (dark blue safest to dark red), unlike the bright dots of the waves; the chosen destination ringed in dark
+    orange and joined to us by a dashed line, and a violet line to the robot the pull draws us to (the gang defence,
+    the finisher). Whom the movement fears: from us to each enemy a translucent amber line, 1 px plus 8 px times that
+    enemy's share of the chosen destination's risk (the risk is a sum over the robots, `MeleeMovement.part`), from a
+    share of 2 % on, with the share as a number from 10 % on; below the destination in grey the teammates' share of
+    its risk ("mates 12%", in a team), what our recent positions near it multiply it by ("crowd ×1.40") and what the
+    pull multiplies it by ("pull ×0.82", while one draws us).
   - **H, position history:** where we were at the end of each of the last 80 turns, violet dots fading with age
     (`PositionTrails`), and every enemy at each of its scans (ours or a teammate's) in the last 80 turns, turquoise
     dots fading likewise.
@@ -696,7 +703,9 @@ become predictable to the last bits; anything that makes us move spoils that.
   - **I, info** (shown in every kind), in the column beside each enemy below its last power: the turns until its
     gun is cool by fire detection's model of its gun heat, "7t" (`FireDetector.coolIn`; bright red when it can fire);
     in yellow, behind an arrow to the left, its hit rate on us: its shots over the battle that hit us, those ours shot
-    down left out (in a melee or a team its shots are aimed at anyone, and robots of one type share the record); in
+    down left out (in a melee its shots are aimed at anyone, and robots of one type share the record; not in a team,
+    where it would be its hits on the painting robot alone over its shots at anyone, about a fifth of its real rate);
+    in
     green, behind an arrow to the right, ours on it: the share of our bullets aimed at it over the battle that hit it,
     each rate from 5 shots on; with two enemies or more alive, the turns since our side (we or a teammate) last
     scanned it, "r1" (red from 3; a duel's radar locks). The arrows are drawn: Robocode draws a robot's text upright
@@ -720,20 +729,37 @@ become predictable to the last bits; anything that makes us move spoils that.
     (the scan's age in layer I). The plan painted is the one the robot made in the last turn (`onPaint` runs before
     the robot acts), so the lines start where our teammates were a turn ago; only the painting robot's own report
     already gives its current position.
+  - **C, closest robots** (melee and team battles): from each enemy a line to the robot closest to it where the robots
+    were seen last, red to ours (we or a teammate), faint grey to another enemy; in a team battle only our robots
+    count (an enemy does not fire at its teammates). Left of each of our robots, "k2": how many enemies it is the
+    closest robot of, red from 1. Most melee robots fire at the robot closest to them, so it is a guess at who aims at
+    whom.
+  - **D, hits on us** (offered in every kind, shown at a melee's or a team battle's start): each enemy bullet that hit
+    us in the last 100 turns, fading: a cross where it hit and a line back to a ring where it was fired from, as its
+    wave has it (`EnemyWaves.learnHit` returns `HitOrigin`). Coloured by the robots its shooter could aim at that it had
+    closer than us when it aimed (as `EnemyWaves` counts them for the aim chance; in a team our teammates): red none
+    (we were its closest robot, as layer C's lines to us), orange 1 or 2, violet 3 or more (the movement takes such a
+    shooter for nearly harmless); dashed light grey when no wave matched the bullet (fire detection missed the shot),
+    to where we saw the shooter last. In the top right corner, one row per robot of our team (its member number in
+    front), this round's damage taken by the same four classes ("closest", "1-2 closer", "3+ closer", "unseen"), the
+    damage our bullets dealt the enemies, and, once a melee or a team battle came down to us and one enemy, our energy
+    minus its at its last scan in the first painted turn of it ("duel -22"; it stays for the round). The hits and the
+    damage are counted only while the robot paints.
 - **In a team battle** every robot whose painting is enabled paints, so what is the same on every robot is drawn
-  once: the team radar (R), the bullet powers (B), the column beside each enemy (I) and the enemies' position history
-  (H) by the painting robot with the lowest member number whose own layers are on, which also draws its gun panel
-  (G, headed "robot n": the panel stands in one place; to see another robot's, switch the lower ones off). Its own
-  layers each painting robot draws while they are on: its waves (E, G), its movement (M), its melee aim (A), its own
-  trail (H) and its states (I). Keys **1** to **9** switch a member's own layers, **0** switches all of them on, or off when all were
+  once: the team radar (R), the bullet powers (B), the column beside each enemy (I), the enemies' position history
+  (H) and the closest robots (C) by the painting robot with the lowest member number whose own layers are on, which
+  also draws its gun panel (G, headed "robot n": the panel stands in one place; to see another robot's, switch the
+  lower ones off). Its own layers each painting robot draws while they are on: its waves (E, G), its movement (M), its
+  melee aim (A), its own trail (H), its states (I) and the hits on it with its row of damage (D). Keys **1** to **9** switch a member's own layers, **0** switches all of them on, or off when all were
   on (so that it never leaves them mixed). Below the legend a row lists the painting robots alive by their member
   number, each in its place (`1 2 3   5` while 4 is dead or does not paint), green while its own layers are on and red
   while off; the legend is drawn by the painting robot with the lowest number. Every robot gets the keys, painting or
   not (`Battle.SendInteractiveEventCommand` sends them to every interactive robot), so all keep the same switches; whether
   a teammate paints comes in its state (`TeammateState.painted`), a turn late (engine-model G-23), so a teammate counts
   while its report of this turn or the last said so.
-- **Only while painting:** the shots and positions are traced, and the melee gun and the movement keep their
-  candidates, only in the turns whose `onPaint` ran, so a battle without the GUI computes nothing more and replays as before.
+- **Only while painting:** the shots, positions and hits are traced, and the melee gun and the movement keep their
+  candidates, only in the turns whose `onPaint` ran (a hit or a bullet of ours that hit in the turn after one), so a
+  battle without the GUI computes nothing more and replays as before.
 - **Colours:** Ogi is white with an orange radar and scan arc and fires yellow bullets, to be found among the robots
   of a team battle.
 - **To see it:** start the GUI (`cd .robocode/1.11.1 && ./robocode.sh`), run a battle with `cz.libors.Ogi`, open its
