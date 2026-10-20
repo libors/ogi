@@ -13,6 +13,9 @@ packaged as `cz.libors.OgiTeam` plays in teams.
   requires bit-identical results. It must stay green.
 - `./gradlew sandboxCheck`: proves that robots run in Robocode's sandbox with a minimal environment. It must stay
   green.
+- `./gradlew release -Prelease=v<n>` and `./gradlew releaseCheck -Prelease=v<n>`: the rumble jar of a release from its
+  git tag into `bot/build/release/` (one team jar for all three rumbles), and its check as a rumble client takes it
+  (`docs/build-and-run.md`, "Releases").
 - `./gradlew jarCheck -Pjars=<jar or directory>`: checks a foreign robot jar against the API allowlist before it
   runs.
 - `./gradlew compare -Pbaseline=HEAD`: paired, sequential comparison of the working tree with a baseline revision

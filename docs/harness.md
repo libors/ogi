@@ -13,6 +13,7 @@ results. Every score claim about the bot must come from here.
 | `Starts` | Fixed starts drawn from a seed, and their engine string |
 | `ContestantResult` | Score components per contestant: total, survival, last survivor bonus, bullet damage and bonus, ram damage and bonus, firsts |
 | `SkeletonCheck` | Runs a fixed set of checks and writes `harness/build/skeleton-check.json` |
+| `ReleaseCheck` | A release jar through the rumble client's own jar check, then the skeleton check under the participants' names; see [Release check](#release-check) |
 | `ProbeRecordings` | Records probe battles and checks their integrity, coverage and determinism; see [Recordings](#recordings) |
 | `StrandedThreadCheck` | Part of `recordProbes`, in a JVM of its own without debug mode: a robot thread that stops calling the API outlives its battle (engine-model G-48) |
 | `SkippedTurnCheck` | Part of `recordProbes`, in a JVM of its own without debug mode: the events a skipped turn clears and those it does not (engine-model G-50) |
@@ -256,6 +257,21 @@ CPU constant and at most 0.05 % longer than all of it; Ogi has 0–5 over half p
 turn of 2.1 ms against a 2.0 ms constant (a garbage collection or the JIT), and an Ogi that spends 1.2 ms per turn
 fails every battle without a single skipped turn. The process exits non-zero on any failure.
 
+## Release check
+
+`./gradlew releaseCheck -Prelease=v<n>` builds the release jar (`release`,
+[build-and-run.md](build-and-run.md#releases)) and checks it as a rumble client takes it:
+1. **The client's jar check.** `BotsDownload.checkJarFile` of the installed `roborumble.jar`, called by reflection,
+   must accept the jar for both participant lines, `cz.libors.Ogi v<n>` (1v1 and melee) and `cz.libors.OgiTeam v<n>`
+   (teams), and reject it for a wrong version.
+2. **The skeleton check under those names.** A client keeps one file per participant line, named
+   `<name>_<version>.jar`, so the jar is copied into `robots/` under both names. The [skeleton check](#skeleton-check)
+   then runs with `cz.libors.Ogi v<n>` and `cz.libors.OgiTeam v<n>` and writes `harness/build/release-check.json`.
+
+The copies stay in `robots/` for a look in the GUI until the next `deployBots`, which removes every `cz.libors.*`
+jar. A fresh Robocode home skipped 3 turns in one battle on its first run (2026-10-20) and passed on the second; rerun
+a failure caused by skipped turns once before you look for a cause.
+
 ## Comparing two versions
 
 `./gradlew compare -Pbaseline=<rev>` measures whether a candidate version of the bot scores better than a baseline
@@ -274,7 +290,8 @@ compares uncommitted changes with `HEAD`:
 - **`-Pbaseline` and `-Pcandidate`** take a git revision or a bot version. `baselineJars` builds the robot and
   team jars of a revision from `git archive` with its short hash as the version (e.g. `cz.libors.Ogi 7df5ba7`) into
   `.robocode/baselines/`, unless they are there already. A value that is not a revision is the version of a jar in
-  that directory. `deployBots` deploys these jars next to the current ones.
+  that directory, and so is a value whose jar is there: a release (`release`) puts `cz.libors.Ogi_v<n>.jar` there, so
+  `-Pbaseline=v1` is the released jar, not its tag's commit. `deployBots` deploys these jars next to the current ones.
 - **Several versions in one installation:** robots are keyed by name and version. A team loads its members from its
   own jar, so team versions do not mix (engine-model G-42).
 - **Identity:** the comparison records the SHA-256 of both jars. The jars are reproducible, so the same code gives
@@ -811,6 +828,12 @@ is waiting.
   keeps the median in `<root>/state/cpu-constant.properties` (per Java, options and Robocode), and gives every slot
   the median times `-PcpuFactor` (default 1.5). Measure again by deleting the file; the measurement must run while
   the machine is otherwise idle. The factor and both constants are in each job's summary.
+- **As a rumble client:** `queueServer -Pworkers=ogi-win:1 -PslotJvm=rumble -PcpuFactor=1` gives the slot the
+  options of Robocode's `roborumble.sh` instead of the load study's (`-Xmx512M` and the JVM's own collector and
+  compilers), the constant measured under them, and one battle at a time, as a client runs. Jobs run then show the
+  skipped turns and own turn times a client would see; `submitRecordings -Pdebug=false` with `-Pkeys=cpu` records
+  little else. The battle cache keys battles by the JVM options and the factor, so these battles stay apart from
+  the usual ones. `remote*` tasks take `-PslotJvm` too. Restart the server without it afterwards.
 
 ### Jobs
 

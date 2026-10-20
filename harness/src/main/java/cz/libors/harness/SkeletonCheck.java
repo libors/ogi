@@ -55,11 +55,12 @@ public final class SkeletonCheck {
             System.err.println("Usage: SkeletonCheck <robocodeHome> <robot> <team> <output.json>");
             System.exit(2);
         }
-        Path home = Path.of(args[0]);
-        String robot = args[1];
-        String team = args[2];
-        Path output = Path.of(args[3]);
+        long failed = run(Path.of(args[0]), args[1], args[2], Path.of(args[3]));
+        System.exit(failed == 0 ? 0 : 1);
+    }
 
+    /** Runs the checks of a robot and a team (each "name version"), writes the report, returns the failures. */
+    static long run(Path home, String robot, String team, Path output) throws IOException {
         List<Check> checks = new ArrayList<>();
         for (String opponent : DUEL_OPPONENTS) {
             checks.add(new Check(BattleSetup.duel(robot, opponent, DUEL_ROUNDS), robot, MIN_DUEL_SHARE, 1));
@@ -83,7 +84,7 @@ public final class SkeletonCheck {
         long failed = verdicts.stream().filter(v -> !v.passed()).count();
         System.out.printf(Locale.ROOT, "%n%d/%d checks passed. Details: %s%n",
                 verdicts.size() - failed, verdicts.size(), output);
-        System.exit(failed == 0 ? 0 : 1);
+        return failed;
     }
 
     private static Verdict evaluate(Check check, BattleOutcome outcome) {

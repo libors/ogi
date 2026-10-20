@@ -44,7 +44,7 @@ import java.util.stream.Stream;
  * back to their jobs. Every state change of a job is on disk, so a restarted server resumes where it stopped.
  *
  * <p>Usage: {@code Server state=<dir> bundle=<dir> workers=<name>:<slots>[,...] [port=8765] [cpuFactor=1.5]
- * [jvm=<option>]... localJava=<java> [localSecurityManager=true]}.
+ * [slotJvm=queue|rumble] [jvm=<option>]... localJava=<java> [localSecurityManager=true]}.
  */
 public final class Server {
 
@@ -196,7 +196,7 @@ public final class Server {
             if (!entry.isBlank()) {
                 server.links.add(server.new Link(WorkerConfig.parse(entry, server.stateDir, server.localBundle,
                         o.get("localJava", "java"), Boolean.parseBoolean(o.get("localSecurityManager", "false")),
-                        o.all("jvm"), cpuFactor)));
+                        WorkerConfig.baseJvm(o.get("slotJvm", "queue")), o.all("jvm"), cpuFactor)));
             }
         }
         int port = Integer.parseInt(o.get("port", "8765"));

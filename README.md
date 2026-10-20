@@ -58,3 +58,9 @@ to `harness/build/skeleton-check.json`.
   Conversion to Robocode's convention (0 = north, clockwise) happens only at the API boundary, in
   `cz.libors.ogi.geom.Angles`.
 - **Robocode versions:** results are only accepted from the versions LiteRumble allows, currently 1.10.3–1.11.1.
+
+## Credits and licence
+
+The ideas Ogi takes from other robots are credited in [CREDITS.md](CREDITS.md). The robot (`bot/`) is released
+under the [RWPCL](https://robowiki.net/wiki/RWPCL) 1.1, the rest of the repository under the zlib licence; see
+[LICENSE](LICENSE).

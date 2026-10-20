@@ -32,6 +32,8 @@ battles.
 | `./gradlew meleeBench -Plogs=<dir>` | The melee bench; see [harness.md](harness.md#melee-bench) |
 | `./gradlew dangerBench -Precordings=<dir>` | The danger bench; see [harness.md](harness.md#danger-bench) |
 | `./gradlew positionBench -Precordings=<dir>` | The position bench; see [harness.md](harness.md#position-bench) |
+| `./gradlew release -Prelease=v<n>` | Builds the rumble jar of the release tagged `v<n>` into `bot/build/release/`; see [Releases](#releases) |
+| `./gradlew releaseCheck -Prelease=v<n>` | The release jar through the rumble client's jar check and the skeleton battles; see [harness.md](harness.md#release-check) |
 | `./gradlew :harness:baselineJars -Pbaseline=<rev>` | Only builds the robot and team jars of a git revision into `.robocode/baselines/` |
 | `./gradlew sandboxCheck` | Checks that robots run in Robocode's sandbox with a minimal environment; see [harness.md](harness.md#foreign-robots) |
 | `./gradlew jarCheck -Pjars=<jar or directory>,...` | Checks foreign robot jars against the allowlist before they run |
@@ -78,13 +80,49 @@ cd .robocode/1.11.1 && ./robocode.sh
 
 | Jar | Contents | Rumble |
 |---|---|---|
-| `cz.libors.Ogi_<v>.jar` | classes, `cz/libors/Ogi.properties`, manifest `robots: cz.libors.Ogi` | 1v1 and melee |
-| `cz.libors.OgiTeam_<v>.jar` | the same classes plus `cz/libors/OgiTeam.team` (five `cz.libors.Ogi` members, the first is the leader) | team |
+| `cz.libors.Ogi_<v>.jar` | classes, `cz/libors/Ogi.properties`, manifest `robots: cz.libors.Ogi` | none; the harness's robot jar |
+| `cz.libors.OgiTeam_<v>.jar` | the same classes plus `cz/libors/OgiTeam.team` (five `cz.libors.Ogi` members, the first is the leader) | as a release, all three ([Releases](#releases)) |
 | `cz.libors.OgiGunLog_<v>.jar` | the classes plus `cz.libors.OgiGunLog`, which logs the gun for the gun bench | none; the build fails if a rumble jar holds it |
 | `cz.libors.OgiGunLogTeam_<v>.jar` | the same plus `cz/libors/OgiGunLogTeam.team` (five `cz.libors.OgiGunLog`), for the melee gun's logs of team battles | none |
 | `cz.libors.probe_<v>.jar` (built by `probe/`) | the probe robots `cz.libors.probe.*` with their `.properties`, `cz/libors/probe/MessageTeam.team` (three `MessageProbe`) and `cz/libors/probe/SkipTeam.team` (a `SkipProbe` and a `MessageProbe`) | none, local recordings only |
 
 The version and author come from `botVersion` and `botAuthor` in `gradle.properties`.
+
+## Releases
+
+- **One jar for all three rumbles:** the team jar. It holds `cz/libors/Ogi.properties` and `cz/libors/OgiTeam.team`,
+  so the rumble client's jar check (`BotsDownload.checkJarFile`, Robocode 1.11.1) accepts it for the participant
+  lines of both. All three lists point to the same URL:
+
+  ```
+  cz.libors.Ogi v1,<url of cz.libors.OgiTeam_v1.jar>        1v1 and melee
+  cz.libors.OgiTeam v1,<url of cz.libors.OgiTeam_v1.jar>    teams
+  ```
+
+  The client stores the jar once per line, so its repository lists `cz.libors.Ogi v1` twice, with the same classes
+  (engine-model G-42).
+- **Versions are git tags `v1`, `v2`, ...** The tag is the only place a release version is written down.
+  - `./gradlew release -Prelease=v1` builds the team jar from the tagged tree (`git archive`, so the working tree does
+    not matter) with `v1` as the robot's and the team's version. It writes `bot/build/release/cz.libors.OgiTeam_v1.jar`.
+  - It checks the jar's robot and team names and versions, the five members, and that no class is newer than Java 17.
+  - It also copies the jar into `.robocode/baselines/` as `cz.libors.Ogi_v1.jar` and `cz.libors.OgiTeam_v1.jar`, the
+    two files a rumble client keeps, so `-Pbaseline=v1` and `-Pversions=…,v1` play the released jar. The tag itself
+    then no longer names the commit there: `v1^{commit}` does.
+  - The participant line's format (`[\w.]+ [\w.-]+`) admits `v1`.
+- **Before publishing:**
+  1. `./gradlew releaseCheck -Prelease=v1` ([harness.md](harness.md#release-check)).
+  2. The jar's classes must equal those of the tagged commit's build (`baselineJars -Pbaseline='v1^{commit}'`):
+     only `cz/libors/Ogi.properties` and `cz/libors/OgiTeam.team` differ.
+  3. Both play the same: `recordBattles -Pversions=<hash>,v1` against `sample-1v1.txt`, `sample-melee.txt`
+     (`-Pdraws=3`) and `sample-team.txt` (`-Ppairs=3`) gives identical recordings apart from the `cpu` debug property.
+  4. Skipped turns as a rumble client sees them: the queue with `-PslotJvm=rumble -PcpuFactor=1` on one slot
+     ([harness.md](harness.md#workers)).
+- **Inside the repository nothing changes:**
+  - The working tree stays at `botVersion=0.1`; opponent sets, logs, recordings and the queue depend on it.
+  - Baselines carry their short hash, queue snapshots `w<hash>`.
+  - A released version is compared with `-Pbaseline=v1`.
+- **The source is not in the jar** (`robot.java.source.included=false`). The RWPCL's published source is the public
+  repository.
 
 ## Remote worker
 

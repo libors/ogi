@@ -14,7 +14,7 @@ import java.util.List;
  * comes back to {@code <results>/<name>}.
  *
  * <p>Usage: {@code Remote host=<ssh host> bundle=<local bundle> results=<local dir> name=<run> [clean=true]
- * [cpuFactor=1.5] [jvm=<option>]... [runJvm=<option>]... -- <main class> <argument>...}
+ * [cpuFactor=1.5] [slotJvm=queue|rumble] [jvm=<option>]... [runJvm=<option>]... -- <main class> <argument>...}
  */
 public final class Remote {
 
@@ -26,7 +26,8 @@ public final class Remote {
         String host = o.get("host");
         String name = o.get("name");
         WorkerConfig worker = WorkerConfig.parse(host + ":1", Path.of("."), Path.of(o.get("bundle")), "java", false,
-                o.all("jvm"), Double.parseDouble(o.get("cpuFactor", "1.5")));
+                WorkerConfig.baseJvm(o.get("slotJvm", "queue")), o.all("jvm"),
+                Double.parseDouble(o.get("cpuFactor", "1.5")));
         int copied = Ssh.sync(host, Path.of(o.get("bundle")), worker.bundle());
         System.out.println("bundle synced to " + host + ", " + copied + " file(s) copied");
         String out = worker.root() + "/out/" + name;

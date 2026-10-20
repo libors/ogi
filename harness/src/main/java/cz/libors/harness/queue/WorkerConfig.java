@@ -22,22 +22,35 @@ record WorkerConfig(String name, boolean local, int slots, boolean foreign, Stri
 
     /** The options of the load study (build-and-run.md): cheap compilation, no concurrent collector. */
     static final List<String> DEFAULT_JVM = List.of("-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1");
+    /** A rumble client's options (Robocode's {@code roborumble.sh}): the JVM's own collector and compilers. */
+    static final List<String> RUMBLE_JVM = List.of("-Xmx512M");
+
+    /** The slots' base options by profile: {@code queue} (the default) or {@code rumble}. */
+    static List<String> baseJvm(String profile) {
+        return switch (profile) {
+            case "queue" -> DEFAULT_JVM;
+            case "rumble" -> RUMBLE_JVM;
+            default -> throw new IllegalArgumentException("slot JVM profile: queue or rumble, not " + profile);
+        };
+    }
 
     /**
      * {@code <name>:<slots>}, e.g. {@code ogi-win:12} or {@code local:4}.
      *
      * @param localJava              the Java 17 the local worker runs (Gradle's toolchain)
      * @param localSecurityManager   whether that JVM needs {@code -Djava.security.manager=allow} (Java 12–23)
+     * @param baseJvm                the slots' options before {@code extraJvm} ({@link #baseJvm(String)})
      */
     static WorkerConfig parse(String entry, Path stateDir, Path localBundle, String localJava,
-                              boolean localSecurityManager, List<String> extraJvm, double cpuFactor) {
+                              boolean localSecurityManager, List<String> baseJvm, List<String> extraJvm,
+                              double cpuFactor) {
         String[] parts = entry.trim().split(":");
         if (parts.length != 2) {
             throw new IllegalArgumentException("worker: <name>:<slots>, not " + entry);
         }
         String name = parts[0];
         int slots = Integer.parseInt(parts[1]);
-        List<String> jvm = new ArrayList<>(DEFAULT_JVM);
+        List<String> jvm = new ArrayList<>(baseJvm);
         jvm.addAll(extraJvm);
         if (name.equals("local")) {
             if (localSecurityManager) {

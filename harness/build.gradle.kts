@@ -1,6 +1,8 @@
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Properties
+import java.util.zip.ZipFile
 import javax.inject.Inject
 
 plugins {
@@ -126,6 +128,9 @@ abstract class BaselineJars : DefaultTask() {
     @TaskAction
     fun build() {
         for (revision in revisions.get()) {
+            if (baselines.get().asFile.resolve("cz.libors.Ogi_$revision.jar").exists()) {
+                continue
+            }
             val hash = Git.shortHash(exec, repository.get().asFile, revision) ?: continue
             val target = baselines.get().asFile
             val jars = listOf("cz.libors.Ogi_$hash.jar", "cz.libors.OgiTeam_$hash.jar").map { target.resolve(it) }
@@ -176,8 +181,13 @@ abstract class ExecHolder @Inject constructor(val exec: ExecOperations)
 
 val execHolder = objects.newInstance<ExecHolder>()
 
-/** The bot version for a -Pbaseline or -Pcandidate value: a git revision's short hash, or the value itself. */
-fun versionOf(value: String): String = Git.shortHash(execHolder.exec, rootDir, value) ?: value
+/**
+ * The bot version for a -Pbaseline or -Pcandidate value: the value itself if [baselinesDir] has its jar (a release
+ * built by `release`, whose tag would otherwise name the commit), else a git revision's short hash, else the value.
+ */
+fun versionOf(value: String): String =
+    if (baselinesDir.file("cz.libors.Ogi_$value.jar").asFile.exists()) value
+    else Git.shortHash(execHolder.exec, rootDir, value) ?: value
 
 val baselineJars = tasks.register<BaselineJars>("baselineJars") {
     group = "robocode"
@@ -186,6 +196,103 @@ val baselineJars = tasks.register<BaselineJars>("baselineJars") {
         providers.gradleProperty("candidate").orNull))
     repository.set(rootProject.layout.projectDirectory)
     workDir.set(layout.buildDirectory.dir("baselines"))
+    baselines.set(baselinesDir)
+}
+
+/**
+ * Builds the rumble jar of a release from its git tag: the team jar of the tagged tree, with the tag as the robot's
+ * and the team's version, into [target]. The one jar serves the 1v1, melee and team rumbles (docs/build-and-run.md,
+ * "Releases").
+ */
+abstract class ReleaseJar : DefaultTask() {
+    @get:Input
+    abstract val tag: Property<String>
+
+    @get:Internal
+    abstract val repository: DirectoryProperty
+
+    @get:Internal
+    abstract val workDir: DirectoryProperty
+
+    @get:Internal
+    abstract val target: DirectoryProperty
+
+    @get:Internal
+    abstract val baselines: DirectoryProperty
+
+    @get:Inject
+    abstract val exec: ExecOperations
+
+    @TaskAction
+    fun build() {
+        val tag = this.tag.get()
+        if (!Regex("v[1-9][0-9]*").matches(tag)) {
+            throw GradleException("A release is named v1, v2, ...: $tag")
+        }
+        val hash = Git.shortHash(exec, repository.get().asFile, "refs/tags/$tag")
+            ?: throw GradleException("No git tag $tag: tag the release commit first")
+        val work = workDir.get().asFile
+        work.deleteRecursively()
+        val source = work.resolve("source")
+        source.mkdirs()
+        val tar = work.resolve("source.tar")
+        exec.exec {
+            workingDir = repository.get().asFile
+            commandLine("git", "archive", "--format=tar", "-o", tar.absolutePath, "refs/tags/$tag")
+        }
+        exec.exec { commandLine("tar", "-xf", tar.absolutePath, "-C", source.absolutePath) }
+        exec.exec {
+            workingDir = source
+            commandLine("sh", "./gradlew", "--quiet", ":bot:teamJar", "-PbotVersion=$tag")
+        }
+        val name = "cz.libors.OgiTeam_$tag.jar"
+        val jar = target.get().asFile.resolve(name)
+        jar.parentFile.mkdirs()
+        source.resolve("bot/build/robots/$name").copyTo(jar, overwrite = true)
+        requireRelease(jar, tag)
+        // Also as the baseline jars of version v<n>, under both names a rumble client gives it, for -Pbaseline=v<n>.
+        for (robot in listOf("cz.libors.Ogi", "cz.libors.OgiTeam")) {
+            jar.copyTo(baselines.get().asFile.resolve("${robot}_$tag.jar"), overwrite = true)
+        }
+        logger.lifecycle("Release $tag ($hash): $jar")
+    }
+
+    /** The jar names the robot and the team with the release's version, and holds nothing newer than Java 17. */
+    private fun requireRelease(jar: File, tag: String) {
+        ZipFile(jar).use { zip ->
+            fun properties(entry: String) = Properties().apply {
+                val e = zip.getEntry(entry) ?: throw GradleException("$jar has no $entry")
+                zip.getInputStream(e).use { load(it) }
+            }
+            val robot = properties("cz/libors/Ogi.properties")
+            val team = properties("cz/libors/OgiTeam.team")
+            check(robot.getProperty("robot.classname") == "cz.libors.Ogi") { "$jar: robot.classname" }
+            check(robot.getProperty("robot.version") == tag) { "$jar: robot.version is not $tag" }
+            check(team.getProperty("team.version") == tag) { "$jar: team.version is not $tag" }
+            check(team.getProperty("team.members") == List(5) { "cz.libors.Ogi" }.joinToString(",")) {
+                "$jar: team.members"
+            }
+            for (entry in zip.entries().asSequence().filter { it.name.endsWith(".class") }) {
+                val header = zip.getInputStream(entry).use { it.readNBytes(8) }
+                val major = (header[6].toInt() and 0xff shl 8) or (header[7].toInt() and 0xff)
+                check(major <= 61) { "$jar: ${entry.name} is class file version $major, newer than Java 17" }
+            }
+        }
+    }
+}
+
+val releaseDir = project(":bot").layout.buildDirectory.dir("release")
+val releaseVersion = providers.gradleProperty("release")
+
+val releaseJar = tasks.register<ReleaseJar>("release") {
+    group = "distribution"
+    description = "Builds the rumble jar of the release tagged -Prelease=v<n> into bot/build/release/."
+    tag.set(releaseVersion.orElse(providers.provider {
+        throw GradleException("Pass -Prelease=v<n>, the git tag of the release")
+    }))
+    repository.set(rootProject.layout.projectDirectory)
+    workDir.set(layout.buildDirectory.dir("release"))
+    target.set(releaseDir)
     baselines.set(baselinesDir)
 }
 
@@ -294,6 +401,22 @@ val skeletonCheck = tasks.register<JavaExec>("skeletonCheck") {
         "cz.libors.OgiTeam $botVersion",
         layout.buildDirectory.file("skeleton-check.json").get().asFile.absolutePath,
     )
+}
+
+tasks.register<JavaExec>("releaseCheck") {
+    group = "verification"
+    description = "Checks the release jar of -Prelease=v<n> as a rumble client takes it, then the skeleton battles."
+    onRobocode("cz.libors.harness.ReleaseCheck")
+    dependsOn(releaseJar)
+    val version = releaseVersion.orElse("")
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf(
+            robocodeHome.asFile.absolutePath,
+            releaseDir.get().file("cz.libors.OgiTeam_${version.get()}.jar").asFile.absolutePath,
+            version.get(),
+            layout.buildDirectory.file("release-check.json").get().asFile.absolutePath,
+        )
+    })
 }
 
 tasks.register<JavaExec>("sandboxCheck") {
@@ -616,6 +739,9 @@ val remoteContainer = providers.gradleProperty("remoteKind").getOrElse(
 // The CPU constant on a worker: the median of idle measurements under the worker's JVM options, times this factor
 // (build-and-run.md, "Several battles at once"). The queue's workers use the same.
 val cpuFactor = providers.gradleProperty("cpuFactor").getOrElse("1.5")
+// The slots' JVM options: `queue` (cheap compilation, Serial GC) or `rumble` (a rumble client's: the JVM's defaults and
+// a 512 MB heap), for a check of skipped turns as a rumble client would see them (harness.md, "Queue").
+val slotJvm = providers.gradleProperty("slotJvm").getOrElse("queue")
 
 /**
  * Where a remote run finds things: its Robocode home, a repository path (`rumble:<file>` is a file in the worker's
@@ -680,7 +806,7 @@ fun remoteTask(taskName: String, text: String, name: String, main: String, jvm: 
             classpath = sourceSets.main.get().runtimeClasspath
             argumentProviders.add(CommandLineArgumentProvider {
                 listOf("host=$remoteHost", "bundle=${bundle.absolutePath}", "results=${results.absolutePath}",
-                    "name=$name", "clean=$clean", "cpuFactor=$cpuFactor") +
+                    "name=$name", "clean=$clean", "cpuFactor=$cpuFactor", "slotJvm=$slotJvm") +
                     jvm.split(" ").filter { it.isNotEmpty() }.map { "runJvm=$it" } + listOf("--", main) + arguments()
             })
         }
@@ -935,7 +1061,7 @@ tasks.register<JavaExec>("queueServer") {
     val extraJvm = providers.gradleProperty("queueJvm").orElse("")
     argumentProviders.add(CommandLineArgumentProvider {
         listOf("state=" + queueDir.absolutePath, "bundle=" + bundle.get().asFile.absolutePath,
-            "workers=" + workers.get(), "port=" + port.get(), "cpuFactor=$cpuFactor",
+            "workers=" + workers.get(), "port=" + port.get(), "cpuFactor=$cpuFactor", "slotJvm=$slotJvm",
             "localJava=" + launcher.get().executablePath.asFile.absolutePath,
             "localSecurityManager=" + (toolchainJava in 12..23)) +
             extraJvm.get().split(" ").filter { it.isNotEmpty() }.map { "jvm=$it" }
