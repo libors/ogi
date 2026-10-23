@@ -33,6 +33,15 @@ final class CompareLog implements Closeable {
     private static final String VERSION = "3";
 
     /** Which version fought the battle. */
+    /** A log written with another configuration: its battles are not resumed. */
+    static final class ConfigurationChanged extends IOException {
+        private static final long serialVersionUID = 1;
+
+        ConfigurationChanged(String message) {
+            super(message);
+        }
+    }
+
     enum Side {
         BASELINE, CANDIDATE
     }
@@ -111,7 +120,8 @@ final class CompareLog implements Closeable {
                         + "; use another output directory or delete it");
             }
             if (!lines.get(1).equals(configLine)) {
-                throw new IOException(file + " was written with another configuration:\n  " + lines.get(1)
+                throw new CompareLog.ConfigurationChanged(file + " was written with another configuration:\n  "
+                        + lines.get(1)
                         + "\nnow:\n  " + configLine + "\nUse another output directory or delete the old one.");
             }
             if (!text.endsWith("\n")) {

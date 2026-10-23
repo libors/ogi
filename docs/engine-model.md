@@ -94,7 +94,8 @@ to-test.
   - **Bites when:** waves are built from tutorial offsets.
   - **Source:** classic surfing bug class; Diamond projects bullets over flight time − 1 because bullets advance once
     before collisions are checked; `BulletPeer.update`, `checkRobotCollision`. · **Status:** tested:
-    `BulletMotionReplayTest` (spawn position, every move, impact position); the energy-drop side is step 2c.
+    `BulletMotionReplayTest` (spawn position, every move, impact position); the energy-drop side:
+    `FireDetectionTest` ([fire-detection.md](fire-detection.md)).
 - **G-04 Bullet–bullet collision geometry.**
   - **What:** bullets collide when their last-move segments cross; bullets of the same robot never collide. Bullets
     are updated in random order, so a bullet may be hit through its previous-turn segment before it moves. A bullet
@@ -200,7 +201,7 @@ to-test.
     walls, the event's bearing is that of the horizontal one, even if the robot ends up touching only the other.
   - **Bites when:** an **enemy energy drop from a wall hit is taken for a shot** (false wave).
   - **Source:** wiki; classic bug class; `RobotPeer.checkWallCollision`. · **Status:** tested:
-    `RobotMotionReplayTest` (movement), `EnergyReplayTest` (damage), `EventReplayTest` (`HitWallEvent` bearing).
+    `RobotMotionReplayTest` (movement and the `HitWallEvent` bearing), `EnergyReplayTest` (damage).
 - **G-12 Robot collisions.**
   - **What:** 0.6 damage to each robot. Only the robot moving towards the other is at fault: it is pushed back by its
     move, stops and does not turn its body next turn. The victim is not moved. Both get a `HitRobotEvent` in the
@@ -215,7 +216,8 @@ to-test.
     count; regained energy and wall damage do not. Below 0.1 the robot is disabled; the next zap kills it.
   - **Bites when:** an enemy's 0.1 drops are taken for shots, or a bot assumes that any damage resets the count.
   - **Source:** `Battle.resetInactiveTurnCount`, `updateRobots`, `RobotPeer.zap`, `kill`. · **Status:** tested:
-    `EnergyReplayTest` with `Inactivity` (the `inactive` scenario of probes that never fire).
+    `EnergyReplayTest` with `Inactivity` (the `inactive` scenario of probes that never fire), up to the disabled
+    robot; the kill by the next zap is from the source, since the test compares no turn into death.
 - **G-35 Hidden overdrive state.**
   - **What:** the engine remembers whether a robot is braking for the end of its distance (`isOverDriving`). When
     that braking brings the velocity within 1e-5 of zero, the rest of the distance is dropped. The flag is not part
@@ -460,9 +462,13 @@ to-test.
   - **What:** Robocode heading = π/2 − math angle. Robocode-style `atan2(dx, dy)` equals math `atan2(dy, dx)`.
   - **Rule:** convert only at the API boundary and in the painting adapter.
   - **Source:** project convention. · **Status:** to-test (geometry unit tests).
-- **G-31 `BattleResults.getRank()` is not simply the order by score in melee.** In the first skeleton melee run, a
-  bot with a higher score had a worse rank. The harness must define its own ranking.
-  - **Source:** harness observation. · **Status:** to-test, check in `BattleResults` and the engine.
+- **G-31 `BattleResults.getRank()` in the battle's results is the contestant's position in the setup, not its
+  place.** `Battle.computeBattleResults` sets `rank = i + 1` while it walks the contestants in setup order, after
+  `shutdownTurn` of the last round had ranked them by score for their `BattleEndedEvent`; `getSortedResults()` sorts
+  by score, so the ranks in it look shuffled. The harness ranks by score (`BattleOutcome.placeByScore`).
+  - **Source:** `Battle.computeBattleResults` and `Battle.shutdownTurn` (1.11.1 bytecode); the skeleton check's
+    melee results, ranks 1–10 in setup order whatever the scores. · **Status:** tested: `recordProbes` ("The results'
+    rank is the position in the setup").
 - **G-32 The team result is named after the team plus an index**, e.g. `cz.libors.OgiTeam 0.1 (1)`, not after the
   leader robot.
   - **Source:** harness observation. · **Status:** observed.

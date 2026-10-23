@@ -4,7 +4,9 @@ import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * What a class file names: its own class, its super class and interfaces, every field and method it references, and
@@ -26,14 +28,20 @@ final class ClassFile {
     final List<String> interfaces;
     final List<MemberRef> memberRefs;
     final List<String> nativeMethods;
+    /** Whether the class overrides {@code finalize()}, which the JVM runs on its finalizer thread. */
+    final boolean finalizer;
+    /** The fields and methods the class declares, as {@code name + descriptor}. */
+    final Set<String> declared;
 
     private ClassFile(String name, String superName, List<String> interfaces, List<MemberRef> memberRefs,
-                      List<String> nativeMethods) {
+                      List<String> nativeMethods, boolean finalizer, Set<String> declared) {
         this.name = name;
         this.superName = superName;
         this.interfaces = interfaces;
         this.memberRefs = memberRefs;
         this.nativeMethods = nativeMethods;
+        this.finalizer = finalizer;
+        this.declared = declared;
     }
 
     static boolean hasMagic(byte[] bytes) {
@@ -81,47 +89,64 @@ final class ClassFile {
         List<MemberRef> memberRefs = new ArrayList<>();
         for (int i = 1; i < count; i++) {
             if (tags[i] == 9 || tags[i] == 10 || tags[i] == 11) {
-                int nameAndType = second[i];
-                memberRefs.add(new MemberRef(utf8[first[first[i]]], utf8[first[nameAndType]],
-                        utf8[second[nameAndType]]));
+                int nameAndType = entry(tags, second[i], 12);
+                memberRefs.add(new MemberRef(className(tags, utf8, first, first[i]),
+                        utf8(tags, utf8, first[nameAndType]), utf8(tags, utf8, second[nameAndType])));
             }
         }
         in.readUnsignedShort(); // access flags
-        String name = className(utf8, first, in.readUnsignedShort());
-        String superName = className(utf8, first, in.readUnsignedShort());
+        String name = className(tags, utf8, first, in.readUnsignedShort());
+        int superIndex = in.readUnsignedShort();
+        String superName = superIndex == 0 ? null : className(tags, utf8, first, superIndex);
         int interfaceCount = in.readUnsignedShort();
         List<String> interfaces = new ArrayList<>();
         for (int i = 0; i < interfaceCount; i++) {
-            interfaces.add(className(utf8, first, in.readUnsignedShort()));
+            interfaces.add(className(tags, utf8, first, in.readUnsignedShort()));
         }
-        skipMembers(in);
+        Set<String> declared = new HashSet<>();
+        int fieldCount = in.readUnsignedShort();
+        for (int i = 0; i < fieldCount; i++) {
+            in.readUnsignedShort(); // access flags
+            String fieldName = utf8(tags, utf8, in.readUnsignedShort());
+            declared.add(fieldName + utf8(tags, utf8, in.readUnsignedShort()));
+            skipAttributes(in);
+        }
         List<String> nativeMethods = new ArrayList<>();
+        boolean finalizer = false;
         int methodCount = in.readUnsignedShort();
         for (int i = 0; i < methodCount; i++) {
             int access = in.readUnsignedShort();
-            String methodName = utf8[in.readUnsignedShort()];
-            in.readUnsignedShort(); // descriptor
+            String methodName = utf8(tags, utf8, in.readUnsignedShort());
+            String descriptor = utf8(tags, utf8, in.readUnsignedShort());
             skipAttributes(in);
             if ((access & ACC_NATIVE) != 0) {
                 nativeMethods.add(methodName);
             }
+            finalizer |= methodName.equals("finalize") && descriptor.equals("()V");
+            declared.add(methodName + descriptor);
         }
         return new ClassFile(name, superName, List.copyOf(interfaces), List.copyOf(memberRefs),
-                List.copyOf(nativeMethods));
+                List.copyOf(nativeMethods), finalizer, Set.copyOf(declared));
     }
 
-    private static String className(String[] utf8, int[] first, int classIndex) {
-        return classIndex == 0 ? null : utf8[first[classIndex]];
+    /**
+     * The name of the Class constant at {@code index}. A malformed constant pool (an index out of range or to a
+     * constant of another kind) is an {@link IOException}, so that the class is judged unreadable, never named null.
+     */
+    private static String className(int[] tags, String[] utf8, int[] first, int index) throws IOException {
+        return utf8(tags, utf8, first[entry(tags, index, 7)]);
     }
 
-    private static void skipMembers(DataInputStream in) throws IOException {
-        int count = in.readUnsignedShort();
-        for (int i = 0; i < count; i++) {
-            in.readUnsignedShort(); // access flags
-            in.readUnsignedShort(); // name
-            in.readUnsignedShort(); // descriptor
-            skipAttributes(in);
+    private static String utf8(int[] tags, String[] utf8, int index) throws IOException {
+        return utf8[entry(tags, index, 1)];
+    }
+
+    /** {@code index}, checked to be a constant with {@code tag}. */
+    private static int entry(int[] tags, int index, int tag) throws IOException {
+        if (index <= 0 || index >= tags.length || tags[index] != tag) {
+            throw new IOException("constant " + index + " is not of kind " + tag);
         }
+        return index;
     }
 
     private static void skipAttributes(DataInputStream in) throws IOException {

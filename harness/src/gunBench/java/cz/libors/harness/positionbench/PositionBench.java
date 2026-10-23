@@ -513,7 +513,7 @@ public final class PositionBench {
             double m = Arrays.stream(per).average().orElse(0);
             double v = Arrays.stream(per).map(x -> (x - m) * (x - m)).sum() / Math.max(1, per.length - 1);
             mean[k] = m;
-            se[k] = Math.sqrt(v / per.length);
+            se[k] = per.length < 2 ? Double.NaN : Math.sqrt(v / per.length);
         }
         System.out.printf(Locale.ROOT, "  %-34s changed %5.1f %%  in air %+.4f  later %+.4f  friendly %+.4f  "
                         + "dealt %+.4f  net %+.4f ± %.4f%n", name.length() > 34 ? name.substring(0, 34) : name,
@@ -571,6 +571,9 @@ public final class PositionBench {
         for (String kv : overrides.split(";")) {
             if (!kv.isBlank()) {
                 String[] p = kv.split("=", 2);
+                if (p.length < 2) {
+                    throw new IllegalArgumentException("a parameter is name=value, not " + kv.trim());
+                }
                 values.put(p[0].trim(), p[1].trim());
             }
         }
@@ -583,12 +586,21 @@ public final class PositionBench {
             String v = values.remove(c.getName());
             args[i] = v == null ? c.getAccessor().invoke(base)
                     : c.getType() == int.class ? Integer.parseInt(v)
-                    : c.getType() == boolean.class ? Boolean.parseBoolean(v) : Double.parseDouble(v);
+                    : c.getType() == boolean.class ? switchValue(c.getName(), v) : Double.parseDouble(v);
         }
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("unknown parameters " + values.keySet() + "; known: "
                     + Arrays.stream(components).map(RecordComponent::getName).toList());
         }
         return MeleeMovementParameters.class.getDeclaredConstructor(types).newInstance(args);
+    }
+
+    /** A switch's value, as the melee bench reads its switches: a typo must not silently mean false. */
+    private static boolean switchValue(String name, String v) {
+        return switch (v) {
+            case "true", "1" -> true;
+            case "false", "0" -> false;
+            default -> throw new IllegalArgumentException(name + " is true or false, not " + v);
+        };
     }
 }

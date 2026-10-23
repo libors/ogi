@@ -1,6 +1,7 @@
 package cz.libors.harness.compare;
 
 import cz.libors.harness.BattleOutcome;
+import cz.libors.harness.ContestantResult;
 import cz.libors.harness.Json;
 import cz.libors.harness.compare.Compare.Measure;
 import cz.libors.harness.compare.Compare.Subject;
@@ -113,7 +114,7 @@ public final class CompareJob extends QueueJob {
         }
     }
 
-    private CompareJob(Path dir, Properties spec) throws IOException {
+    private CompareJob(Path dir, Properties spec, Map<String, String> slots) throws IOException {
         super(dir, spec);
         set = OpponentSet.parse(spec.getProperty("opponentSet"), Files.readAllLines(dir.resolve("opponents.txt")));
         format = set.format();
@@ -134,10 +135,19 @@ public final class CompareJob extends QueueJob {
         baseline = subject(Side.BASELINE, subjectClass, spec.getProperty("baseline"));
         candidate = subject(Side.CANDIDATE, subjectClass, spec.getProperty("candidate"));
         config = Compare.config(baseline, candidate, set, rounds, fixedStarts, runSeed);
+        config.putAll(slots);
         set.opponents().forEach(o -> strata.add(new Stratum(o.name(), o.strong(), o.group())));
         pendingPairs = new int[strata.size()];
         if (state().active()) {
-            log = CompareLog.open(dir.resolve("battles.tsv"), config);
+            try {
+                log = CompareLog.open(dir.resolve("battles.tsv"), config);
+            } catch (CompareLog.ConfigurationChanged e) {
+                // E.g. a server restarted with other slot options: the battles would mix two turn limits.
+                finish(State.FAILED, "not resumed: the log was written with another configuration (see its first "
+                        + "lines); queue it again", Map.of());
+            }
+        }
+        if (log != null) {
             for (Battle b : log.battles()) {
                 nextPair.merge(b.opponent(), b.pair() + 1, Math::max);
                 count(b);
@@ -150,7 +160,15 @@ public final class CompareJob extends QueueJob {
     }
 
     public static CompareJob open(Path dir, Properties spec) throws IOException {
-        return new CompareJob(dir, spec);
+        return new CompareJob(dir, spec, Map.of());
+    }
+
+    /**
+     * A job as the server runs it: {@code slots} are the server's settings that decide battles but are no option of
+     * the job (the slots' JVM options and CPU factor), part of the log's configuration.
+     */
+    public static CompareJob open(Path dir, Properties spec, Map<String, String> slots) throws IOException {
+        return new CompareJob(dir, spec, slots);
     }
 
     /**
@@ -292,7 +310,9 @@ public final class CompareJob extends QueueJob {
                 Work work = new Work(this, opponent + "\t" + pair + "\t" + subject.side(), battle, timeoutSeconds);
                 Optional<String> key = reuse && cache != null ? cache.key(worker, battle, subject.jarSha())
                         : Optional.empty();
-                Optional<Map<String, Object>> hit = key.flatMap(k -> cache.get(k));
+                // A cached outcome short of a result (from before such outcomes were refused) is played anew.
+                Optional<Map<String, Object>> hit = key.flatMap(k -> cache.get(k))
+                        .filter(o -> missingResult(work, o).isEmpty());
                 if (hit.isPresent()) {
                     cached.put(work, hit.get());
                 } else if (key.isPresent() && !cache.claim(key.get())) {
@@ -303,12 +323,20 @@ public final class CompareJob extends QueueJob {
                 }
             }
             outstanding += works.size() + cached.size();
-            if (!cached.isEmpty()) {
-                started();
-            }
-            for (Map.Entry<Work, Map<String, Object>> e : cached.entrySet()) {
-                reused++;
-                record(e.getKey(), e.getValue(), worker, true);
+            try {
+                if (!cached.isEmpty()) {
+                    started();
+                }
+                for (Map.Entry<Work, Map<String, Object>> e : cached.entrySet()) {
+                    reused++;
+                    record(e.getKey(), e.getValue(), worker, true);
+                }
+            } catch (IOException | RuntimeException e) {
+                // The works never reach the server: their claims go, or jobs waiting for them would wait for good.
+                for (Work w : works) {
+                    release(w);
+                }
+                throw e;
             }
             if (!works.isEmpty()) {
                 return works;
@@ -326,7 +354,12 @@ public final class CompareJob extends QueueJob {
         cache.await(key, outcome -> {
             if (outcome.isPresent()) {
                 reused++;
-                record(work, outcome.get(), worker, true);
+                try {
+                    record(work, outcome.get(), worker, true);
+                } catch (IOException | RuntimeException e) {
+                    // This job's failure, not that of the job that played the battle and is still counting it.
+                    fail("counting a battle another job played failed: " + e);
+                }
             } else {
                 outstanding--;
                 String[] k = work.key().split("\t");
@@ -345,8 +378,19 @@ public final class CompareJob extends QueueJob {
     }
 
     @Override
-    public void completed(Work work, Map<String, Object> outcomeMap, String worker) throws IOException {
+    public Optional<String> completed(Work work, Map<String, Object> outcomeMap, String worker)
+            throws IOException {
         String key = cacheKeys.remove(work.key());
+        Optional<String> missing = missingResult(work, outcomeMap);
+        if (missing.isPresent()) {
+            // Not a battle of both contestants (the engine aborted it): played again like a failed one, never cached,
+            // since every job that took it from the cache would fail on it.
+            if (key != null) {
+                cacheKeys.put(work.key(), key);
+            }
+            failed(work, missing.get(), worker);
+            return missing;
+        }
         try {
             record(work, outcomeMap, worker, false);
         } finally {
@@ -355,6 +399,18 @@ public final class CompareJob extends QueueJob {
                 cache.put(key, work.spec(), outcomeMap);
             }
         }
+        return Optional.empty();
+    }
+
+    /** Why an outcome is not a battle of the work's subject and its opponent, or empty if it is. */
+    private Optional<String> missingResult(Work work, Map<String, Object> outcomeMap) {
+        BattleOutcome outcome = work.spec().outcomeFromMap(outcomeMap);
+        Subject subject = Side.valueOf(work.key().split("\t")[2]) == Side.BASELINE ? baseline : candidate;
+        if (outcome.result(subject.name()).isPresent() && outcome.results().size() >= 2) {
+            return Optional.empty();
+        }
+        return Optional.of("no result for both contestants in "
+                + outcome.results().stream().map(ContestantResult::name).toList());
     }
 
     /** Counts a battle's outcome, played now or taken from the cache. */
@@ -495,13 +551,18 @@ public final class CompareJob extends QueueJob {
         for (Deque<Work> q : queued) {
             releaseAll(q);
         }
-        Summary summary = summary();
-        Files.writeString(dir.resolve("summary.json"), Json.write(summary));
-        ByteArrayOutputStream text = new ByteArrayOutputStream();
-        try (PrintStream out = new PrintStream(text, true, StandardCharsets.UTF_8)) {
-            Compare.printReport(summary, out);
+        try {
+            Summary summary = summary();
+            Files.writeString(dir.resolve("summary.json"), Json.write(summary));
+            ByteArrayOutputStream text = new ByteArrayOutputStream();
+            try (PrintStream out = new PrintStream(text, true, StandardCharsets.UTF_8)) {
+                Compare.printReport(summary, out);
+            }
+            Files.writeString(dir.resolve("summary.txt"), text.toString(StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException e) {
+            // The job ends without its summary rather than stay running, where it could not even be cancelled.
+            reason = reason + "; writing the summary failed: " + e;
         }
-        Files.writeString(dir.resolve("summary.txt"), text.toString(StandardCharsets.UTF_8));
         Map<String, Object> progress = progress();
         Map<String, String> results = new LinkedHashMap<>();
         progress.forEach((k, v) -> {

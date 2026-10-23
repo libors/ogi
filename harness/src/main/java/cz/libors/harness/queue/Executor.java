@@ -63,6 +63,19 @@ import java.util.zip.ZipInputStream;
 public final class Executor {
 
     private static final int MEASUREMENTS = 5;
+
+    /** A measurement JVM that has not reported by then is ended: a hung one would hold the executor for good. */
+
+    private static final long MEASURE_TIMEOUT_SECONDS = 300;
+    /**
+     * Keeps the JVM's own output off standard output, which carries the protocol: a warning (a full code cache, say)
+     * or a log line in the middle of a result would make the line unreadable and lose the battle. Given after the
+     * slots' own options, since a later {@code -Xlog} would turn output to standard output on again; so the slots and
+     * the executor log only the JVM's warnings, to standard error. Not part of the battle cache's key: they change no
+     * battle.
+     */
+    static final List<String> PROTOCOL_JVM = List.of("-Xlog:disable", "-Xlog:all=warning:stderr",
+            "-XX:+DisplayVMOutputToStderr");
     private static final long SLOT_START_MILLIS = 180_000;
     private static final int MAX_RESTARTS_PER_SLOT = 10;
     private static final List<String> UNIX_ENVIRONMENT = List.of("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ");
@@ -84,7 +97,7 @@ public final class Executor {
         this.root = Path.of(o.get("root")).toAbsolutePath();
         this.java = o.get("java");
         this.jvm = List.copyOf(o.all("jvm"));
-        this.cpuFactor = Double.parseDouble(o.get("cpuFactor", "1"));
+        this.cpuFactor = Double.parseDouble(o.get("cpuFactor", "1.5"));
         this.foreign = o.has("foreign") ? Path.of(o.get("foreign")).toAbsolutePath() : null;
         this.server = server;
     }
@@ -280,7 +293,7 @@ public final class Executor {
                 case "battle" -> {
                     Map<String, Object> spec = m.map("spec");
                     waiting.add(new Battle(m.longValue("id"), spec, m.longValue("timeout") * 1000,
-                            Boolean.TRUE.equals(spec.get("debug"))));
+                            BattleSpec.fromMap(spec).debug()));
                     dispatch();
                 }
                 case "deploy" -> deploy(m.string("file"), m.string("sha"));
@@ -551,9 +564,26 @@ public final class Executor {
         Files.createDirectories(tmp);
         List<String> rest = o.rest();
         List<String> command = slotCommand(tmp, o.all("runJvm"), rest.get(0), rest.subList(1, rest.size()));
-        ProcessBuilder pb = new ProcessBuilder(command).directory(home.toFile()).inheritIO();
+        ProcessBuilder pb = new ProcessBuilder(command).directory(home.toFile())
+                .redirectOutput(Redirect.INHERIT).redirectError(Redirect.INHERIT);
         minimalEnvironment(pb, tmp);
-        return pb.start().waitFor();
+        Process process = pb.start();
+        // Remote keeps the session's input open while it waits. Its end means the task on the other machine is
+        // gone (interrupted, say): Windows does not end a process when its ssh session drops, so the run ends here,
+        // or it would compete with the queue's slots for the cores.
+        Thread session = new Thread(() -> {
+            try {
+                while (System.in.read() >= 0) {
+                    // nothing comes; only the end matters
+                }
+            } catch (IOException e) {
+                // the session is gone
+            }
+            process.destroyForcibly();
+        }, "session");
+        session.setDaemon(true);
+        session.start();
+        return process.waitFor();
     }
 
     // ------------------------------------------------------------------------------------------------- slot JVM
@@ -566,8 +596,9 @@ public final class Executor {
         }
         command.addAll(jvm);
         command.addAll(extra);
+        // No -XX:+IgnoreUnrecognizedVMOptions: a mistyped option must stop the slot, not be measured as if it held.
+        command.addAll(PROTOCOL_JVM);
         command.addAll(List.of(
-                "-XX:+IgnoreUnrecognizedVMOptions",
                 "--add-opens=java.base/sun.net.www.protocol.jar=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
                 "-Duser.home=" + tmp,
@@ -654,7 +685,7 @@ public final class Executor {
         if (!Files.exists(list)) {
             return result;
         }
-        for (String raw : Files.readAllLines(list)) {
+        for (String raw : approvedLines(Files.readAllBytes(list))) {
             String line = raw.trim();
             if (line.isEmpty() || line.startsWith("#")) {
                 continue;
@@ -663,15 +694,44 @@ public final class Executor {
             Path jar = foreign.resolve(fields[0]);
             if (fields.length < 2 || fields[0].contains("/") || fields[0].contains("\\") || !Files.exists(jar)) {
                 rejected.add(fields[0] + ": missing or malformed entry");
-            } else if (!sha256(jar).equalsIgnoreCase(fields[1])) {
-                rejected.add(fields[0] + ": SHA-256 differs from approved.txt");
-            } else if (JarCheck.check(jar).verdict() == JarCheck.Verdict.DENIED) {
-                rejected.add(fields[0] + ": denied by the jar check");
             } else {
-                result.add(jar);
+                try {
+                    if (!sha256(jar).equalsIgnoreCase(fields[1])) {
+                        rejected.add(fields[0] + ": SHA-256 differs from approved.txt");
+                    } else if (JarCheck.check(jar).verdict() == JarCheck.Verdict.DENIED) {
+                        rejected.add(fields[0] + ": denied by the jar check");
+                    } else {
+                        result.add(jar);
+                    }
+                } catch (IOException | RuntimeException e) {
+                    // One jar that cannot be read must not stop the worker: it is left out like a denied one.
+                    rejected.add(fields[0] + ": jar check failed: " + e);
+                }
             }
         }
         return result;
+    }
+
+    /**
+     * The lines of {@code approved.txt}, which an editor on Windows may have saved as UTF-16 (PowerShell 5.1's
+     * {@code >} and {@code Out-File}), with a byte order mark, or in the ANSI code page: the jar names and hashes are
+     * ASCII in all of them, and a note's other characters do not matter.
+     */
+    static List<String> approvedLines(byte[] bytes) {
+        java.nio.charset.Charset charset = StandardCharsets.UTF_8;
+        int skip = 0;
+        if (bytes.length >= 2 && (bytes[0] & 0xff) == 0xFF && (bytes[1] & 0xff) == 0xFE) {
+            charset = StandardCharsets.UTF_16LE;
+            skip = 2;
+        } else if (bytes.length >= 2 && (bytes[0] & 0xff) == 0xFE && (bytes[1] & 0xff) == 0xFF) {
+            charset = StandardCharsets.UTF_16BE;
+            skip = 2;
+        } else if (bytes.length >= 3 && (bytes[0] & 0xff) == 0xEF && (bytes[1] & 0xff) == 0xBB
+                && (bytes[2] & 0xff) == 0xBF) {
+            skip = 3;
+        }
+        // new String replaces what does not decode instead of throwing, as readAllLines would.
+        return new String(bytes, skip, bytes.length - skip, charset).lines().toList();
     }
 
     /**
@@ -756,6 +816,17 @@ public final class Executor {
                 .redirectError(Redirect.appendTo(root.resolve("run").resolve("measure.log").toFile()));
         minimalEnvironment(pb, tmp);
         Process process = pb.start();
+        Thread watchdog = new Thread(() -> {
+            try {
+                if (!process.waitFor(MEASURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                }
+            } catch (InterruptedException e) {
+                // the measurement ended first
+            }
+        }, "measure-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
         List<String> output = new ArrayList<>();
         try (BufferedReader r = new BufferedReader(new InputStreamReader(process.getInputStream(),
                 StandardCharsets.US_ASCII))) {
@@ -783,8 +854,10 @@ public final class Executor {
             Thread.currentThread().interrupt();
         } finally {
             process.destroyForcibly();
+            watchdog.interrupt();
         }
-        throw new IOException("the CPU constant measurement failed: " + String.join(" | ", output) + " "
+        throw new IOException("the CPU constant measurement failed (or gave no value within "
+                + MEASURE_TIMEOUT_SECONDS + " s): " + String.join(" | ", output) + " "
                 + tail(root.resolve("run").resolve("measure.log")));
     }
 

@@ -113,7 +113,7 @@ public final class MeleeJob extends QueueJob {
         }
     }
 
-    private MeleeJob(Path dir, Properties spec) throws IOException {
+    private MeleeJob(Path dir, Properties spec, Map<String, String> slots) throws IOException {
         super(dir, spec);
         set = OpponentSet.parse(spec.getProperty("opponentSet"), Files.readAllLines(dir.resolve("opponents.txt")));
         draws = new MeleeDraws(set);
@@ -132,8 +132,17 @@ public final class MeleeJob extends QueueJob {
         candidate = subject(Side.CANDIDATE, robot, spec.getProperty("candidate"));
         config = Compare.config(baseline, candidate, set, rounds, false, runSeed);
         config.put("draws", DRAW_SCHEME);
+        config.putAll(slots);
         if (state().active()) {
-            log = MeleeLog.open(dir.resolve("battles.tsv"), config);
+            try {
+                log = MeleeLog.open(dir.resolve("battles.tsv"), config);
+            } catch (CompareLog.ConfigurationChanged e) {
+                // E.g. a server restarted with other slot options: the battles would mix two turn limits.
+                finish(State.FAILED, "not resumed: the log was written with another configuration (see its first "
+                        + "lines); queue it again", Map.of());
+            }
+        }
+        if (log != null) {
             for (Battle b : log.battles()) {
                 nextDraw = Math.max(nextDraw, b.draw() + 1);
                 count(b);
@@ -145,7 +154,12 @@ public final class MeleeJob extends QueueJob {
     }
 
     public static MeleeJob open(Path dir, Properties spec) throws IOException {
-        return new MeleeJob(dir, spec);
+        return new MeleeJob(dir, spec, Map.of());
+    }
+
+    /** As {@link CompareJob#open(Path, Properties, Map)}. */
+    public static MeleeJob open(Path dir, Properties spec, Map<String, String> slots) throws IOException {
+        return new MeleeJob(dir, spec, slots);
     }
 
     /** Whether an opponent set is a melee one, so that its comparison is a {@link MeleeJob}. */
@@ -289,7 +303,9 @@ public final class MeleeJob extends QueueJob {
                 Work work = new Work(this, draw.number() + "\t" + subject.side(), battle, timeoutSeconds);
                 Optional<String> key = reuse && cache != null
                         ? cache.key(worker, battle, draw.subjectIndex(), subject.jarSha()) : Optional.empty();
-                Optional<Map<String, Object>> hit = key.flatMap(k -> cache.get(k));
+                // A cached outcome short of a robot (from before such outcomes were refused) is played anew.
+                Optional<Map<String, Object>> hit = key.flatMap(k -> cache.get(k))
+                        .filter(o -> missingRobot(work, o).isEmpty());
                 if (hit.isPresent()) {
                     cached.put(work, hit.get());
                 } else if (key.isPresent() && !cache.claim(key.get())) {
@@ -300,12 +316,20 @@ public final class MeleeJob extends QueueJob {
                 }
             }
             outstanding += works.size() + cached.size();
-            if (!cached.isEmpty()) {
-                started();
-            }
-            for (Map.Entry<Work, Map<String, Object>> e : cached.entrySet()) {
-                reused++;
-                record(e.getKey(), e.getValue(), worker, true);
+            try {
+                if (!cached.isEmpty()) {
+                    started();
+                }
+                for (Map.Entry<Work, Map<String, Object>> e : cached.entrySet()) {
+                    reused++;
+                    record(e.getKey(), e.getValue(), worker, true);
+                }
+            } catch (IOException | RuntimeException e) {
+                // The works never reach the server: their claims go, or jobs waiting for them would wait for good.
+                for (Work w : works) {
+                    release(w);
+                }
+                throw e;
             }
             if (!works.isEmpty()) {
                 return works;
@@ -323,7 +347,12 @@ public final class MeleeJob extends QueueJob {
         cache.await(key, outcome -> {
             if (outcome.isPresent()) {
                 reused++;
-                record(work, outcome.get(), worker, true);
+                try {
+                    record(work, outcome.get(), worker, true);
+                } catch (IOException | RuntimeException e) {
+                    // This job's failure, not that of the job that played the battle and is still counting it.
+                    fail("counting a battle another job played failed: " + e);
+                }
             } else {
                 outstanding--;
                 if (!state().active() || !pairs.containsKey(draw(work))) {
@@ -341,19 +370,17 @@ public final class MeleeJob extends QueueJob {
     }
 
     @Override
-    public void completed(Work work, Map<String, Object> outcomeMap, String worker) throws IOException {
+    public Optional<String> completed(Work work, Map<String, Object> outcomeMap, String worker)
+            throws IOException {
         String key = cacheKeys.remove(work.key());
-        BattleOutcome outcome = work.spec().outcomeFromMap(outcomeMap);
-        Optional<String> missing = work.spec().robots().stream().filter(r -> result(outcome, r).isEmpty())
-                .findFirst();
+        Optional<String> missing = missingRobot(work, outcomeMap);
         if (missing.isPresent()) {
             // Not a battle of the ten robots asked for: played again, like a battle that failed.
             if (key != null) {
                 cacheKeys.put(work.key(), key);
             }
-            failed(work, "no result for " + missing.get() + " in " + outcome.results().stream()
-                    .map(ContestantResult::name).toList(), worker);
-            return;
+            failed(work, missing.get(), worker);
+            return missing;
         }
         try {
             record(work, outcomeMap, worker, false);
@@ -363,6 +390,15 @@ public final class MeleeJob extends QueueJob {
                 cache.put(key, work.spec(), outcomeMap);
             }
         }
+        return Optional.empty();
+    }
+
+    /** Why an outcome is not a battle of the ten robots the work asked for, or empty if it is. */
+    private static Optional<String> missingRobot(Work work, Map<String, Object> outcomeMap) {
+        BattleOutcome outcome = work.spec().outcomeFromMap(outcomeMap);
+        return work.spec().robots().stream().filter(r -> result(outcome, r).isEmpty()).findFirst()
+                .map(r -> "no result for " + r + " in " + outcome.results().stream().map(ContestantResult::name)
+                        .toList());
     }
 
     /** Counts a battle's outcome, played now or taken from the cache. */
@@ -524,13 +560,18 @@ public final class MeleeJob extends QueueJob {
                 release(w);
             }
         }
-        Summary summary = summary();
-        Files.writeString(dir.resolve("summary.json"), Json.write(summary));
-        ByteArrayOutputStream text = new ByteArrayOutputStream();
-        try (PrintStream out = new PrintStream(text, true, StandardCharsets.UTF_8)) {
-            Compare.printReport(summary, out);
+        try {
+            Summary summary = summary();
+            Files.writeString(dir.resolve("summary.json"), Json.write(summary));
+            ByteArrayOutputStream text = new ByteArrayOutputStream();
+            try (PrintStream out = new PrintStream(text, true, StandardCharsets.UTF_8)) {
+                Compare.printReport(summary, out);
+            }
+            Files.writeString(dir.resolve("summary.txt"), text.toString(StandardCharsets.UTF_8));
+        } catch (IOException | RuntimeException e) {
+            // The job ends without its summary rather than stay running, where it could not even be cancelled.
+            reason = reason + "; writing the summary failed: " + e;
         }
-        Files.writeString(dir.resolve("summary.txt"), text.toString(StandardCharsets.UTF_8));
         Map<String, String> results = new LinkedHashMap<>();
         progress().forEach((k, v) -> {
             if (v != null && !k.equals("remainingPairs") && !k.equals("etaSeconds") && !k.equals("battlesPerSecond")

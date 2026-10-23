@@ -37,6 +37,9 @@ class RobotMotionReplayTest {
         int compared = 0;
         int remainingCompared = 0;
         int wallEvents = 0;
+        int signFlips = 0;
+        int quarterSnaps = 0;
+        int overdriveDrops = 0;
         for (ProbeTrace trace : ProbeTrace.loadAll()) {
             for (Recording.RobotInfo robot : trace.recording.robots()) {
                 // One engine robot per battle: the engine keeps the overdrive flag across rounds.
@@ -70,6 +73,20 @@ class RobotMotionReplayTest {
                         String where = trace.name + " round " + round.round() + " turn " + (turn + 1) + " robot "
                                 + robot.index();
                         compared++;
+                        // The edge cases whose gotchas this test proves must occur, or the proof is empty.
+                        if (from.velocity() * to.velocity() < 0) {
+                            signFlips++; // G-07: through zero
+                        }
+                        if (to.bodyHeading() != from.bodyHeading() && quarter(to.bodyHeading())) {
+                            quarterSnaps++; // G-36: a finished turn on a cardinal heading
+                        }
+                        Remaining before = trace.remaining(round.round(), turn, robot.index());
+                        Remaining after = trace.remaining(round.round(), turn + 1, robot.index());
+                        if (before != null && after != null && after.distance() == 0
+                                && Math.abs(before.distance() - to.velocity()) > 1e-9
+                                && Math.abs(to.velocity()) < 1e-5 && !to.state().equals("HIT_WALL")) {
+                            overdriveDrops++; // G-35: braking to zero dropped the rest of the distance
+                        }
                         mismatches.compare(where, "x", to.x(), sim.x);
                         mismatches.compare(where, "y", to.y(), sim.y);
                         mismatches.compare(where, "velocity", to.velocity(), sim.velocity);
@@ -102,8 +119,19 @@ class RobotMotionReplayTest {
                 transitions, compared, remainingCompared, wallEvents, mismatches.byField);
         mismatches.examples.forEach(e -> System.out.println("  " + e));
         assertTrue(compared > 100_000, "Too few compared turns: " + compared);
+        System.out.printf("Edge cases compared: sign flips %d, quarter snaps %d, overdrive drops %d%n", signFlips,
+                quarterSnaps, overdriveDrops);
+        assertTrue(wallEvents > 100, "Too few wall hits (G-11): " + wallEvents);
+        assertTrue(signFlips > 100, "Too few velocity sign flips (G-07): " + signFlips);
+        assertTrue(quarterSnaps > 0, "No body turn ended on a quarter heading (G-36)");
+        assertTrue(overdriveDrops > 0, "No distance dropped by braking to zero (G-35)");
         assertEquals(Map.of(), mismatches.byField, "Model and engine disagree, examples:\n"
                 + String.join("\n", mismatches.examples));
+    }
+
+    /** Whether an angle is exactly 0, π/2, π or 3π/2, as the engine's snap leaves it (G-36). */
+    private static boolean quarter(double angle) {
+        return angle == 0 || angle == Math.PI / 2 || angle == Math.PI || angle == 3 * Math.PI / 2;
     }
 
     /** A new round starts with fresh engine commands; the overdrive flag survives. */

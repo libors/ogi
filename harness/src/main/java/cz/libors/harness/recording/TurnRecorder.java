@@ -50,7 +50,9 @@ import java.util.zip.GZIPOutputStream;
  *
  * <p>Turn 0 is the state at round start. A record of turn t describes the state after the engine's update of turn t;
  * the debug properties of turn t are those the robot set while acting in turn t, whose commands take effect in turn
- * t + 1. Explosions are left out. Debug properties of dead robots are left out: the engine does not wait for a dead
+ * t + 1. In a turn the robot does not act in (a skipped turn, the turns after the last enemy died) the snapshot repeats
+ * the properties the robot set last, so a reader that counts events from them must drop repeats. Explosions are left
+ * out. Debug properties of dead robots are left out: the engine does not wait for a dead
  * robot's last turn, so they would race with the snapshot.
  *
  * <p>A recording can be limited to some debug properties: then it has no {@code r} and {@code b} records and only
@@ -122,7 +124,10 @@ public final class TurnRecorder extends BattleAdaptor implements AutoCloseable {
         guard(() -> {
             BattleRules rules = event.getBattleRules();
             start(MAGIC).field(VERSION).end();
-            start("battle").field("label=" + setup.label()).field("seed=" + setup.seed())
+            // Out of the digest: it names the seed, so battles with different seeds would differ by it alone.
+            start("battle");
+            inDigest = false;
+            field("label=" + setup.label()).field("seed=" + setup.seed())
                     .field("width=" + rules.getBattlefieldWidth()).field("height=" + rules.getBattlefieldHeight())
                     .field("rounds=" + rules.getNumRounds()).field("gunCoolingRate=" + rules.getGunCoolingRate())
                     .field("inactivityTime=" + rules.getInactivityTime())

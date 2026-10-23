@@ -128,7 +128,8 @@ public record MeleeBattle(Path file, int subjectIndex, List<String> names, Set<I
                 if (d.key().equals(MeleeGunLog.FIRE)) {
                     MeleeGunLog.Fire f = MeleeGunLog.fire(d.value());
                     fires.put(key(d.round(), f.planTime()), f);
-                    fireTurns.put(key(d.round(), f.planTime()), d.turn());
+                    // The first turn the line appears in: a turn that lost its log repeats the one before.
+                    fireTurns.putIfAbsent(key(d.round(), f.planTime()), d.turn());
                 } else if (d.key().equals(MeleeGunLog.END)) {
                     MeleeGunLog.End e = MeleeGunLog.end(d.value());
                     ends.put(key(d.round(), e.planTime()), e);

@@ -111,7 +111,28 @@ public final class JarCheck {
      */
     public static Report check(Path jar, boolean ours) throws IOException {
         byte[] bytes = Files.readAllBytes(jar);
-        Entries stream = new Entries();
+        Lists lists = readBoth("", jar.getFileName().toString(), bytes, jar);
+        Report report = check(jar.getFileName().toString(), sha256(bytes), lists.stream(), ours);
+        if (lists.problems().isEmpty()) {
+            return report;
+        }
+        List<Finding> findings = new ArrayList<>(lists.problems());
+        findings.addAll(report.findings());
+        return new Report(report.jar(), report.sha256(), report.robots(), report.classes(), sort(findings));
+    }
+
+    /** An archive's entries as the stream of local records shows them, and what the two readers disagree on. */
+    private record Lists(Map<String, byte[]> stream, List<Finding> problems) {
+    }
+
+    /**
+     * Reads an archive both ways, as the stream of its local records and through its central directory
+     * ({@code file} holds its bytes), and denies every entry the two do not hold alike. {@code prefix} names the
+     * archive in entry names ("" or {@code "Member.jar!/"}), {@code label} in the findings about the whole archive.
+     * Nothing it reads throws: an archive it cannot read is a finding.
+     */
+    private static Lists readBoth(String prefix, String label, byte[] bytes, Path file) {
+        Entries stream = new Entries(prefix);
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
@@ -122,10 +143,10 @@ public final class JarCheck {
         } catch (IOException | RuntimeException e) {
             // Robocode stops reading there too; the entries the directory lists beyond it are denied below.
             stream.problems.add(new Finding(Level.DENY, "unreadable stream", "local records: " + e.getMessage(),
-                    new TreeSet<>(Set.of(jar.getFileName().toString()))));
+                    new TreeSet<>(Set.of(label))));
         }
-        Entries directory = new Entries();
-        try (ZipFile zip = new ZipFile(jar.toFile())) {
+        Entries directory = new Entries(prefix);
+        try (ZipFile zip = new ZipFile(file.toFile())) {
             Enumeration<? extends ZipEntry> all = zip.entries();
             while (all.hasMoreElements()) {
                 ZipEntry entry = all.nextElement();
@@ -138,6 +159,10 @@ public final class JarCheck {
                     }
                 }
             }
+        } catch (IOException | RuntimeException e) {
+            // The robot class loader reads classes through the directory: an archive without a readable one is out.
+            directory.problems.add(new Finding(Level.DENY, "unreadable directory", "central directory: "
+                    + e.getMessage(), new TreeSet<>(Set.of(label))));
         }
         List<Finding> problems = new ArrayList<>(stream.problems);
         directory.problems.stream().filter(f -> !problems.contains(f)).forEach(problems::add);
@@ -145,16 +170,10 @@ public final class JarCheck {
         names.addAll(directory.entries.keySet());
         for (String name : names) {
             if (!Arrays.equals(stream.entries.get(name), directory.entries.get(name))) {
-                problems.add(entryFinding(Level.DENY, "directory differs", name));
+                problems.add(entryFinding(Level.DENY, "directory differs", prefix + name));
             }
         }
-        Report report = check(jar.getFileName().toString(), sha256(bytes), stream.entries, ours);
-        if (problems.isEmpty()) {
-            return report;
-        }
-        List<Finding> findings = new ArrayList<>(problems);
-        findings.addAll(report.findings());
-        return new Report(report.jar(), report.sha256(), report.robots(), report.classes(), sort(findings));
+        return new Lists(stream.entries, problems);
     }
 
     /**
@@ -165,18 +184,24 @@ public final class JarCheck {
 
         final Map<String, byte[]> entries = new LinkedHashMap<>();
         final List<Finding> problems = new ArrayList<>();
+        /** How the findings name the archive's entries: "" or {@code "Member.jar!/"}. */
+        private final String prefix;
         private long total;
+
+        Entries(String prefix) {
+            this.prefix = prefix;
+        }
 
         /** Reads an entry's content; false once the size limits are exceeded. */
         boolean add(String name, InputStream in) throws IOException {
             if (entries.containsKey(name)) {
-                problems.add(entryFinding(Level.DENY, "duplicate entry", name));
+                problems.add(entryFinding(Level.DENY, "duplicate entry", prefix + name));
                 return true;
             }
             byte[] bytes = in.readNBytes((int) MAX_ENTRY_BYTES + 1);
             total += bytes.length;
             if (bytes.length > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES) {
-                problems.add(entryFinding(Level.DENY, "oversized entry", name));
+                problems.add(entryFinding(Level.DENY, "oversized entry", prefix + name));
                 return false;
             }
             entries.put(name, bytes);
@@ -212,6 +237,8 @@ public final class JarCheck {
     private static int checkArchive(String prefix, Map<String, byte[]> entries, boolean ours, int depth,
                                     Map<List<String>, Finding> findings, List<String> robots) {
         List<ClassFile> classes = new ArrayList<>();
+        /** The classes stored at their name's path: only these can load from the archive. */
+        List<ClassFile> loadable = new ArrayList<>();
         Map<String, String> firstPath = new HashMap<>();
         int nestedClasses = 0;
         for (Map.Entry<String, byte[]> e : entries.entrySet()) {
@@ -229,6 +256,14 @@ public final class JarCheck {
                 try {
                     ClassFile cf = ClassFile.parse(bytes);
                     classes.add(cf);
+                    String classPath = versioned ? name.replaceFirst("^META-INF/versions/\\d+/", "") : name;
+                    if (classPath.equals(cf.name + ".class")) {
+                        loadable.add(cf);
+                    } else {
+                        // The class loader finds a class by its name's path, so this one never loads; as the jar's
+                        // own it would leave every reference to the class it names unjudged.
+                        add(findings, Level.DENY, "class name differs from its path", "entry " + path, path);
+                    }
                     String earlier = firstPath.putIfAbsent(cf.name, name);
                     if (earlier != null && !versioned && !earlier.startsWith("META-INF/versions/")) {
                         add(findings, Level.DENY, "duplicate class", "class " + prefix + dotted(cf.name), path);
@@ -246,11 +281,15 @@ public final class JarCheck {
             } else if (ClassFile.hasMagic(bytes)) {
                 add(findings, Level.DENY, "hidden class file", "entry " + path, path);
             } else if (depth == 0 && memberJar(name)) {
-                Optional<Map<String, byte[]>> member = readMember(bytes);
-                if (member.isEmpty()) {
+                Optional<Lists> member = readMember(path + "!/", path, bytes);
+                if (member.isEmpty() || member.get().stream().isEmpty()) {
                     add(findings, Level.DENY, "unreadable member jar", "entry " + path, path);
                 } else {
-                    nestedClasses += checkArchive(path + "!/", member.get(), ours, depth + 1, findings, robots);
+                    for (Finding f : member.get().problems()) {
+                        f.classes().forEach(c -> add(findings, f.level(), f.reason(), f.api(), c));
+                    }
+                    nestedClasses += checkArchive(path + "!/", member.get().stream(), ours, depth + 1, findings,
+                            robots);
                 }
             } else if (isArchive(name, bytes)) {
                 add(findings, Level.DENY, "nested archive", "entry " + path, path);
@@ -262,33 +301,73 @@ public final class JarCheck {
                 robots.add(prefix + dotted(name.substring(0, name.length() - ".team".length())) + " (team)");
             }
         }
-        Set<String> own = new HashSet<>();
-        for (ClassFile cf : classes) {
+        Map<String, ClassFile> own = new HashMap<>();
+        for (ClassFile cf : loadable) {
             if (!reservedPackage(cf.name)) {
-                own.add(cf.name);
+                own.put(cf.name, cf);
             }
         }
         for (ClassFile cf : classes) {
             String user = prefix + dotted(cf.name);
-            if (cf.superName != null && !own.contains(cf.superName)) {
+            if (cf.superName != null && !own.containsKey(cf.superName)) {
                 judge(findings, ApiRules.type(cf.superName), "extends " + dotted(cf.superName), user);
             }
             for (String iface : cf.interfaces) {
-                if (!own.contains(iface)) {
+                if (!own.containsKey(iface)) {
                     judge(findings, ApiRules.type(iface), "implements " + dotted(iface), user);
                 }
             }
             for (ClassFile.MemberRef ref : cf.memberRefs) {
-                if (!own.contains(ref.owner())) {
+                if (!own.containsKey(ref.owner())) {
                     judge(findings, ApiRules.member(ref.owner(), ref.name(), ref.descriptor()),
                             dotted(ref.owner()) + "." + ref.name(), user);
+                } else {
+                    // javac names the receiver's static type as the owner, so a member the jar's own class only
+                    // inherits is judged on the classes it is inherited from.
+                    for (String type : inheritedFrom(own, ref)) {
+                        judge(findings, ApiRules.member(type, ref.name(), ref.descriptor()),
+                                dotted(type) + "." + ref.name(), user);
+                    }
                 }
             }
             for (String method : cf.nativeMethods) {
                 add(findings, Level.DENY, "native code", "native method " + user + "." + method, user);
             }
+            if (cf.finalizer) {
+                add(findings, Level.FLAG, "threads", "finalizer " + user + ".finalize", user);
+            }
         }
         return classes.size() + nestedClasses;
+    }
+
+    /**
+     * The classes outside the jar that a member referenced through one of the jar's own classes can come from: the
+     * first superclass and the interfaces outside the jar on the way up from that class. Empty if a class of the jar
+     * on the way declares the member itself.
+     */
+    private static Set<String> inheritedFrom(Map<String, ClassFile> own, ClassFile.MemberRef ref) {
+        Set<String> outside = new java.util.TreeSet<>();
+        Set<String> seen = new HashSet<>();
+        java.util.ArrayDeque<String> todo = new java.util.ArrayDeque<>(List.of(ref.owner()));
+        while (!todo.isEmpty()) {
+            String type = todo.poll();
+            if (!seen.add(type)) {
+                continue;
+            }
+            ClassFile cf = own.get(type);
+            if (cf == null) {
+                outside.add(type);
+                continue;
+            }
+            if (cf.declared.contains(ref.name() + ref.descriptor())) {
+                return Set.of();
+            }
+            if (cf.superName != null) {
+                todo.add(cf.superName);
+            }
+            todo.addAll(cf.interfaces);
+        }
+        return outside;
     }
 
     /** Whether Robocode reads this entry as a member jar ({@code JarRoot.readJarStream}: by the name alone). */
@@ -298,23 +377,27 @@ public final class JarCheck {
     }
 
     /**
-     * A member jar's entries as Robocode's stream reader sees them (local headers, in order), or empty if it is not
-     * a readable archive, holds a duplicate entry or exceeds the size limits.
+     * A member jar read both ways, as the jar itself is: Robocode finds its robots in its stream of local records,
+     * and the robot class loader reads its classes through its central directory (a nested {@code jar:} URL, which
+     * the JDK opens from a temporary copy). Empty if no temporary copy can be written.
      */
-    private static Optional<Map<String, byte[]>> readMember(byte[] bytes) {
-        Entries member = new Entries();
-        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                if (!entry.isDirectory() && !member.add(entry.getName(), zip)) {
-                    break;
+    private static Optional<Lists> readMember(String prefix, String label, byte[] bytes) {
+        Path copy = null;
+        try {
+            copy = Files.createTempFile("jarcheck-member", ".jar");
+            Files.write(copy, bytes);
+            return Optional.of(readBoth(prefix, label, bytes, copy));
+        } catch (IOException e) {
+            return Optional.empty();
+        } finally {
+            if (copy != null) {
+                try {
+                    Files.deleteIfExists(copy);
+                } catch (IOException ignored) {
+                    // A temporary file left behind costs nothing here.
                 }
             }
-        } catch (IOException | RuntimeException e) {
-            return Optional.empty();
         }
-        return member.entries.isEmpty() || !member.problems.isEmpty() ? Optional.empty()
-                : Optional.of(member.entries);
     }
 
     /**

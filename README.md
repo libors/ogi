@@ -3,33 +3,16 @@
 A team-first [Robocode](https://robocode.sourceforge.io/) bot. One robot class, `cz.libors.Ogi`, plays 1v1 and melee.
 The same code packaged as `cz.libors.OgiTeam` plays in the [TeamRumble](https://rumble.robowiki.net/).
 
-## About
-
-I played with Robocode years ago, and this project returns to it with modern tools. The aim is a team that clearly
-excels in the TeamRumble, built from new ideas rather than by retuning an existing bot. The 1v1 setting serves as a
-lab for getting physics, waves, targeting and movement right before more robots join the game.
-
-Principles:
-- **Strategies are pluggable and configured as data.** 1v1, melee and team modes are combinations of components, not
-  rewrites.
-- **The physics model is verified against the real engine.** The in-bot simulator is tested against recordings from
-  the actual Robocode engine, never against assumptions about it.
-- **Decisions are explainable.** Every decision leaves a trace: the candidates considered and how each was scored.
-  A toggleable overlay and a replay viewer will show why the bots do what they do.
-- **Every change is measured.** A headless harness with statistically sound comparisons decides what stays.
-
-Status: walking skeleton. Radar lock or sweep, circular targeting, orbiting movement and scans shared between
-teammates, plus a headless harness that checks the bot against the Robocode sample bots. The engine model for robot
-motion and bullets matches turn-by-turn recordings of the real engine bit for bit.
-
 ## Layout
 
 | Path | Content |
 |---|---|
 | `bot/` | Robot code. It is compiled for Java 17 (`--release 17`), the oldest Java the rumble clients run. |
-| `harness/` | Headless battle runner on top of the Robocode control API, the skeleton check and the turn-by-turn recorder |
-| `probe/` | Probe robots that drive the engine with random commands for recordings; never entered in a rumble |
-| `docs/` | Build and run, harness, engine model and gotchas |
+| `harness/` | Headless battle runner on top of the Robocode control API: checks, the turn-by-turn recorder, comparisons, the queue and the offline benches |
+| `probe/` | Probe robots that drive the engine with random commands. Their recordings are the ground truth for the bot's engine model (`recordProbes`, `engineTest`); never entered in a rumble |
+| `tools/` | Interactive pages of the melee and team movement (`tools/movement-explorer/`) |
+| `worker/` | What runs on a remote battle worker: the container, the Windows scripts and diagnostics |
+| `docs/` | Build and run, harness, engine model and gotchas, fire detection, the bot |
 | `.robocode/` | Official Robocode installation used by the harness (downloaded, git-ignored) |
 
 ## Building and checking

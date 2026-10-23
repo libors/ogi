@@ -1,7 +1,12 @@
 package cz.libors.harness.compare;
 
+import cz.libors.harness.compare.CompareLog.Battle;
+import cz.libors.harness.compare.CompareLog.Side;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -50,5 +55,50 @@ class CompareTest {
                 1e-12);
         assertEquals(0.25 * 20 + 0.75 * 50, weighted.hitRateBaseline(), 1e-12);
         assertEquals(3, weighted.opponents());
+    }
+
+    private static Battle battle(String opponent, int pair, Side side, double share, int fired, int hits,
+                                 int opponentFired, int opponentHits) {
+        return new Battle(opponent, pair, side, 1, share, (int) share, 100 - (int) share, 0, 0, 0, 0, 0, 0, 0, 0,
+                fired, hits, opponentFired, opponentHits, 0, 0, 0, 0, 1000);
+    }
+
+    @Test
+    void theScoreboardsAveragePerOpponentFromTheLogsPairs(@TempDir Path tmp) throws IOException {
+        CompareLog log = CompareLog.open(tmp.resolve("battles.tsv"), Map.of("test", "1"));
+        // Opponent x: shares 40 and a tie for the baseline, 60 and 70 for the candidate; y fires nothing at all.
+        log.append(battle("x", 0, Side.BASELINE, 40, 10, 2, 20, 5));
+        log.append(battle("x", 0, Side.CANDIDATE, 60, 10, 4, 20, 2));
+        log.append(battle("x", 1, Side.BASELINE, 50, 10, 3, 20, 5));
+        log.append(battle("x", 1, Side.CANDIDATE, 70, 10, 5, 20, 2));
+        log.append(battle("y", 0, Side.BASELINE, 80, 0, 0, 0, 0));
+        log.append(battle("y", 0, Side.CANDIDATE, 70, 0, 0, 0, 0));
+        log.append(battle("y", 1, Side.BASELINE, 90, 0, 0, 0, 0));
+        log.append(battle("y", 1, Side.CANDIDATE, 80, 0, 0, 0, 0));
+        // A pair with one battle only stays out.
+        log.append(battle("y", 2, Side.BASELINE, 10, 0, 0, 0, 0));
+        Stratum x = new Stratum("x", true, "strong");
+        x.add(40, 60);
+        x.add(50, 70);
+        Stratum y = new Stratum("y", false, "other");
+        y.add(80, 70);
+        y.add(90, 80);
+        Compare.Summary summary = Compare.summarize(Map.of(), Map.of(), "score", Sprt.Bounds.parse("gainer"),
+                List.of(x, y), Map.of(), log, 2);
+        Compare.Scoreboard all = summary.scoreboards().get(0);
+        assertEquals("all", all.name());
+        assertEquals(65, all.apsBaseline(), 1e-12);
+        assertEquals(70, all.apsCandidate(), 1e-12);
+        assertEquals((25 + 100) / 2.0, all.pwinBaseline(), 1e-12, "a tie counts half a win");
+        assertEquals(100, all.pwinCandidate(), 1e-12);
+        // Hit rates pool the bullets of an opponent's pairs; an opponent without bullets has none and stays out.
+        assertEquals(25, all.hitRateBaseline(), 1e-12);
+        assertEquals(45, all.hitRateCandidate(), 1e-12);
+        assertEquals(25, all.hitByBaseline(), 1e-12);
+        assertEquals(10, all.hitByCandidate(), 1e-12);
+        Compare.Scoreboard strong = summary.scoreboards().get(1);
+        assertEquals("strong", strong.name());
+        assertEquals(45, strong.apsBaseline(), 1e-12);
+        assertEquals(20, strong.difference(), 1e-12);
     }
 }

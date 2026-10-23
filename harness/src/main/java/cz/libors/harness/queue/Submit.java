@@ -50,8 +50,10 @@ public final class Submit {
         spec.setProperty("type", type);
         spec.setProperty("submittedAt", Long.toString(now));
         for (String key : PASSED) {
-            if (o.has(key) && !o.get(key).isEmpty()) {
-                spec.setProperty(key, o.get(key));
+            // Trimmed, as the checks read them: the jobs parse them as they are, and "10 " would make the job
+            // unreadable after it was accepted.
+            if (o.has(key) && !o.get(key).isBlank()) {
+                spec.setProperty(key, o.get(key).trim());
             }
         }
         Path opponents = Path.of(o.get("opponents"));
@@ -80,10 +82,27 @@ public final class Submit {
         String what = !type.equals("compare") ? RecordJob.check(spec, lines)
                 : MeleeJob.melee(lines) ? MeleeJob.check(spec, lines) : CompareJob.check(spec, lines);
 
-        String id = new SimpleDateFormat("yyMMdd-HHmmss").format(new Date(now)) + "-"
-                + Integer.toHexString(0x100 + new SecureRandom().nextInt(0xf00));
-        Path incoming = state.resolve("incoming").resolve(id);
-        Files.createDirectories(incoming);
+        Files.createDirectories(state.resolve("incoming"));
+        Files.createDirectories(state.resolve("jobs"));
+        String id;
+        Path incoming;
+        SecureRandom random = new SecureRandom();
+        while (true) {
+            // Two submits in one second may draw the same suffix: the directory is created, not reused, so each
+            // gets an id of its own.
+            id = new SimpleDateFormat("yyMMdd-HHmmss").format(new Date(now)) + "-"
+                    + Integer.toHexString(0x100 + random.nextInt(0xf00));
+            incoming = state.resolve("incoming").resolve(id);
+            if (Files.exists(state.resolve("jobs").resolve(id))) {
+                continue;
+            }
+            try {
+                Files.createDirectory(incoming);
+                break;
+            } catch (java.nio.file.FileAlreadyExistsException e) {
+                // drawn by another submit just now
+            }
+        }
         try (OutputStream out = Files.newOutputStream(incoming.resolve("job.properties"))) {
             spec.store(out, "queue job, as submitted");
         }
@@ -94,7 +113,6 @@ public final class Submit {
         try (OutputStream out = Files.newOutputStream(incoming.resolve("status.properties"))) {
             status.store(out, "queue job status");
         }
-        Files.createDirectories(state.resolve("jobs"));
         // One move, so the server never sees half a job.
         Files.move(incoming, state.resolve("jobs").resolve(id), StandardCopyOption.ATOMIC_MOVE);
         System.out.println("Queued " + id + ": " + what

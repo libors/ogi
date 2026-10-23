@@ -66,6 +66,8 @@ public final class ApiRules {
                 "java/lang/ProcessHandle");
         allowMembers("java/lang/Runtime", "getRuntime", "availableProcessors", "freeMemory", "maxMemory",
                 "totalMemory", "gc", "version");
+        // A nested class takes its outer class's rule; the version Runtime.version() returns starts no process.
+        allow("java/lang/Runtime$Version");
         flag(THREADS, "java/lang/Thread", "java/lang/ThreadGroup");
         allowMembers("java/lang/Thread", "currentThread", "sleep", "onSpinWait", "yield", "interrupted",
                 "isInterrupted", "interrupt", "getName", "getId", "holdsLock", "getStackTrace");
@@ -172,6 +174,15 @@ public final class ApiRules {
         }
         if (name.startsWith("parallel") && owner.startsWith("java/util/")) {
             return new Rule(Level.FLAG, THREADS); // parallel streams and sorts run on the common pool
+        }
+        if (owner.equals("java/util/stream/StreamSupport")
+                || owner.equals("java/util/concurrent/ConcurrentHashMap") && descriptor.startsWith("(J")) {
+            // A stream built with parallel = true, and the map's bulk operations with a parallelism threshold, run
+            // on the common pool too.
+            return new Rule(Level.FLAG, THREADS);
+        }
+        if (owner.equals("java/lang/ref/Cleaner")) {
+            return new Rule(Level.FLAG, THREADS); // a cleaner runs its actions on a thread of its own
         }
         Rule rule = MEMBERS.get(owner + "." + name);
         return rule != null ? rule : type(owner);

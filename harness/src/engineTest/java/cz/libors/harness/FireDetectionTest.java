@@ -27,12 +27,12 @@ import java.util.TreeSet;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Measures {@link FireDetector} against the true bullets of the probe recordings (step 2c).
+ * Measures {@link FireDetector} against the true bullets of the probe recordings.
  *
  * <p>Every probe acts as an observer: its detectors get only what that probe saw (its own state, its scans and its
  * events), exactly as a bot would. Its own unexplained energy loss of 0.1 reveals the inactivity penalty. The
- * detections are matched with the true shots of each enemy: a detection matches the first unmatched shot whose fire
- * turn lies in the detection's fire-time window.
+ * detections are matched with the true shots of each enemy: a detection matches the unmatched shot closest to it
+ * whose fire turn lies in the detection's fire-time window.
  *
  * <p>Reported per scenario: precision, recall over all shots and over clean shots (the observer scanned the shooter
  * in the fire turn and the turn after), fire-time, origin and power errors, and the causes of false and missed shots

@@ -9,6 +9,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 
 /**
@@ -139,7 +140,12 @@ public abstract class QueueJob {
         return false;
     }
 
-    public abstract void completed(Work work, Map<String, Object> outcome, String worker) throws IOException;
+    /**
+     * A battle came back. Empty if the job counted it; the reason if it refused the outcome (not a battle of the
+     * robots asked for, no recording) and treated the battle as failed, so the server does not log it as played.
+     */
+    public abstract Optional<String> completed(Work work, Map<String, Object> outcome, String worker)
+            throws IOException;
 
     /** A battle failed on the worker (an exception, a crash, a timeout); the job may retry it there or give up. */
     public abstract void failed(Work work, String reason, String worker) throws IOException;
@@ -192,8 +198,11 @@ public abstract class QueueJob {
         return m;
     }
 
-    /** Reads a job directory written by {@link Submit}. */
-    static QueueJob open(Path dir) throws IOException {
+    /**
+     * Reads a job directory written by {@link Submit}; {@code slots} are the server's settings that decide battles
+     * ({@link cz.libors.harness.compare.CompareJob#open(Path, Properties, Map)}).
+     */
+    static QueueJob open(Path dir, Map<String, String> slots) throws IOException {
         Properties spec = new Properties();
         try (InputStream in = Files.newInputStream(dir.resolve("job.properties"))) {
             spec.load(in);
@@ -202,9 +211,9 @@ public abstract class QueueJob {
         if ("compare".equals(type)) {
             // A comparison against a melee set plays draws of nine opponents instead of one opponent at a time.
             if (cz.libors.harness.compare.MeleeJob.melee(Files.readAllLines(dir.resolve("opponents.txt")))) {
-                return cz.libors.harness.compare.MeleeJob.open(dir, spec);
+                return cz.libors.harness.compare.MeleeJob.open(dir, spec, slots);
             }
-            return cz.libors.harness.compare.CompareJob.open(dir, spec);
+            return cz.libors.harness.compare.CompareJob.open(dir, spec, slots);
         }
         if ("record".equals(type)) {
             return cz.libors.harness.compare.RecordJob.open(dir, spec);

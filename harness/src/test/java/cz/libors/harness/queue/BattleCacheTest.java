@@ -89,4 +89,31 @@ class BattleCacheTest {
         assertEquals(2, third.size());
         assertEquals(130, ((Number) third.get(next).orElseThrow().get("elapsedMillis")).intValue());
     }
+
+    @Test
+    void battlesOlderThanTheRetentionAreDroppedAndUndatedOnesTakeTheirVersionsDate(@TempDir Path tmp)
+            throws IOException {
+        Path file = tmp.resolve("battle-cache.jsonl");
+        long now = 100L * 86_400_000L;
+        long old = now - (BattleCache.RETENTION_DAYS + 1) * 86_400_000L;
+        Files.createDirectories(tmp.resolve("jars"));
+        Path oldJar = Files.writeString(tmp.resolve("jars").resolve("cz.libors.Ogi_old.jar"), "jar");
+        Files.setLastModifiedTime(oldJar, java.nio.file.attribute.FileTime.fromMillis(old));
+        Path newJar = Files.writeString(tmp.resolve("jars").resolve("cz.libors.Ogi_new.jar"), "jar");
+        Files.setLastModifiedTime(newJar, java.nio.file.attribute.FileTime.fromMillis(now - 86_400_000L));
+        Files.write(file, List.of(
+                "{\"key\":\"a\",\"at\":" + old + ",\"battle\":\"cz.libors.Ogi new vs x.Bot 1.0, seed 1\",\"outcome\":{}}",
+                "{\"key\":\"b\",\"at\":" + now + ",\"battle\":\"cz.libors.Ogi new vs x.Bot 1.0, seed 2\",\"outcome\":{}}",
+                "{\"key\":\"c\",\"battle\":\"cz.libors.Ogi old vs x.Bot 1.0, seed 3\",\"outcome\":{}}",
+                "{\"key\":\"d\",\"battle\":\"x.Bot 1.0 vs cz.libors.Ogi new, seed 4\",\"outcome\":{}}"));
+        BattleCache cache = new BattleCache(file, new FakeWorkers(), now);
+        assertEquals(2, cache.size());
+        assertTrue(cache.get("b").isPresent());
+        assertTrue(cache.get("d").isPresent(), "an undated battle of a recent version stays");
+        List<String> lines = Files.readAllLines(file);
+        assertEquals(2, lines.size(), "the file holds what is kept");
+        assertTrue(lines.get(1).contains("\"at\":"), "and every line has its date now");
+        assertTrue(Files.exists(tmp.resolve("battle-cache.jsonl.before-dates")), "the file as it was stays beside it");
+        assertEquals(2, new BattleCache(file, new FakeWorkers(), now).size());
+    }
 }

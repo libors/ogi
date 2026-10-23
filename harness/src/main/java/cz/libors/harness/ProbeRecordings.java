@@ -151,6 +151,7 @@ public final class ProbeRecordings {
             checks.addAll(teamEventsExperiment(runner, version, out, summaries));
             checks.add(fireAssistExperiment(runner, version, out, summaries));
             checks.add(ownJarCheck(runner, version));
+            checks.add(rankExperiment(runner, version));
         }
         // Once this JVM's engine is closed, as each check starts one of its own on the same home.
         checks.add(childCheck("A robot thread that stops calling the API outlives its battle and keeps computing; the "
@@ -548,6 +549,32 @@ public final class ProbeRecordings {
      * The team jar lists the robot under the same name and version as the robot's own jar (engine-model G-42);
      * {@link BattleRunner} must pick the robot's own jar.
      */
+    /**
+     * The results' rank is the contestant's position in the setup, not its place (G-31): a melee battle with
+     * {@code sample.SittingDuck}, which never fires, listed first.
+     */
+    private static Check rankExperiment(BattleRunner runner, String version) throws IOException {
+        String probe = "cz.libors.probe.RandomProbe " + version;
+        List<String> robots = new ArrayList<>(List.of("sample.SittingDuck"));
+        List<String> named = new ArrayList<>(List.of("sample.SittingDuck"));
+        for (int i = 1; i <= 5; i++) {
+            robots.add(probe);
+            named.add(probe + " (" + i + ")");
+        }
+        BattleOutcome outcome = runner.run(BattleSetup.melee("ranks", robots, 3).withSeed(EXPERIMENT_SEED));
+        int bySetup = 0;
+        int byScoreDiffers = 0;
+        for (ContestantResult r : outcome.results()) {
+            bySetup += r.rank() == named.indexOf(r.name()) + 1 ? 1 : 0;
+            byScoreDiffers += outcome.placeByScore(r.name()) != r.rank() ? 1 : 0;
+        }
+        return new Check("The results' rank is the position in the setup, not the place by score (G-31)",
+                bySetup == named.size() && outcome.results().size() == named.size() && byScoreDiffers > 0,
+                "rank = setup position for " + bySetup + " of " + named.size() + "; place by score differs for "
+                        + byScoreDiffers + "; " + outcome.results().stream()
+                        .map(r -> r.name() + " rank " + r.rank() + " score " + r.score()).toList());
+    }
+
     private static Check ownJarCheck(BattleRunner runner, String version) {
         String name = "cz.libors.Ogi " + version;
         Set<String> listed = runner.listedJars(name).stream().map(p -> p.getFileName().toString())

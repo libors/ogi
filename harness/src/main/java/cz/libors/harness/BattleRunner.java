@@ -47,7 +47,14 @@ import java.util.stream.Stream;
 /** Runs battles headless on a real Robocode installation through the control API. */
 public final class BattleRunner implements AutoCloseable {
 
-    private static final int MAX_PROBLEMS = 50;
+    /**
+     * Raised by a harness change that alters battles: logs of comparisons are not resumed across it, and the battle
+     * cache keeps the battles of each version apart. 2: every battle starts with empty robot data.
+     */
+    public static final int BATTLE_VERSION = 2;
+
+    /** Problem lines kept per robot (and for the engine): a robot that throws every turn would fill memory. */
+    static final int MAX_PROBLEMS = 50;
 
     /**
      * The CPU constant of an idle machine, in ns, for robots' own turn times: the queue's executor passes it,
@@ -127,7 +134,7 @@ public final class BattleRunner implements AutoCloseable {
         }
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         return new BattleOutcome(setup, seed, List.copyOf(collector.results), Map.copyOf(collector.skippedTurns),
-                List.copyOf(collector.problems), collector.startMismatches, collector.shots(), elapsedMillis,
+                collector.problems(), collector.startMismatches, collector.shots(), elapsedMillis,
                 collector.turnTimes(idleConstantMicros()));
     }
 
@@ -140,7 +147,7 @@ public final class BattleRunner implements AutoCloseable {
     }
 
     private static final java.util.regex.Pattern SKIPPED_TURN =
-            java.util.regex.Pattern.compile("^SYSTEM: .+ skipped turn \\d+");
+            java.util.regex.Pattern.compile("^SYSTEM: .+ skipped turn (\\d+)");
 
     /**
      * Deletes the data that robots from jars wrote in earlier battles: the engine gives each one the directory
@@ -375,7 +382,7 @@ public final class BattleRunner implements AutoCloseable {
         engine.close();
     }
 
-    private static final class Collector extends BattleAdaptor {
+    static final class Collector extends BattleAdaptor {
 
         /** Per robot name: the turn times it reported, in µs. */
         private final Map<String, long[]> turnTimes = new LinkedHashMap<>();
@@ -383,6 +390,8 @@ public final class BattleRunner implements AutoCloseable {
         private final List<ContestantResult> results = new ArrayList<>();
         private final Map<String, Integer> skippedTurns = new LinkedHashMap<>();
         private final List<String> problems = new ArrayList<>();
+        /** Per robot name (or "engine"): the problem lines it produced, kept or not. */
+        private final Map<String, Integer> problemCounts = new LinkedHashMap<>();
         private List<BattleSetup.Start> starts;
         private int startMismatches;
         /** Per contestant name: bullets fired and hits on other contestants. */
@@ -392,14 +401,30 @@ public final class BattleRunner implements AutoCloseable {
         /** The round in which one contestant was left, or -1. */
         private int decidedRound = -1;
 
+        /** Per robot name: the round and turn of each time in {@link #turnTimes}, and the turns the engine skipped. */
+        private final Map<String, long[]> turnKeys = new LinkedHashMap<>();
+        private final Map<String, Set<Long>> skippedKeys = new LinkedHashMap<>();
+
+        /**
+         * The turn times reported, one per turn the robot acted in. A turn over the limit shows in the snapshot of
+         * the turn the robot acts again in, the one with the engine's "skipped turn" lines; the snapshots of the
+         * turns it skipped repeat older properties, so they are left out by those lines' turn numbers.
+         */
         Map<String, BattleOutcome.TurnTimes> turnTimes(long idleConstantMicros) {
             Map<String, BattleOutcome.TurnTimes> result = new LinkedHashMap<>();
             turnTimes.forEach((name, times) -> {
-                int n = turnCounts.get(name);
+                int count = turnCounts.get(name);
+                long[] keys = turnKeys.get(name);
+                Set<Long> skipped = skippedKeys.getOrDefault(name, Set.of());
+                int n = 0;
                 long max = 0;
                 int overHalf = 0;
                 int over = 0;
-                for (int i = 0; i < n; i++) {
+                for (int i = 0; i < count; i++) {
+                    if (skipped.contains(keys[i])) {
+                        continue;
+                    }
+                    n++;
                     max = Math.max(max, times[i]);
                     overHalf += times[i] > idleConstantMicros / 2 ? 1 : 0;
                     over += times[i] > idleConstantMicros ? 1 : 0;
@@ -416,9 +441,12 @@ public final class BattleRunner implements AutoCloseable {
             robotNames.clear();
             turnTimes.clear();
             turnCounts.clear();
+            turnKeys.clear();
+            skippedKeys.clear();
             results.clear();
             skippedTurns.clear();
             problems.clear();
+            problemCounts.clear();
             starts = expectedStarts;
             startMismatches = 0;
             shots.clear();
@@ -457,23 +485,28 @@ public final class BattleRunner implements AutoCloseable {
         public void onTurnEnded(TurnEndedEvent event) {
             int round = event.getTurnSnapshot().getRound();
             int turn = event.getTurnSnapshot().getTurn();
+            // Once one contestant is left the round runs on without the robots acting, their snapshots repeating
+            // their last properties: those turns are no turn times.
+            boolean open = round != decidedRound;
             countShots(round, event.getTurnSnapshot().getRobots(), event.getTurnSnapshot().getBullets());
             for (IRobotSnapshot robot : event.getTurnSnapshot().getRobots()) {
-                boolean skipped = false;
                 String output = robot.getOutputStreamSnapshot();
                 if (output != null && !output.isEmpty()) {
                     for (String line : output.split("\\R")) {
-                        if (skippedTurn(line)) {
+                        java.util.regex.Matcher skip = SKIPPED_TURN.matcher(line);
+                        if (skip.find()) {
                             skippedTurns.merge(robot.getName(), 1, Integer::sum);
-                            skipped = true;
+                            skippedKeys.computeIfAbsent(robot.getName(), k -> new HashSet<>())
+                                    .add(turnKey(round, Integer.parseInt(skip.group(1))));
                         } else if (line.contains("Exception") || line.contains("Error")) {
-                            addProblem(robot.getName() + " [round " + round + ", turn " + turn + "]: " + line.trim());
+                            addProblem(robot.getName(),
+                                    robot.getName() + " [round " + round + ", turn " + turn + "]: " + line.trim());
                         }
                     }
                 }
-                // A dead robot and one that skipped the turn still show the debug properties of its last commands.
-                if (!skipped && robot.getState() != RobotState.DEAD) {
-                    countTurnTime(robot);
+                // A dead robot still shows the debug properties of its last commands.
+                if (open && robot.getState() != RobotState.DEAD) {
+                    countTurnTime(robot, turnKey(round, turn));
                 }
             }
         }
@@ -487,7 +520,7 @@ public final class BattleRunner implements AutoCloseable {
          * the air are taken back and later ones are ignored: they can no longer hit an enemy, and their number grows
          * with the flight time, so they would tie the hit rate to the distance.
          */
-        private void countShots(int round, IRobotSnapshot[] robots, IBulletSnapshot[] bullets) {
+        void countShots(int round, IRobotSnapshot[] robots, IBulletSnapshot[] bullets) {
             if (round == decidedRound) {
                 return;
             }
@@ -520,7 +553,11 @@ public final class BattleRunner implements AutoCloseable {
             }
         }
 
-        private void countTurnTime(IRobotSnapshot robot) {
+        private static long turnKey(int round, int turn) {
+            return ((long) round << 32) | (turn & 0xffffffffL);
+        }
+
+        private void countTurnTime(IRobotSnapshot robot, long key) {
             IDebugProperty[] properties = robot.getDebugProperties();
             if (properties == null) {
                 return;
@@ -536,11 +573,15 @@ public final class BattleRunner implements AutoCloseable {
                     String name = robot.getName();
                     int n = turnCounts.merge(name, 1, Integer::sum);
                     long[] times = turnTimes.computeIfAbsent(name, k -> new long[1024]);
+                    long[] keys = turnKeys.computeIfAbsent(name, k -> new long[1024]);
                     if (n > times.length) {
                         times = java.util.Arrays.copyOf(times, 2 * times.length);
+                        keys = java.util.Arrays.copyOf(keys, 2 * keys.length);
                         turnTimes.put(name, times);
+                        turnKeys.put(name, keys);
                     }
                     times[n - 1] = micros;
+                    keys[n - 1] = key;
                 }
             }
         }
@@ -557,7 +598,7 @@ public final class BattleRunner implements AutoCloseable {
 
         @Override
         public void onBattleError(BattleErrorEvent event) {
-            addProblem("engine: " + event.getError());
+            addProblem("engine", "engine: " + event.getError());
         }
 
         @Override
@@ -567,10 +608,26 @@ public final class BattleRunner implements AutoCloseable {
             }
         }
 
-        private void addProblem(String problem) {
-            if (problems.size() < MAX_PROBLEMS) {
+        /**
+         * Keeps a problem line, at most {@link #MAX_PROBLEMS} per source: an opponent that throws every turn must not
+         * crowd out our robots' lines.
+         */
+        void addProblem(String source, String problem) {
+            if (problemCounts.merge(source, 1, Integer::sum) <= MAX_PROBLEMS) {
                 problems.add(problem);
             }
+        }
+
+        /** The problem lines kept, then one line per source that produced more, saying how many were left out. */
+        List<String> problems() {
+            List<String> all = new ArrayList<>(problems);
+            problemCounts.forEach((source, n) -> {
+                if (n > MAX_PROBLEMS) {
+                    String prefix = source.equals("engine") ? "engine: " : source + ": ";
+                    all.add(prefix + (n - MAX_PROBLEMS) + " more problem lines left out");
+                }
+            });
+            return List.copyOf(all);
         }
     }
 }

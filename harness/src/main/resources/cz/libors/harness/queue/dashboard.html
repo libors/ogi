@@ -131,6 +131,7 @@ pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 
   <h2>Workers</h2>
   <div class="workers" id="workers"></div>
   <div class="muted" id="totals" style="font-size:13px; margin-top:8px"></div>
+  <div id="unreadable" style="font-size:13px; margin-top:8px"></div>
   <nav class="tabs" id="tabs"></nav>
 
   <div class="layout">
@@ -358,6 +359,9 @@ function render(s) {
   patch(document.getElementById("workers"), s.workers.map(w => worker(w, s.now, keys)).join("")
     || '<div class="empty">No workers configured.</div>');
   patch(document.getElementById("totals"), totals(s.totals));
+  // Job directories the server cannot open: no tab lists them, so they are named here.
+  patch(document.getElementById("unreadable"), (s.unreadable || []).map(u =>
+    `<div>Job ${esc(u.id)} cannot be read: ${esc(u.reason)}</div>`).join(""));
   patch(document.getElementById("tabs"), tabs(s));
   const shown = shownJob(s);
   const jobs = s.jobs.filter(j => formatOf(j) === tab);

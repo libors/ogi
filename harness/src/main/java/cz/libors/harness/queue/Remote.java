@@ -11,7 +11,7 @@ import java.util.List;
  * {@code remote*} Gradle tasks.
  *
  * <p>The class sees its Robocode home at {@code C:/ogi/run/<name>} and writes to {@code C:/ogi/out/<name>}, which
- * comes back to {@code <results>/<name>}.
+ * comes back to {@code <results>/<name>}. The bundle goes to {@code C:/ogi/bundle-remote}, not to the queue's.
  *
  * <p>Usage: {@code Remote host=<ssh host> bundle=<local bundle> results=<local dir> name=<run> [clean=true]
  * [cpuFactor=1.5] [slotJvm=queue|rumble] [jvm=<option>]... [runJvm=<option>]... -- <main class> <argument>...}
@@ -25,9 +25,11 @@ public final class Remote {
         Options o = Options.parse(args, 0);
         String host = o.get("host");
         String name = o.get("name");
-        WorkerConfig worker = WorkerConfig.parse(host + ":1", Path.of("."), Path.of(o.get("bundle")), "java", false,
-                WorkerConfig.baseJvm(o.get("slotJvm", "queue")), o.all("jvm"),
+        // A bundle of its own: syncing the queue's would replace harness.jar under the slots running from it.
+        WorkerConfig queueWorker = WorkerConfig.parse(host + ":1", Path.of("."), Path.of(o.get("bundle")), "java",
+                false, WorkerConfig.baseJvm(o.get("slotJvm", "queue")), o.all("jvm"),
                 Double.parseDouble(o.get("cpuFactor", "1.5")));
+        WorkerConfig worker = queueWorker.withBundle(queueWorker.root() + "/bundle-remote");
         int copied = Ssh.sync(host, Path.of(o.get("bundle")), worker.bundle());
         System.out.println("bundle synced to " + host + ", " + copied + " file(s) copied");
         String out = worker.root() + "/out/" + name;
@@ -47,7 +49,11 @@ public final class Remote {
         List<String> command = new ArrayList<>(List.of("ssh", "-T"));
         command.addAll(Ssh.OPTIONS);
         command.addAll(List.of(host, Ssh.command(worker.java(), java)));
-        int exit = new ProcessBuilder(command).inheritIO().start().waitFor();
+        // The session's input stays open until the run ends: the executor ends the run when it closes, which it does
+        // when this JVM ends, e.g. on an interrupted task.
+        Process ssh = new ProcessBuilder(command).redirectOutput(ProcessBuilder.Redirect.INHERIT)
+                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        int exit = ssh.waitFor();
 
         Path results = Path.of(o.get("results")).resolve(name);
         Executor.deleteRecursively(results);

@@ -60,6 +60,7 @@ class EnergyReplayTest {
         mismatches.examples.forEach(e -> System.out.println("  " + e));
         assertTrue(stats.getOrDefault("compared", 0) > 100_000, "Too few compared turns: " + stats);
         assertTrue(stats.getOrDefault("compared, zapped", 0) > 1_000, "Too few inactivity turns: " + stats);
+        assertTrue(stats.getOrDefault("compared, energy dropped to 0", 0) > 0, "No energy dropped to 0: " + stats);
         assertEquals(Map.of(), mismatches.byField, "Model and engine disagree, examples:\n"
                 + String.join("\n", mismatches.examples));
     }

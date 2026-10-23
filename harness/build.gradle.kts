@@ -648,10 +648,11 @@ tasks.register<JavaExec>("gunTrend") {
     jvmArgs("-Xmx4g")
     val logs = providers.gradleProperty("logs").orElse("harness/build/gun-logs/$botVersion")
     val rounds = providers.gradleProperty("rounds").orElse("10")
+    val robot = providers.gradleProperty("robot")
     val root = rootDir
     argumentProviders.add(CommandLineArgumentProvider {
         listOf("logs=" + logs.get().split(",").joinToString(",") { root.resolve(it.trim()).absolutePath },
-            "rounds=" + rounds.get())
+            "rounds=" + rounds.get()) + listOfNotNull(robot.orNull?.let { "robot=$it" })
     })
 }
 
@@ -683,8 +684,23 @@ tasks.register<JavaExec>("decompileJar") {
         val target = out.get().dir(file.nameWithoutExtension).asFile
         target.deleteRecursively()
         target.mkdirs()
+        // A team jar may carry its members' jars, which Robocode loads robots from: they are decompiled too (into
+        // the same directory), since the decompiler skips archives inside a jar.
+        val members = out.get().dir(file.nameWithoutExtension + ".members").asFile
+        members.deleteRecursively()
+        val memberJars = mutableListOf<String>()
+        ZipFile(file).use { zip ->
+            zip.entries().asSequence().filter { e ->
+                !e.isDirectory && !e.name.contains('/') && e.name.lowercase().let { it.endsWith(".jar") || it.endsWith(".zip") }
+            }.forEach { e ->
+                val copy = members.resolve(e.name)
+                copy.parentFile.mkdirs()
+                zip.getInputStream(e).use { input -> copy.outputStream().use { input.copyTo(it) } }
+                memberJars.add(copy.absolutePath)
+            }
+        }
         // Only the decompiled classes: a source file shipped in the jar must not stand in for its class.
-        listOf("--skip-extra-files=true", "--silent", file.absolutePath, target.absolutePath)
+        listOf("--skip-extra-files=true", "--silent", file.absolutePath) + memberJars + target.absolutePath
     })
 }
 

@@ -101,6 +101,10 @@ public final class MeleeBench {
         System.out.println("Base:    " + base + (team ? " (team battles: over TEAM)" : ""));
         System.out.println("Variant: " + variant);
 
+        if ((options.containsKey("powers") || options.containsKey("tune")) && !parity(logs, base)) {
+            // Both modes replay the base's aims as the logs' own: on logs of another gun they would mean nothing.
+            System.exit(1);
+        }
         if (options.containsKey("powers")) {
             powers(logs.battles, variant, Arrays.stream(options.get("powers").split(","))
                     .mapToDouble(v -> Double.parseDouble(v.trim())).toArray());
@@ -214,12 +218,6 @@ public final class MeleeBench {
                 .toList();
         long t1 = System.nanoTime();
         MeleeReplay.Tally baseTally = b.stream().reduce(MeleeReplay.Tally.ZERO, MeleeReplay.Tally::plus);
-        MeleeReplay.Tally checked = MeleeReplay.Tally.ZERO;
-        for (int i = 0; i < b.size(); i++) {
-            if (!logs.skipped.contains(logs.battles.get(i).file().toAbsolutePath().normalize())) {
-                checked = checked.plus(b.get(i));
-            }
-        }
         System.out.printf(Locale.ROOT, "%n%s: %d battles, replayed in %.1f s%n", label, logs.battles.size(),
                 (t1 - t0) / 1e9);
         System.out.printf(Locale.ROOT, "%-8s %8s %9s %9s %7s %9s %7s %8s%n", "", "shots", "fired %", "dmg/shot",
@@ -244,11 +242,33 @@ public final class MeleeBench {
                         + "here than in the engine%n", baseTally.realChecked(), baseTally.realRate(),
                 logs.harnessFired == 0 ? Double.NaN : 100.0 * logs.harnessHits / logs.harnessFired,
                 logs.harnessFired, baseTally.realDiffering());
+        return parity(logs, b);
+    }
+
+    /** Replays the base on the logs and prints whether it aims as the logging bot did; false if not. */
+    private static boolean parity(Logs logs, MeleeGunParameters base) {
+        return parity(logs, logs.battles.parallelStream().map(x -> MeleeReplay.replay(x, base, true, true)).toList());
+    }
+
+    /**
+     * Prints whether the base's replays {@code b} (one per battle of {@code logs}) aim as the logs do, leaving out the
+     * battles in which the logging robot skipped turns; false if not, and also if no aim was checked at all.
+     */
+    private static boolean parity(Logs logs, List<MeleeReplay.Tally> b) {
+        MeleeReplay.Tally all = b.stream().reduce(MeleeReplay.Tally.ZERO, MeleeReplay.Tally::plus);
+        MeleeReplay.Tally checked = MeleeReplay.Tally.ZERO;
+        for (int i = 0; i < b.size(); i++) {
+            if (!logs.skipped.contains(logs.battles.get(i).file().toAbsolutePath().normalize())) {
+                checked = checked.plus(b.get(i));
+            }
+        }
         long aims = checked.shots() + checked.shotDown() + checked.open();
-        boolean parity = checked.differing() <= aims * MAX_DIFFERING;
+        boolean parity = aims > 0 && checked.differing() <= aims * MAX_DIFFERING;
         String left = logs.skipped.isEmpty() ? "" : " (" + logs.skipped.size() + " battles with skipped turns of the "
-                + "logging robot left out, " + (baseTally.differing() - checked.differing()) + " aims apart there)";
-        System.out.println((parity ? "Parity: the replayed aims of the base equal the logged ones within "
+                + "logging robot left out, " + (all.differing() - checked.differing()) + " aims apart there)";
+        System.out.println((aims == 0 ? "PARITY NOT CHECKED: no aim to compare (logs without the melee gun's keys, "
+                + "or every battle left out)"
+                : parity ? "Parity: the replayed aims of the base equal the logged ones within "
                 + MeleeReplay.PARITY_TOLERANCE + " rad, " + checked.differing() + " of " + aims + " apart"
                 : "PARITY FAILED: " + checked.differing() + " of " + aims + " replayed aims of the base differ from "
                         + "the logs (did the logging bot play with the base parameters?)") + left + ".");

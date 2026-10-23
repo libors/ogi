@@ -165,7 +165,8 @@ public final class GunReplay {
                     continue;
                 }
                 boolean real = pass.real() && !shielded.contains(pass.time());
-                shieldedCount += pass.real() && !real ? 1 : 0;
+                // Counted whatever the pass says: the bot turns a shot-down bullet's wave virtual (since 2026-10-11).
+                shieldedCount += shielded.contains(pass.time()) ? 1 : 0;
                 if (!Double.isNaN(aim.guessFactor())) {
                     boolean gfHit = (hit & 1 << GunModel.GUESS_FACTOR) != 0;
                     gfTries++;

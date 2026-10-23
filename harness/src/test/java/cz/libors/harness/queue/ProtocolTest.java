@@ -49,6 +49,17 @@ class ProtocolTest {
     }
 
     @Test
+    void aRecordedDebugBattleKeepsItsModeOnTheLine() {
+        // The executor starts the slot in debug mode by this field: a renamed key would give partial gun logs.
+        BattleSpec spec = new BattleSpec("melee draw 3", 1000, 1000, 35, List.of("cz.libors.OgiGunLog w1", "a.B 1"),
+                17, null, true, List.of("meleeaim", "@positions"), true);
+        BattleSpec back = BattleSpec.fromMap(Protocol.parse(Message.of("battle", "spec", spec.toMap()).line())
+                .orElseThrow().map("spec"));
+        assertEquals(spec, back);
+        assertTrue(back.debug() && back.record());
+    }
+
+    @Test
     void powerShellArgumentsAreLiteral() {
         assertEquals("'it''s'", Ssh.quote("it's"));
         assertEquals("& 'C:/ogi/jdk/bin/java.exe' '-cp' 'a b;c' 'jvm=-XX:+UseSerialGC' '$HOME'",

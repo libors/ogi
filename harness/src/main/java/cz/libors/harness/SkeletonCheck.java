@@ -93,7 +93,7 @@ public final class SkeletonCheck {
         String prefix = className.substring(0, className.lastIndexOf('.') + 1);
         double share = outcome.scoreShare(prefix);
         ContestantResult result = outcome.result(prefix).orElse(null);
-        int rank = result == null ? Integer.MAX_VALUE : result.rank();
+        int rank = outcome.placeByScore(prefix);
         int firsts = result == null ? 0 : result.firsts();
         int skipped = outcome.skippedTurns(prefix);
         List<String> problems = outcome.problems(prefix);

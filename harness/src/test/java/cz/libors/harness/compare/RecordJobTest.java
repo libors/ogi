@@ -92,8 +92,11 @@ class RecordJobTest {
         assertEquals("walls 0", Files.readString(out.resolve("sample.Walls_p0.rec.gz")));
         assertEquals(2, Files.readAllLines(out.resolve("battles.tsv")).size());
 
-        // A restarted server plays only what is missing.
+        // A restarted server plays only what is missing, and counts what was played before.
         RecordJob resumed = open(dir);
+        assertEquals(1, ((Number) resumed.progress().get("skippedSubject")).intValue());
+        assertEquals(500, ((Number) resumed.progress().get("ownTurns")).intValue());
+        assertEquals(1, ((Number) resumed.progress().get("failures")).intValue());
         List<String> keys = new ArrayList<>();
         List<Work> works;
         while (!(works = resumed.next("w")).isEmpty()) {

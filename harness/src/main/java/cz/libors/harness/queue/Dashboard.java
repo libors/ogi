@@ -39,20 +39,29 @@ final class Dashboard {
      * Docker port, say) may hold the port there. A port taken on either address stops the server.
      */
     static void start(Server server, int port) throws IOException {
-        for (InetAddress address : List.of(InetAddress.getByName("127.0.0.1"), InetAddress.getByName("::1"))) {
-            HttpServer http;
-            try {
-                http = HttpServer.create(new InetSocketAddress(address, port), 0);
-            } catch (java.net.BindException e) {
-                throw new IOException("port " + port + " on " + address.getHostAddress() + " is taken; pass -Pport=<n>",
-                        e);
-            } catch (java.net.SocketException e) {
-                if (address instanceof java.net.Inet6Address) {
-                    server.log("no IPv6 loopback (" + e.getMessage() + "); the dashboard is on 127.0.0.1 only");
-                    continue;
+        // Both bound before either starts: a started one would keep the JVM alive after the other's failure, a
+        // dashboard without a queue behind it.
+        List<HttpServer> bound = new java.util.ArrayList<>();
+        try {
+            for (InetAddress address : List.of(InetAddress.getByName("127.0.0.1"), InetAddress.getByName("::1"))) {
+                try {
+                    bound.add(HttpServer.create(new InetSocketAddress(address, port), 0));
+                } catch (java.net.BindException e) {
+                    throw new IOException("port " + port + " on " + address.getHostAddress()
+                            + " is taken; pass -Pport=<n>", e);
+                } catch (java.net.SocketException e) {
+                    if (address instanceof java.net.Inet6Address) {
+                        server.log("no IPv6 loopback (" + e.getMessage() + "); the dashboard is on 127.0.0.1 only");
+                        continue;
+                    }
+                    throw e;
                 }
-                throw e;
             }
+        } catch (IOException | RuntimeException e) {
+            bound.forEach(h -> h.stop(0));
+            throw e;
+        }
+        for (HttpServer http : bound) {
             contexts(http, server);
             http.start();
         }
@@ -154,6 +163,10 @@ final class Dashboard {
         StringBuilder sb = new StringBuilder();
         long now = ((Number) state.get("now")).longValue();
         sb.append("Workers\n");
+        for (Object o : (List<Object>) state.getOrDefault("unreadable", List.of())) {
+            Map<String, Object> u = (Map<String, Object>) o;
+            sb.append("  job ").append(u.get("id")).append(" cannot be read: ").append(u.get("reason")).append('\n');
+        }
         for (Object o : (List<Object>) state.get("workers")) {
             Map<String, Object> w = (Map<String, Object>) o;
             Map<String, Object> info = (Map<String, Object>) w.get("info");

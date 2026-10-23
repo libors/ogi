@@ -110,7 +110,15 @@ public final class GunBench {
                     + "set hold the melee gun's keys, for the melee bench");
         }
 
+        String learn = options.getOrDefault("learn", "all");
+        if (!learn.equals("all") && !learn.equals("scope")) {
+            usage("learn=all or learn=scope, not " + learn);
+        }
         if (options.containsKey("tune")) {
+            if (learn.equals("scope")) {
+                // The search learns from every wave; it would report as if it had not.
+                usage("learn=scope does not apply to tune");
+            }
             System.out.printf(Locale.ROOT, "%d battles read in %.1f s%n", battles.size(), (loaded - start) / 1e9);
             tuneAndReport(battles, parameters, scope, strata, Integer.parseInt(options.get("tune")),
                     Double.parseDouble(options.getOrDefault("maxShielded", "0.15")),
@@ -118,7 +126,7 @@ public final class GunBench {
             System.exit(0);
         }
 
-        boolean learnInScope = options.getOrDefault("learn", "all").equals("scope");
+        boolean learnInScope = learn.equals("scope");
         List<GunReplay.Tally> tallies = battles.parallelStream()
                 .map(b -> GunReplay.replay(b, parameters, scope, learnInScope)).toList();
         long replayed = System.nanoTime();
@@ -227,11 +235,25 @@ public final class GunBench {
     private static void tuneAndReport(List<GunBattle> battles, GunParameters start, GunReplay.Scope scope,
                                       Map<String, String> strata, int passes, double maxShielded, long splitSeed) {
         Map<String, GunReplay.Tally> first = evaluate(battles, start, scope);
+        // The search starts where the logs were played, so the replay must decide as the bot did there; tuned on logs
+        // of another gun it would report numbers of that replay only.
+        long differing = first.values().stream().mapToLong(GunReplay.Tally::differing).sum();
+        if (start.equals(GunParameters.DEFAULT) && differing > 0) {
+            System.out.println("PARITY FAILED: " + differing + " replayed decisions differ from the log; no tuning on "
+                    + "logs of another gun.");
+            System.exit(1);
+        } else if (!start.equals(GunParameters.DEFAULT)) {
+            System.out.println("No parity check: the search starts from parameters other than the bot's.");
+        }
         Set<String> leftOut = new HashSet<>();
+        // Shielders are a 1v1 matter: in melee and team battles bullets meet by chance far more often (31 of 44 team
+        // opponents above 15 %, 2026-10-23), which says nothing about an opponent aiming at our aim.
+        Set<String> crowded = battles.stream().filter(b -> b.enemies() > 1).map(GunBattle::opponent)
+                .collect(Collectors.toSet());
         for (Map.Entry<String, GunReplay.Tally> e : first.entrySet()) {
             GunReplay.Tally t = e.getValue();
             double shielded = (double) t.shielded() / Math.max(1, t.shielded() + t.firedTries());
-            if (shielded > maxShielded) {
+            if (shielded > maxShielded && !crowded.contains(e.getKey())) {
                 System.out.printf(Locale.ROOT, "left out, %.0f %% of our bullets shot down: %s%n", 100 * shielded,
                         e.getKey());
                 leftOut.add(e.getKey());
@@ -299,7 +321,7 @@ public final class GunBench {
             long worse = Arrays.stream(d).filter(v -> v < 0).count();
             line.append(String.format(Locale.ROOT, "  %s (%d) %.2f -> %.2f, %+.2f ± %.2f, %d up %d down",
                     g.getKey(), d.length, meanFired(g.getValue(), before), meanFired(g.getValue(), after), mean,
-                    1.96 * sd / Math.sqrt(Math.max(1, d.length)), better, worse));
+                    d.length < 2 ? Double.NaN : 1.96 * sd / Math.sqrt(d.length), better, worse));
         }
         System.out.println(line);
     }

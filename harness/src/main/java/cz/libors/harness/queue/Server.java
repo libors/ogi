@@ -55,6 +55,13 @@ public final class Server {
     private static final long STARTUP_MILLIS = 600_000;
     private static final long IDLE_STOP_MILLIS = 300_000;
     private static final long RATE_WINDOW_MILLIS = 120_000;
+    /**
+     * How long after a battle's own timeout the server gives up on its result. The executor ends a battle at its
+     * timeout and reports it; a result that never comes (a protocol line the JVM's own output broke) would otherwise
+     * hold its slot and its job for as long as the connection lives. Longer than a slot's restart may take (a battle
+     * sent to a slot that restarts waits for it), so that a battle under way is not given up.
+     */
+    private static final long RESULT_MARGIN_MILLIS = 300_000;
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final Path stateDir;
@@ -68,7 +75,8 @@ public final class Server {
     private final Path localBundle;
     private final List<Link> links = new ArrayList<>();
     private final Map<String, QueueJob> jobs = new LinkedHashMap<>();
-    private final Set<String> unreadable = new HashSet<>();
+    /** Job directories that cannot be opened, and why: shown on the dashboard, which cannot list them as jobs. */
+    private final Map<String, String> unreadable = new LinkedHashMap<>();
     /** Jobs active when last looked at, to log each one's end once ({@link #announceEnds}). */
     private final Set<String> activeSeen = new HashSet<>();
     private final long startedAt = System.currentTimeMillis();
@@ -276,6 +284,7 @@ public final class Server {
                         link.channel.send(Message.of("ping"));
                         link.lastPing = now;
                     }
+                    giveUpOverdue(link, now);
                     dispatch(link);
                     if (!link.inFlight.isEmpty() || !link.pending.isEmpty() || wanted) {
                         link.idleSince = 0;
@@ -302,17 +311,18 @@ public final class Server {
         }
         for (Path dir : dirs) {
             String id = dir.getFileName().toString();
-            if (jobs.containsKey(id) || unreadable.contains(id) || !Files.exists(dir.resolve("status.properties"))) {
+            if (jobs.containsKey(id) || unreadable.containsKey(id)
+                    || !Files.exists(dir.resolve("status.properties"))) {
                 continue;
             }
             if (!id.matches("[\\w-]+")) {
                 // The dashboard puts ids into page code; Submit makes them of letters, digits and dashes only.
-                unreadable.add(id);
+                unreadable.put(id, "not a job id");
                 log("job " + id + " ignored: not a job id");
                 continue;
             }
             try {
-                QueueJob job = QueueJob.open(dir);
+                QueueJob job = QueueJob.open(dir, slotSettings());
                 if (job instanceof CompareJob c) {
                     c.environment(this::environment);
                     c.cache(battleCache);
@@ -325,10 +335,24 @@ public final class Server {
                     log("job " + id + " " + job.state().name().toLowerCase(Locale.ROOT) + ": " + job.title());
                 }
             } catch (IOException | RuntimeException e) {
-                unreadable.add(id);
+                unreadable.put(id, e.toString());
                 log("job " + id + " cannot be read: " + e);
             }
         }
+    }
+
+    /**
+     * The server's settings that decide battles and are no option of a job: per worker, the slots' JVM options and
+     * the CPU factor. A comparison's log is keyed by them, so a server started otherwise (as a rumble client, say)
+     * does not resume it.
+     */
+    private Map<String, String> slotSettings() {
+        Map<String, String> m = new TreeMap<>();
+        for (Link link : links) {
+            m.put("slots " + link.name(), "jvm " + String.join(" ", link.config.jvm()) + ", cpuFactor "
+                    + link.config.cpuFactor());
+        }
+        return m;
     }
 
     private List<QueueJob> activeJobs() {
@@ -484,8 +508,8 @@ public final class Server {
                     log(link.name() + ": bundle synced, " + copied + " file(s) copied");
                 }
                 List<String> command = new ArrayList<>();
-                List<String> java = new ArrayList<>(List.of("-cp", link.config.bundle() + "/lib/harness.jar",
-                        Executor.class.getName()));
+                List<String> java = new ArrayList<>(Executor.PROTOCOL_JVM);
+                java.addAll(List.of("-cp", link.config.bundle() + "/lib/harness.jar", Executor.class.getName()));
                 java.addAll(link.config.executorArguments("serve"));
                 if (link.config.local()) {
                     command.add(link.config.java());
@@ -536,6 +560,7 @@ public final class Server {
         }, "stderr-" + link.name());
         errors.setDaemon(true);
         errors.start();
+        String readerFailure = null;
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(),
                 StandardCharsets.ISO_8859_1))) {
             String line;
@@ -567,6 +592,14 @@ public final class Server {
             }
         } catch (IOException e) {
             // the connection is gone
+        } catch (RuntimeException | Error e) {
+            // Not only the connection's end: without the code below the link would stay ready, and the battles in
+            // flight on it would never come back (a LinkageError, e.g., when the classes the server runs from were
+            // rebuilt meanwhile).
+            readerFailure = "the server's reader failed: " + e;
+            log(link.name() + ": " + readerFailure);
+            e.printStackTrace();
+            p.destroyForcibly();
         }
         int exit;
         try {
@@ -576,7 +609,8 @@ public final class Server {
         }
         synchronized (this) {
             if (link.generation == generation) {
-                String reason = link.fatal != null ? "the executor failed: " + link.fatal
+                String reason = readerFailure != null ? readerFailure
+                        : link.fatal != null ? "the executor failed: " + link.fatal
                         : link.dropped != null ? link.dropped : "the executor ended (exit " + exit + ")";
                 link.fatal = null;
                 link.dropped = null;
@@ -629,23 +663,32 @@ public final class Server {
             case "result" -> {
                 InFlight f = link.inFlight.remove(m.longValue("id"));
                 if (f != null) {
-                    link.battles++;
-                    link.completions.add(now);
-                    while (!link.completions.isEmpty() && link.completions.peek() < now - RATE_WINDOW_MILLIS) {
-                        link.completions.poll();
-                    }
                     link.lastOkAt = now;
                     Map<String, Object> outcome = m.map("outcome");
                     QueueJob job = f.work.job();
+                    Optional<String> refused = Optional.empty();
                     try {
-                        job.completed(f.work, outcome, link.name());
+                        refused = job.completed(f.work, outcome, link.name());
                     } catch (IOException | RuntimeException e) {
                         // The battle would be lost to a job that runs on: it fails instead, and is seen.
                         log("job " + job.id() + ": counting a battle failed: " + e);
                         fail(job, "counting a battle failed: " + e);
                     }
-                    guarded(link, "logging a battle", () -> record(link, f, "ok" + turnTimes(outcome),
-                            ((Number) outcome.get("elapsedMillis")).longValue()));
+                    if (refused.isPresent()) {
+                        // Played, but not the battle asked for: logged as refused, out of the totals.
+                        String reason = refused.get();
+                        log(link.name() + ": battle refused by job " + job.id() + ": " + reason);
+                        guarded(link, "logging a battle", () -> record(link, f, "refused: " + reason, -1));
+                    } else {
+                        link.battles++;
+                        link.completions.add(now);
+                        while (!link.completions.isEmpty()
+                                && link.completions.peek() < now - RATE_WINDOW_MILLIS) {
+                            link.completions.poll();
+                        }
+                        guarded(link, "logging a battle", () -> record(link, f, "ok" + turnTimes(outcome),
+                                ((Number) outcome.get("elapsedMillis")).longValue()));
+                    }
                     announceEnds();
                 }
                 dispatch(link);
@@ -653,18 +696,7 @@ public final class Server {
             case "failed" -> {
                 InFlight f = link.inFlight.remove(m.longValue("id"));
                 if (f != null) {
-                    link.failures++;
-                    link.error(m.string("reason"));
-                    log(link.name() + ": battle failed: " + m.string("reason"));
-                    QueueJob job = f.work.job();
-                    try {
-                        job.failed(f.work, m.string("reason"), link.name());
-                    } catch (IOException | RuntimeException e) {
-                        log("job " + job.id() + ": counting a failed battle failed: " + e);
-                        fail(job, "counting a failed battle failed: " + e);
-                    }
-                    guarded(link, "logging a battle", () -> record(link, f, "failed: " + m.string("reason"), -1));
-                    announceEnds();
+                    battleFailed(link, f, m.string("reason"));
                 }
                 dispatch(link);
             }
@@ -697,6 +729,37 @@ public final class Server {
                 log(link.name() + ": executor failed: " + m.string("message"));
             }
             default -> log(link.name() + ": unknown message " + m.type());
+        }
+    }
+
+    /** A battle the worker reported failed, or whose result the server gave up on: its job may retry it. */
+    private void battleFailed(Link link, InFlight f, String reason) {
+        link.failures++;
+        link.error(reason);
+        log(link.name() + ": battle failed: " + reason);
+        QueueJob job = f.work.job();
+        try {
+            job.failed(f.work, reason, link.name());
+        } catch (IOException | RuntimeException e) {
+            log("job " + job.id() + ": counting a failed battle failed: " + e);
+            fail(job, "counting a failed battle failed: " + e);
+        }
+        guarded(link, "logging a battle", () -> record(link, f, "failed: " + reason, -1));
+        announceEnds();
+    }
+
+    /**
+     * Gives up on the battles whose result is overdue: {@link #RESULT_MARGIN_MILLIS} past their timeout, counted from
+     * when the slot started them (or from when they were sent, if no slot said so). A late result is then ignored.
+     */
+    private void giveUpOverdue(Link link, long now) {
+        for (InFlight f : List.copyOf(link.inFlight.values())) {
+            long from = f.startedAt > 0 ? f.startedAt : f.sentAt;
+            if (now - from > f.work.timeoutSeconds() * 1000 + RESULT_MARGIN_MILLIS) {
+                link.inFlight.remove(f.id);
+                battleFailed(link, f, "no result " + (now - from) / 1000 + " s after it started (timeout "
+                        + f.work.timeoutSeconds() + " s)");
+            }
         }
     }
 
@@ -938,6 +1001,9 @@ public final class Server {
         }
         done.forEach(j -> rows.add(j.row()));
         m.put("jobs", rows);
+        List<Object> broken = new ArrayList<>();
+        unreadable.forEach((id, reason) -> broken.add(Map.of("id", id, "reason", reason)));
+        m.put("unreadable", broken);
         return m;
     }
 
@@ -983,12 +1049,17 @@ public final class Server {
         }
         switch (action) {
             case "cancel" -> {
+                if (!job.state().active()) {
+                    return "already ended";
+                }
                 job.cancel();
                 log("job " + id + " cancelled");
                 return "cancelled";
             }
             case "up", "down" -> {
-                List<QueueJob> active = activeJobs();
+                // Among the jobs of its format, which the dashboard's tab shows: a neighbour on another tab would
+                // take the move without a visible change.
+                List<QueueJob> active = activeJobs().stream().filter(j -> j.format().equals(job.format())).toList();
                 int i = active.indexOf(job);
                 int j = action.equals("up") ? i - 1 : i + 1;
                 if (i < 0 || j < 0 || j >= active.size()) {

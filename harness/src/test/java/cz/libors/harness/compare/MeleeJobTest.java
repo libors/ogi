@@ -269,4 +269,13 @@ class MeleeJobTest {
         }
         assertThrows(IllegalArgumentException.class, () -> CompareJob.check(spec(Map.of()), lines));
     }
+
+    @Test
+    void aSummaryThatCannotBeWrittenStillEndsTheJob(@TempDir Path tmp) throws IOException {
+        Path dir = job(tmp.resolve("j"), Map.of("draws", "2"));
+        Files.createDirectories(dir.resolve("summary.json"));
+        MeleeJob job = open(dir);
+        play(job, new Random(1), 0);
+        assertEquals(State.DONE, job.state(), "a job left running could never be cancelled");
+    }
 }

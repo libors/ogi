@@ -200,6 +200,10 @@ public final class Compare {
         }
 
         Map<String, String> config = config(baseline, candidate, set, rounds, fixedStarts, runSeed);
+        // Here the battles run in this JVM, under this home's turn limit: a run resumed on another Java or after the
+        // constant was measured again would mix battles of two conditions.
+        config.put("java", System.getProperty("java.vm.vendor") + " " + System.getProperty("java.version"));
+        config.put("cpuConstant", cpuConstant(home));
         Path dir = Path.of(options.get("out")).resolve(set.name())
                 .resolve(dirName(options.get("baseline"), options.get("candidate"), config));
         problemsFile = dir.resolve("problems.log");
@@ -274,8 +278,8 @@ public final class Compare {
         config.put("rounds", Integer.toString(rounds));
         config.put("starts", fixedStarts ? "fixed" : "random");
         config.put("seed", Long.toString(runSeed));
-        // Logs from before BattleRunner cleared the robots' data have no such key, so they are not resumed.
-        config.put("robotData", "cleared");
+        // A harness change that alters battles raises it, and the log of earlier battles is not resumed.
+        config.put("battles", Integer.toString(cz.libors.harness.BattleRunner.BATTLE_VERSION));
         return config;
     }
 

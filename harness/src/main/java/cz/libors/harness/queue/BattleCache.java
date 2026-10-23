@@ -44,11 +44,17 @@ import java.util.TreeMap;
  *
  * <p>Stored as one JSON object per line in {@code <state>/battle-cache.jsonl}; a line cut short by a crash is skipped.
  * The claims live in memory only: after a restart the jobs resume from their logs.
+ *
+ * <p>Battles are kept for {@link #RETENTION_DAYS} days ({@code at}, when it was played): baselines older than that are
+ * not compared against any more, and the whole cache is held in memory. A line from before the date was written gets
+ * the date its version was queued (its jar in the queue's {@code jars/}). Opening the cache drops what has expired
+ * and writes the file anew if it dropped or dated anything; the first such rewrite keeps the file as it was beside it.
  */
 public final class BattleCache {
 
     /** Version 2: every battle starts with empty robot data ({@code BattleRunner}); version 1's battles did not. */
-    static final String VERSION = "battle-cache 2";
+    static final String VERSION = "battle-cache " + cz.libors.harness.BattleRunner.BATTLE_VERSION;
+    static final int RETENTION_DAYS = 14;
 
     /** What the cache needs to know about a worker. */
     public interface Workers {
@@ -72,22 +78,100 @@ public final class BattleCache {
     private final Map<String, List<Waiter>> waiting = new HashMap<>();
 
     public BattleCache(Path file, Workers workers) throws IOException {
+        this(file, workers, System.currentTimeMillis());
+    }
+
+    /** The cache as of {@code now}: what was played before {@link #RETENTION_DAYS} days is dropped. */
+    BattleCache(Path file, Workers workers, long now) throws IOException {
         this.file = file;
         this.workers = workers;
-        if (Files.exists(file)) {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                try {
-                    Map<String, Object> entry = Json.parseObject(line);
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> outcome = (Map<String, Object>) entry.get("outcome");
-                    if (entry.get("key") instanceof String key && outcome != null) {
-                        outcomes.put(key, outcome);
-                    }
-                } catch (RuntimeException e) {
-                    // A line cut short by a crash.
+        if (!Files.exists(file)) {
+            return;
+        }
+        long oldest = now - RETENTION_DAYS * 86_400_000L;
+        List<String> kept = new ArrayList<>();
+        boolean rewrite = false;
+        boolean undated = false;
+        Map<String, Long> versionDates = new HashMap<>();
+        for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            Map<String, Object> entry;
+            try {
+                entry = Json.parseObject(line);
+            } catch (RuntimeException e) {
+                rewrite = true; // a line cut short by a crash
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> outcome = (Map<String, Object>) entry.get("outcome");
+            if (!(entry.get("key") instanceof String key) || outcome == null) {
+                rewrite = true;
+                continue;
+            }
+            long at;
+            if (entry.get("at") instanceof Number n) {
+                at = n.longValue();
+            } else {
+                at = queued(String.valueOf(entry.get("battle")), versionDates, now);
+                entry = withDate(entry, at);
+                line = Json.line(entry);
+                rewrite = true;
+                undated = true;
+            }
+            if (at < oldest) {
+                rewrite = true;
+                continue;
+            }
+            outcomes.put(key, outcome);
+            kept.add(line);
+        }
+        if (rewrite) {
+            if (undated) {
+                Path before = file.resolveSibling(file.getFileName() + ".before-dates");
+                if (!Files.exists(before)) {
+                    Files.copy(file, before);
                 }
             }
+            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+            Files.write(tmp, kept, StandardCharsets.UTF_8);
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
         }
+    }
+
+    /**
+     * When the newest of our versions in a battle ("a vs b, seed n") was queued: its jar's time in the queue's
+     * {@code jars/}; {@code now} if none of them is there, so that a battle of unknown age stays.
+     */
+    private long queued(String battle, Map<String, Long> versionDates, long now) {
+        long newest = -1;
+        for (String robot : battle.replaceFirst(", seed .*$", "").split(" vs ")) {
+            if (!robot.startsWith("cz.libors.") || !robot.contains(" ")) {
+                continue;
+            }
+            String jar = robot.replace(' ', '_') + ".jar";
+            long date = versionDates.computeIfAbsent(jar, j -> {
+                try {
+                    Path path = file.toAbsolutePath().getParent().resolve("jars").resolve(j);
+                    return Files.exists(path) ? Files.getLastModifiedTime(path).toMillis() : -1L;
+                } catch (IOException e) {
+                    return -1L;
+                }
+            });
+            newest = Math.max(newest, date);
+        }
+        return newest < 0 ? now : newest;
+    }
+
+    private static Map<String, Object> withDate(Map<String, Object> entry, long at) {
+        Map<String, Object> dated = new LinkedHashMap<>();
+        dated.put("key", entry.get("key"));
+        dated.put("at", at);
+        entry.forEach((k, v) -> {
+            if (!k.equals("key")) {
+                dated.put(k, v);
+            }
+        });
+        return dated;
     }
 
     /**
@@ -160,6 +244,7 @@ public final class BattleCache {
                 outcomes.put(key, outcome);
                 Map<String, Object> entry = new LinkedHashMap<>();
                 entry.put("key", key);
+                entry.put("at", System.currentTimeMillis());
                 entry.put("battle", String.join(" vs ", spec.robots()) + ", seed " + spec.seed());
                 entry.put("outcome", outcome);
                 append(Json.line(entry));

@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.zip.GZIPInputStream;
@@ -144,8 +145,29 @@ public final class RecordJob extends QueueJob {
         Set<String> indexed = new HashSet<>();
         Path index = out.resolve("battles.tsv");
         if (Files.exists(index)) {
-            for (String line : Files.readAllLines(index, StandardCharsets.UTF_8)) {
-                indexed.add(line.split("\t", 2)[0]);
+            List<String> lines = Files.readAllLines(index, StandardCharsets.UTF_8);
+            for (int i = 0; i < lines.size(); i++) {
+                String[] f = lines.get(i).split("\t");
+                indexed.add(f[0]);
+                if (i > 0 && f.length > 12) {
+                    // A resumed job counts its earlier recordings again, as CompareJob does from its log: the index
+                    // holds the subject's skipped turns and own turn times (both layouts in the same columns).
+                    skippedSubject += Integer.parseInt(f[6]);
+                    skippedOpponents += Integer.parseInt(f[8]);
+                    turnTimes = turnTimes.plus(new BattleOutcome.TurnTimes(Integer.parseInt(f[9]),
+                            Long.parseLong(f[10]), Integer.parseInt(f[11]), Integer.parseInt(f[12])));
+                }
+            }
+        }
+        // Problems and failures from their log: one line per problem, one per failed battle.
+        Path problemLog = dir.resolve("problems.log");
+        if (Files.exists(problemLog)) {
+            for (String line : Files.readAllLines(problemLog, StandardCharsets.UTF_8)) {
+                if (line.contains(") failed: ")) {
+                    failures++;
+                } else {
+                    problems++;
+                }
             }
         }
         int count = 0;
@@ -312,7 +334,8 @@ public final class RecordJob extends QueueJob {
     }
 
     @Override
-    public void completed(Work work, Map<String, Object> outcomeMap, String worker) throws IOException {
+    public Optional<String> completed(Work work, Map<String, Object> outcomeMap, String worker)
+            throws IOException {
         outstanding--;
         String[] key = work.key().split("\t");
         String opponent = key[0];
@@ -321,12 +344,12 @@ public final class RecordJob extends QueueJob {
         if (recording == null) {
             failed(work, "the slot sent no recording", worker);
             outstanding++;
-            return;
+            return Optional.of("the slot sent no recording");
         }
         Files.createDirectories(out);
         if (draws != null) {
             completedDraw(work, outcomeMap, (String) recording, pair, worker);
-            return;
+            return Optional.empty();
         }
         Path file = out.resolve(fileName(opponent, pair));
         Path tmp = out.resolve(file.getFileName() + ".tmp");
@@ -364,6 +387,7 @@ public final class RecordJob extends QueueJob {
                     StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
         counted(outcome, skipped, allSkipped, times);
+        return Optional.empty();
     }
 
     /** A recording written: the counts, and the job's end after the last one. */

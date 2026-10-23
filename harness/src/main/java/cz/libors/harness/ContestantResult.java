@@ -2,7 +2,11 @@ package cz.libors.harness;
 
 import robocode.BattleResults;
 
-/** Final score of one contestant (robot or team), split into the Robocode score components. */
+/**
+ * Final score of one contestant (robot or team), split into the Robocode score components. {@code rank} is the
+ * engine's, which is the contestant's position in the setup, not its place (engine-model G-31; see
+ * {@link BattleOutcome#placeByScore}).
+ */
 public record ContestantResult(
         String name,
         int rank,

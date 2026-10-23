@@ -9,7 +9,7 @@ import java.util.Optional;
  *
  * @param seed         seed the battle ran with; rerunning the setup with it replays the battle, as far as the
  *                     robots themselves are deterministic
- * @param results      contestants sorted by rank
+ * @param results      contestants sorted by score, highest first
  * @param skippedTurns skipped turns per robot name, as reported by the engine
  * @param problems     engine errors and suspicious robot output (exceptions)
  * @param startMismatches robot rounds that did not begin at the start the setup asked for; 0 without fixed starts
@@ -77,6 +77,16 @@ public record BattleOutcome(
     /** The contestant whose name starts with {@code prefix}. */
     public Optional<ContestantResult> result(String prefix) {
         return results.stream().filter(r -> r.name().startsWith(prefix)).findFirst();
+    }
+
+    /**
+     * The place by score of the contestant whose name starts with {@code prefix}: 1 plus the contestants with a higher
+     * score, or {@link Integer#MAX_VALUE} without such a contestant. {@link ContestantResult#rank()} is no ranking: the
+     * engine's rank is the contestant's position in the battle's setup (engine-model G-31).
+     */
+    public int placeByScore(String prefix) {
+        return result(prefix).map(mine -> 1 + (int) results.stream().filter(r -> r.score() > mine.score()).count())
+                .orElse(Integer.MAX_VALUE);
     }
 
     /** Share of the total score taken by the contestant whose name starts with {@code prefix}. */

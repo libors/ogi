@@ -50,6 +50,9 @@ record WorkerConfig(String name, boolean local, int slots, boolean foreign, Stri
         }
         String name = parts[0];
         int slots = Integer.parseInt(parts[1]);
+        if (slots < 1) {
+            throw new IllegalArgumentException("worker " + parts[0] + " needs at least one slot, not " + slots);
+        }
         List<String> jvm = new ArrayList<>(baseJvm);
         jvm.addAll(extraJvm);
         if (name.equals("local")) {
@@ -64,6 +67,11 @@ record WorkerConfig(String name, boolean local, int slots, boolean foreign, Stri
         jvm.add("-Djava.security.manager=allow");
         return new WorkerConfig(name, false, slots, true, "C:/ogi/jdk/bin/java.exe", "C:/ogi", "C:/ogi/bundle",
                 "C:/ogi/rumble", List.copyOf(jvm), cpuFactor);
+    }
+
+    /** The same worker with its bundle in another directory. */
+    WorkerConfig withBundle(String directory) {
+        return new WorkerConfig(name, local, slots, foreign, java, root, directory, foreignDir, jvm, cpuFactor);
     }
 
     /** Where the server puts a job's jars on the worker, for the executor's {@code deploy}. */

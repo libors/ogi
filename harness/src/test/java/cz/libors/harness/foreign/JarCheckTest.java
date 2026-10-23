@@ -234,6 +234,69 @@ class JarCheckTest {
     }
 
     @Test
+    void anInheritedMemberIsJudgedOnTheClassItComesFrom() throws IOException {
+        // javac writes Worker.setDefaultUncaughtExceptionHandler, not Thread's, when Worker extends Thread.
+        Report report = JarCheck.check("inheriting.jar", "-",
+                classes("InheritingRobot", "InheritingRobot$Worker", "InheritingRobot$Numbers"), false);
+        Map<String, Finding> byApi = byApi(report);
+        assertFinding(byApi, "java.lang.Thread.setDefaultUncaughtExceptionHandler", Level.DENY, "JVM-wide state");
+        assertFinding(byApi, "java.util.ArrayList.parallelStream", Level.FLAG, "threads");
+    }
+
+    @Test
+    void aClassFileUnderAnotherPathIsDeniedAndOwnsNothing() throws IOException {
+        // The class loader finds a class by its name's path; one stored elsewhere never loads, and must not make the
+        // class it names count as the jar's own, which would leave every reference to the real one unjudged.
+        Map<String, byte[]> jar = new LinkedHashMap<>();
+        jar.put("cz/libors/harness/foreign/JarCheckTest.class", ownBytes());
+        jar.put("a/Decoy.class", emptyClass("org/junit/jupiter/api/Assertions"));
+        Map<String, Finding> byApi = byApi(JarCheck.check("decoy.jar", "-", jar, true));
+        assertFinding(byApi, "entry a/Decoy.class", Level.DENY, "class name differs from its path");
+        assertFinding(byApi, "org.junit.jupiter.api.Assertions.assertEquals", Level.DENY, "not on the allowlist");
+    }
+
+    @Test
+    void aMemberJarWhoseCentralDirectoryDiffersIsDenied(@TempDir Path dir) throws IOException {
+        // The robot class loader reads a member jar through its central directory, as it does the jar itself.
+        byte[] clean = classBytes("CleanRobot");
+        byte[] hostile = classBytes("HostileRobot");
+        RawZip inner = new RawZip();
+        inner.local(FIXTURES + "HostileRobot.class", hostile);
+        byte[] padding = "data".getBytes(StandardCharsets.UTF_8);
+        byte[] carrier = new byte[padding.length + inner.bytes().length];
+        System.arraycopy(padding, 0, carrier, 0, padding.length);
+        System.arraycopy(inner.bytes(), 0, carrier, padding.length, inner.bytes().length);
+        RawZip member = new RawZip();
+        int cleanAt = member.local(FIXTURES + "CleanRobot.class", clean);
+        int carrierAt = member.local("data/stats.dat", carrier);
+        member.central(FIXTURES + "CleanRobot.class", clean, cleanAt);
+        member.central("data/stats.dat", carrier, carrierAt);
+        member.central(FIXTURES + "HostileRobot.class", hostile,
+                carrierAt + RawZip.LOCAL_HEADER + "data/stats.dat".length() + padding.length);
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("Member.jar", member.bytes());
+        Path file = dir.resolve("team.jar");
+        Files.write(file, zip(entries));
+
+        Report report = JarCheck.check(file);
+        assertEquals(Verdict.DENIED, report.verdict());
+        assertFinding(byApi(report), "entry Member.jar!/" + FIXTURES + "HostileRobot.class", Level.DENY,
+                "directory differs");
+    }
+
+    @Test
+    void aJarWithoutACentralDirectoryIsDeniedNotAnError(@TempDir Path dir) throws IOException {
+        RawZip jar = new RawZip();
+        jar.local(FIXTURES + "CleanRobot.class", classBytes("CleanRobot"));
+        Path file = dir.resolve("no-directory.jar");
+        Files.write(file, jar.bytes());
+        Report report = JarCheck.check(file);
+        assertEquals(Verdict.DENIED, report.verdict());
+        assertTrue(report.findings().stream().anyMatch(f -> f.reason().equals("unreadable directory")),
+                report.findings().toString());
+    }
+
+    @Test
     void rulesResolveNestedClassesArraysAndPackages() {
         assertEquals(Level.ALLOW, ApiRules.type("[[I").level());
         assertEquals(Level.ALLOW, ApiRules.type("[Ljava/lang/String;").level());
@@ -253,6 +316,19 @@ class JarCheckTest {
         assertEquals(Level.ALLOW, ApiRules.member("java/io/PrintStream", "<init>", "(Ljava/io/OutputStream;)V")
                 .level());
         assertEquals(Level.ALLOW, ApiRules.member("[D", "clone", "()Ljava/lang/Object;").level());
+        // A nested class takes its outer class's rule, but Runtime's version is no process.
+        assertEquals(Level.ALLOW, ApiRules.member("java/lang/Runtime$Version", "feature", "()I").level());
+        assertEquals(Level.DENY, ApiRules.member("java/lang/Runtime", "exec", "(Ljava/lang/String;)Ljava/lang/Process;")
+                .level());
+        // Code that runs on the common pool or a thread of its own, though no Thread appears.
+        assertEquals(Level.FLAG, ApiRules.member("java/util/stream/StreamSupport", "stream",
+                "(Ljava/util/Spliterator;Z)Ljava/util/stream/Stream;").level());
+        assertEquals(Level.FLAG, ApiRules.member("java/util/concurrent/ConcurrentHashMap", "forEach",
+                "(JLjava/util/function/BiConsumer;)V").level());
+        assertEquals(Level.ALLOW, ApiRules.member("java/util/concurrent/ConcurrentHashMap", "forEach",
+                "(Ljava/util/function/BiConsumer;)V").level());
+        assertEquals(Level.FLAG, ApiRules.member("java/lang/ref/Cleaner", "create", "()Ljava/lang/ref/Cleaner;")
+                .level());
     }
 
     private static void assertFinding(Map<String, Finding> byApi, String api, Level level, String reason) {
@@ -381,6 +457,33 @@ class JarCheckTest {
             int16(out, (int) (value & 0xffff));
             int16(out, (int) ((value >> 16) & 0xffff));
         }
+    }
+
+    /** A class file of the given name with no members, extending {@code java/lang/Object}. */
+    private static byte[] emptyClass(String internalName) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (java.io.DataOutputStream out = new java.io.DataOutputStream(bytes)) {
+            out.writeInt(0xCAFEBABE);
+            out.writeShort(0);
+            out.writeShort(61);
+            out.writeShort(5);
+            out.writeByte(1);
+            out.writeUTF(internalName);
+            out.writeByte(7);
+            out.writeShort(1);
+            out.writeByte(1);
+            out.writeUTF("java/lang/Object");
+            out.writeByte(7);
+            out.writeShort(3);
+            out.writeShort(0x21);
+            out.writeShort(2);
+            out.writeShort(4);
+            out.writeShort(0);
+            out.writeShort(0);
+            out.writeShort(0);
+            out.writeShort(0);
+        }
+        return bytes.toByteArray();
     }
 
     private static byte[] ownBytes() throws IOException {

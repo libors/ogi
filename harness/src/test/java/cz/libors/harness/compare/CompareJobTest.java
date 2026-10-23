@@ -74,6 +74,20 @@ class CompareJobTest {
         return BattleSpec.outcomeToMap(o);
     }
 
+    /** The same with problems the battle reported, e.g. an opponent's exception. */
+    private static Map<String, Object> outcome(Work work, double share, List<String> problems) {
+        BattleOutcome o = work.spec().outcomeFromMap(outcome(work, share));
+        return BattleSpec.outcomeToMap(new BattleOutcome(o.setup(), o.seed(), o.results(), o.skippedTurns(), problems,
+                o.startMismatches(), o.shots(), o.elapsedMillis(), o.turnTimes()));
+    }
+
+    /** What a slot sends back for a battle the engine aborted: no results. */
+    private static Map<String, Object> aborted(Work work) {
+        BattleOutcome o = work.spec().outcomeFromMap(outcome(work, 60));
+        return BattleSpec.outcomeToMap(new BattleOutcome(o.setup(), o.seed(), List.of(), o.skippedTurns(),
+                o.problems(), o.startMismatches(), Map.of(), o.elapsedMillis(), o.turnTimes()));
+    }
+
     private static double share(Work work, Random random, double gain) {
         boolean candidate = work.spec().robots().get(0).endsWith("cand");
         return 60 + 5 * random.nextGaussian() + (candidate ? gain : 0);
@@ -435,21 +449,81 @@ class CompareJobTest {
     }
 
     @Test
-    void aFailingWaiterCostsNeitherTheJobNorTheCacheItsBattle(@TempDir Path tmp) throws IOException {
+    void aFailingWaiterFailsItselfNotTheJobThatPlayed(@TempDir Path tmp) throws IOException {
         BattleCache cache = sharedCache(tmp);
         CompareJob first = open(chained(tmp.resolve("ab"), "a", "b"));
         CompareJob second = open(chained(tmp.resolve("bc"), "b", "c"));
         first.cache(cache);
         second.cache(cache);
         Work shared = battlesOfB(drain(first)).get(0);
-        String key = keyOf(cache, shared);
-        cache.await(key, outcome -> {
-            throw new IOException("a waiter that fails");
-        });
         drain(second);
-        assertThrows(IOException.class, () -> first.completed(shared, outcome(shared, 60), "w"));
-        assertEquals(1, battles(tmp.resolve("ab")), "the first job counted its battle");
-        assertTrue(cache.get(key).isPresent(), "the cache kept it");
-        assertEquals(1, ((Number) second.progress().get("reusedBattles")).intValue(), "the second job got it");
+        // The second job cannot write its problems: counting the shared battle fails there.
+        Files.createDirectories(tmp.resolve("bc").resolve("problems.log"));
+        first.completed(shared, outcome(shared, 60, List.of("an opponent's exception")), "w");
+        assertTrue(first.state().active(), "the job that played the battle goes on");
+        assertEquals(1, battles(tmp.resolve("ab")), "and counted it");
+        assertEquals(State.FAILED, second.state(), "the job whose counting failed ends");
+        assertTrue(cache.get(keyOf(cache, shared)).isPresent(), "the cache kept the battle");
+    }
+
+    @Test
+    void anOutcomeWithoutBothResultsIsPlayedAgainAndNeverCached(@TempDir Path tmp) throws IOException {
+        BattleCache cache = sharedCache(tmp);
+        CompareJob job = open(chained(tmp.resolve("ab"), "a", "b"));
+        job.cache(cache);
+        Work work = drain(job).get(0);
+        job.completed(work, aborted(work), "w");
+        assertTrue(job.state().active());
+        assertEquals(0, cache.size(), "an aborted battle would fail every job that took it from the cache");
+        List<Work> retry = job.next("w");
+        assertEquals(List.of(work.key()), retry.stream().map(Work::key).toList(), "it is played again");
+        job.completed(retry.get(0), outcome(retry.get(0), 60), "w");
+        assertEquals(1, cache.size());
+    }
+
+    @Test
+    void aJobThatFailsWhileHandingOutReleasesItsClaims(@TempDir Path tmp) throws IOException {
+        BattleCache cache = sharedCache(tmp);
+        CompareJob first = open(chained(tmp.resolve("ab"), "a", "b"));
+        first.cache(cache);
+        for (Work w : drain(first)) {
+            first.completed(w, outcome(w, 60, List.of("an opponent's exception")), "w");
+        }
+        // The second job takes b's battles from the cache and claims c's; counting b's then fails.
+        CompareJob second = open(chained(tmp.resolve("bc"), "b", "c"));
+        second.cache(cache);
+        Files.createDirectories(tmp.resolve("bc").resolve("problems.log"));
+        assertThrows(IOException.class, () -> second.next("w"));
+        CompareJob third = open(chained(tmp.resolve("cd"), "c", "d"));
+        third.cache(cache);
+        assertEquals(12, drain(third).size(), "no battle of c is left claimed by the failed job");
+    }
+
+    @Test
+    void aSummaryThatCannotBeWrittenStillEndsTheJob(@TempDir Path tmp) throws IOException {
+        Path dir = job(tmp.resolve("j"), Map.of("pairsPerOpponent", "1"));
+        Files.createDirectories(dir.resolve("summary.json"));
+        CompareJob job = open(dir);
+        for (Work w : drain(job)) {
+            job.completed(w, outcome(w, 60), "w");
+        }
+        assertEquals(State.DONE, job.state(), "a job left running could never be cancelled");
+    }
+
+    @Test
+    void aJobResumedUnderOtherSlotSettingsFailsInsteadOfMixingBattles(@TempDir Path tmp) throws IOException {
+        Path dir = job(tmp.resolve("j"), Map.of("pairsPerOpponent", "3"));
+        Properties spec = new Properties();
+        try (InputStream in = Files.newInputStream(dir.resolve("job.properties"))) {
+            spec.load(in);
+        }
+        Map<String, String> queue = Map.of("slots ogi-win", "jvm -XX:+UseSerialGC, cpuFactor 1.5");
+        CompareJob job = CompareJob.open(dir, spec, queue);
+        Work w = job.next("w").get(0);
+        job.completed(w, outcome(w, 60), "w");
+        assertTrue(CompareJob.open(dir, spec, queue).state().active(), "the same settings resume it");
+        CompareJob asClient = CompareJob.open(dir, spec, Map.of("slots ogi-win", "jvm -Xmx512M, cpuFactor 1.0"));
+        assertEquals(State.FAILED, asClient.state());
+        assertTrue(asClient.reason().startsWith("not resumed"), asClient.reason());
     }
 }

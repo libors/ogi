@@ -1,5 +1,6 @@
 package cz.libors.harness.gunbench;
 
+import cz.libors.ogi.gun.GunLog;
 import cz.libors.ogi.gun.GunParameters;
 
 import java.io.IOException;
@@ -22,6 +23,16 @@ import java.util.stream.Stream;
  * <p>Usage: {@code GunTrend logs=<dir>,... [robot=<name prefix>] [rounds=10]}: compares the first and the last
  * {@code rounds} rounds of each battle and prints the opponents sorted by the change, with its standard error. In a
  * team battle every robot of ours that logged counts ({@link GunBattle#readAll}).
+ *
+ * <ul>
+ *   <li>Only the plans made while one enemy lived count ({@link GunReplay.Scope#ONE_ENEMY}): in a melee or team
+ *       battle the melee gun aims the bullets before, and this gun's waves at the closest enemy only teach it. In a
+ *       1v1 battle that is every plan.</li>
+ *   <li>A battle with fewer than twice {@code rounds} rounds is refused: its first and last rounds would overlap,
+ *       and every change would read 0.</li>
+ *   <li>The replay must decide as the bot did (the same parity as the gun bench's); logs of another gun are
+ *       refused, since their trend would be the replayed gun's, not the logged one's.</li>
+ * </ul>
  */
 public final class GunTrend {
 
@@ -83,10 +94,22 @@ public final class GunTrend {
                 throw new UncheckedIOException(e);
             }
         }).toList();
+        if (battles.stream().noneMatch(b -> b.events().stream().anyMatch(GunLog.LoggedShot.class::isInstance))) {
+            throw new IllegalArgumentException("no plans (" + GunLog.SHOT + ") in the logs of " + logs
+                    + ": logs of a melee or team set hold the melee gun's keys, for the melee bench");
+        }
+        long[] parity = new long[2];
+        int[] shortest = {Integer.MAX_VALUE};
         battles.parallelStream().map(battle -> {
-            List<GunReplay.Tally> perRound = GunReplay.replayRounds(battle, GunParameters.DEFAULT);
-            long[] t = new long[4];
+            List<GunReplay.Tally> perRound = GunReplay.replayRounds(battle, GunParameters.DEFAULT,
+                    GunReplay.Scope.ONE_ENEMY);
+            long[] t = new long[7];
             int count = perRound.size();
+            t[4] = count;
+            for (GunReplay.Tally tally : perRound) {
+                t[5] += tally.differing();
+                t[6] += tally.orphans();
+            }
             for (int r = 0; r < count; r++) {
                 GunReplay.Tally tally = perRound.get(r);
                 if (r < n) {
@@ -104,7 +127,23 @@ public final class GunTrend {
             for (int i = 0; i < 4; i++) {
                 sum[i] += e.getValue()[i];
             }
+            shortest[0] = Math.min(shortest[0], (int) e.getValue()[4]);
+            parity[0] += e.getValue()[5];
+            parity[1] += e.getValue()[6];
         });
+        if (shortest[0] < 2 * n) {
+            throw new IllegalArgumentException("a battle has only " + shortest[0] + " rounds, so its first and last "
+                    + n + " overlap; pass rounds=" + Math.max(1, shortest[0] / 2) + " or less");
+        }
+        if (parity[0] > 0) {
+            System.out.println("PARITY FAILED: " + parity[0] + " replayed decisions differ from the log; these are "
+                    + "logs of another gun, whose trend the replay cannot show.");
+            System.exit(1);
+        }
+        if (parity[1] > 0) {
+            System.out.println("Passed waves without their plan in the log: " + parity[1]
+                    + " (a recording that lost a turn's debug properties).");
+        }
         List<Row> rows = new ArrayList<>();
         byOpponent.forEach((o, t) -> rows.add(new Row(o, t[0], t[1], t[2], t[3])));
         rows.sort(Comparator.comparingDouble(r -> r.change() / Math.max(r.error(), 1e-9)));

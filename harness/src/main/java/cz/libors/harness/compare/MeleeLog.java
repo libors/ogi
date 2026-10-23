@@ -124,7 +124,8 @@ final class MeleeLog implements Closeable {
                 throw new IOException(file + " is not a melee comparison log of version " + VERSION);
             }
             if (!lines.get(1).equals(configLine)) {
-                throw new IOException(file + " was written with another configuration:\n  " + lines.get(1)
+                throw new CompareLog.ConfigurationChanged(file + " was written with another configuration:\n  "
+                        + lines.get(1)
                         + "\nnow:\n  " + configLine);
             }
             if (!text.endsWith("\n")) {
